@@ -1,0 +1,8 @@
+TENANT_ID=tu_tenant_id_aqui
+CLIENT_ID=tu_client_id_aqui
+CLIENT_SECRET=tu_client_secret_aqui
+USER=tu_usuario_email_aqui
+PASS=tu_password_aqui
+WORKSPACE_ID=tu_workspace_id_aqui
+REPORT_ID=tu_report_id_aqui
+

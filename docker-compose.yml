@@ -1,0 +1,11 @@
+services:
+  flask-powerbi:
+    build: .
+    container_name: flask_powerbi_embed
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    volumes:
+      - .:/app
+    restart: unless-stopped

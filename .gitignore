@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables file
+.env
+
+# Virtual environment folder (aunque usas Docker, por las dudas)
+venv/
+env/
+
+# Flask instance folder
+instance/
+
+# Logs
+*.log
+
+# Docker files (si prefieres no subir imágenes, pero usualmente docker-compose.yml sí)
+*.dockerfile
+*.img
+*.tar
+
+# VSCode settings
+.vscode/
