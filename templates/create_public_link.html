@@ -1,0 +1,90 @@
+{% extends "layout.html" %}
+{% block title %}Configuraciones - Crear link público{% endblock %}
+
+{% block body %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header">
+                    <h5>Crear Link Público para: {{ config.name }}</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        {{ form.hidden_tag() }}
+                        <div class="mb-3">
+                            {{ form.custom_slug.label(class="form-label") }}
+                            {{ form.custom_slug(class="form-control", placeholder="ej: ventas-2024") }}
+                            <div class="form-text">
+                                El link será: 
+                                <code>{{ request.url_root.rstrip('/') }}/p/<span id="slug-preview">nombre-personalizado</span></code>
+                            </div>
+                            {% if form.custom_slug.errors %}
+                                <div class="alert alert-danger mt-2">
+                                    {% for error in form.custom_slug.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+                        
+                        {% with messages = get_flashed_messages(with_categories=true) %}
+                            {% if messages %}
+                                {% for category, message in messages %}
+                                    <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
+                                        {{ message }}
+                                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                                    </div>
+                                {% endfor %}
+                            {% endif %}
+                        {% endwith %}
+                        
+                        <div class="d-flex gap-2">
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-link"></i> Crear Link Público
+                            </button>
+                            <a href="{{ url_for('configs_list') }}" class="btn btn-secondary">Cancelar</a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Información adicional -->
+            <div class="card mt-3">
+                <div class="card-body">
+                    <h6 class="card-title">Información importante:</h6>
+                    <ul class="small">
+                        <li>El nombre debe ser único y contener solo letras, números y guiones</li>
+                        <li>Una vez creado, el link estará disponible públicamente</li>
+                        <li>Puedes crear múltiples links para la misma configuración</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const slugInput = document.getElementById('custom_slug');
+    const slugPreview = document.getElementById('slug-preview');
+    
+    if (slugInput && slugPreview) {
+        slugInput.addEventListener('input', function(e) {
+            // Limpiar y formatear el slug
+            let value = e.target.value
+                .toLowerCase()
+                .trim()
+                .replace(/[^a-z0-9-]/g, '-')
+                .replace(/-+/g, '-')
+                .replace(/^-|-$/g, '');
+            
+            slugPreview.textContent = value || 'nombre-personalizado';
+        });
+        
+        // Trigger inicial
+        slugInput.dispatchEvent(new Event('input'));
+    }
+});
+</script>
+{% endblock %}

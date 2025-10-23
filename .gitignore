@@ -24,3 +24,5 @@ instance/
 
 # VSCode settings
 .vscode/
+.env*
+migrations

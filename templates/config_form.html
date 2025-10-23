@@ -1,0 +1,99 @@
+{% extends "layout.html" %}
+{% block title %}Nueva Configuración Power BI{% endblock %}
+
+{% block body %}
+<div class="container mt-4">
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h5>{% if config %}Editar{% else %}Nueva{% endif %} Configuración de Reporte</h5>
+                </div>
+                <div class="card-body">
+                    <form method="POST">
+                        {{ form.hidden_tag() }}
+                        
+                        <div class="mb-3">
+                            {{ form.name.label(class="form-label") }}
+                            {{ form.name(class="form-control") }}
+                            {% if form.name.errors %}
+                                <div class="text-danger">
+                                    {% for error in form.name.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            {{ form.tenant.label(class="form-label") }}
+                            {{ form.tenant(class="form-control") }}
+                            {% if form.tenant.errors %}
+                                <div class="text-danger">
+                                    {% for error in form.tenant.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            {{ form.client.label(class="form-label") }}
+                            {{ form.client(class="form-control") }}
+                            {% if form.client.errors %}
+                                <div class="text-danger">
+                                    {% for error in form.client.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            {{ form.workspace.label(class="form-label") }}
+                            {{ form.workspace(class="form-control") }}
+                            {% if form.workspace.errors %}
+                                <div class="text-danger">
+                                    {% for error in form.workspace.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            {{ form.report.label(class="form-label") }}
+                            {{ form.report(class="form-control") }}
+                            {% if form.report.errors %}
+                                <div class="text-danger">
+                                    {% for error in form.report.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <div class="mb-3">
+                            {{ form.usuario_pbi.label(class="form-label") }}  <!-- CORREGIDO: usuario_pbi en lugar de user_pbi -->
+                            {{ form.usuario_pbi(class="form-control") }}
+                            <div class="form-text">Selecciona el usuario de Power BI para esta configuración</div>
+                            {% if form.usuario_pbi.errors %}
+                                <div class="text-danger">
+                                    {% for error in form.usuario_pbi.errors %}
+                                        {{ error }}
+                                    {% endfor %}
+                                </div>
+                            {% endif %}
+                        </div>
+
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save"></i> Guardar Configuración
+                        </button>
+                        <a href="{{ url_for('configs_list') }}" class="btn btn-secondary">Cancelar</a>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

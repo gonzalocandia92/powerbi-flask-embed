@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+{% block title %}Crear / Editar Workspace{% endblock %}
+
+{% block body %}
+<div class="container mt-4">
+  <div class="row justify-content-center">
+    <div class="col-md-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">Workspace</h5>
+        </div>
+        <div class="card-body">
+          <form method="post">
+            {{ form.hidden_tag() }}
+
+            <div class="mb-3">
+              {{ form.name.label(class="form-label") }}
+              {{ form.name(class="form-control", placeholder="Nombre del workspace") }}
+              {% for e in form.name.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+
+            <div class="mb-3">
+              {{ form.workspace_id.label(class="form-label") }}
+              {{ form.workspace_id(class="form-control", placeholder="Workspace ID (GUID)") }}
+              {% for e in form.workspace_id.errors %}<div class="text-danger small">{{ e }}</div>{% endfor %}
+            </div>
+
+            <div class="d-flex justify-content-between">
+              <a href="{{ url_for('workspaces_list') }}" class="btn btn-secondary">Volver</a>
+              <button class="btn btn-primary">{{ form.submit.label.text }}</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

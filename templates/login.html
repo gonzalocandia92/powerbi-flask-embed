@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+{% block title %}Login{% endblock %}
+{% block body %}
+<div class="row justify-content-center">
+  <div class="col-md-4">
+    <h3>Login</h3>
+    <form method="post">
+      {{ form.hidden_tag() }}
+      <div class="mb-3">{{ form.username.label }}{{ form.username(class="form-control") }}</div>
+      <div class="mb-3">{{ form.password.label }}{{ form.password(class="form-control") }}</div>
+      <div class="mb-3">{{ form.remember() }} {{ form.remember.label }}</div>
+      <button class="btn btn-primary">{{ form.submit.label }}</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

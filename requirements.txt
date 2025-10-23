@@ -1,3 +1,11 @@
-flask
-requests
-python-dotenv
+Flask>=2.2
+Flask-Login>=0.6
+Flask-WTF>=1.1.1
+SQLAlchemy>=1.4
+psycopg2-binary>=2.9
+python-dotenv>=1.0
+cryptography>=41.0
+requests>=2.31
+jinja2>=3.1
+flask_sqlalchemy
+flask-migrate

@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reporte - {{ config_name }}</title>
+    
+    <!-- Power BI SDK -->
+    <script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --accent-color: #e74c3c;
+            --light-bg: #f8f9fa;
+            --border-color: #dee2e6;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            transition: background 0.3s ease;
+        }
+        
+        body.fullscreen-mode {
+            background: #1a1a1a;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .main-container {
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin: 20px auto;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+        
+        body.fullscreen-mode .main-container {
+            border-radius: 0;
+            margin: 0;
+            height: 100vh;
+            box-shadow: none;
+        }
+        
+        .header-section {
+            background: var(--primary-color);
+            color: white;
+            padding: 20px 30px;
+            border-bottom: 3px solid var(--secondary-color);
+            transition: all 0.3s ease;
+        }
+        
+        body.fullscreen-mode .header-section {
+            display: none;
+        }
+        
+        .report-title {
+            margin: 0;
+            font-weight: 600;
+            font-size: 1.5rem;
+        }
+        
+        .report-subtitle {
+            margin: 5px 0 0 0;
+            opacity: 0.9;
+            font-size: 0.9rem;
+        }
+        
+        .report-container {
+            height: 75vh;
+            width: 100%;
+            border: none;
+            position: relative;
+            transition: all 0.3s ease;
+        }
+        
+        body.fullscreen-mode .report-container {
+            height: 100vh;
+        }
+        
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(255,255,255,0.9);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        
+        body.fullscreen-mode .loading-overlay {
+            background: rgba(26,26,26,0.9);
+            color: white;
+        }
+        
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid var(--light-bg);
+            border-top: 5px solid var(--secondary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .error-container {
+            background: #f8d7da;
+            border: 1px solid #f5c6cb;
+            border-radius: 8px;
+            padding: 15px;
+            margin: 15px;
+            display: none;
+        }
+        
+        .error-icon {
+            color: var(--accent-color);
+            font-size: 1.2rem;
+            margin-right: 10px;
+        }
+        
+        .footer {
+            background: var(--light-bg);
+            padding: 15px 30px;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+            color: #6c757d;
+            font-size: 0.85rem;
+            transition: all 0.3s ease;
+        }
+        
+        body.fullscreen-mode .footer {
+            display: none;
+        }
+        
+        .powerbi-logo {
+            height: 20px;
+            margin-left: 5px;
+            vertical-align: middle;
+        }
+        
+        .status-indicator {
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 12px;
+            background: #d4edda;
+            color: #155724;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            margin-left: 15px;
+        }
+        
+        .status-indicator i {
+            margin-right: 5px;
+        }
+        
+        .fullscreen-btn {
+            background: var(--secondary-color);
+            color: white;
+            border: none;
+            border-radius: 25px;
+            padding: 8px 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+        }
+        
+        .fullscreen-btn:hover {
+            background: #2980b9;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        
+        .fullscreen-btn i {
+            font-size: 1rem;
+        }
+        
+        .fullscreen-controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1001;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+        
+        body.fullscreen-mode .fullscreen-controls {
+            opacity: 1;
+        }
+        
+        .exit-fullscreen-btn {
+            background: rgba(0,0,0,0.7);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.2rem;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+        
+        .exit-fullscreen-btn:hover {
+            background: rgba(0,0,0,0.9);
+            transform: scale(1.1);
+        }
+        
+        @media (max-width: 768px) {
+            .main-container {
+                margin: 10px;
+                border-radius: 10px;
+            }
+            
+            .header-section {
+                padding: 15px 20px;
+            }
+            
+            .report-container {
+                height: 65vh;
+            }
+            
+            .fullscreen-controls {
+                top: 10px;
+                right: 10px;
+            }
+            
+            .exit-fullscreen-btn {
+                width: 45px;
+                height: 45px;
+                font-size: 1.1rem;
+            }
+        }
+        
+        /* Animación suave para cambios de modo */
+        .main-container, .report-container, .header-section, .footer {
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+    </style>
+</head>
+<body>
+    <!-- Controles de pantalla completa (ocultos inicialmente) -->
+    <div class="fullscreen-controls">
+        <button id="exitFullscreenBtn" class="exit-fullscreen-btn" title="Salir de pantalla completa">
+            <i class="fas fa-compress"></i>
+        </button>
+    </div>
+
+    <div class="container-fluid py-4">
+        <div class="row justify-content-center">
+            <div class="col-12 col-xl-10">
+                <div class="main-container">
+                    <!-- Header -->
+                    <div class="header-section">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap">
+                            <div>
+                                <h1 class="report-title">
+                                    <i class="fas fa-chart-bar me-2"></i>
+                                    {{ config_name }}
+                                </h1>
+                                <p class="report-subtitle">
+                                    Reporte interactivo de Power BI
+                                </p>
+                            </div>
+                            <div class="d-flex align-items-center">
+                                <div class="status-indicator">
+                                    <i class="fas fa-circle-check"></i>
+                                    Conectado
+                                </div>
+                                <button id="fullscreenBtn" class="fullscreen-btn" title="Ver en pantalla completa">
+                                    <i class="fas fa-expand"></i>
+                                    Pantalla completa
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Loading State -->
+                    <div id="loadingOverlay" class="loading-overlay">
+                        <div class="spinner"></div>
+                        <h4 class="mt-3 text-primary">Cargando reporte...</h4>
+                        <p class="text-muted">Por favor espere mientras se carga el contenido</p>
+                    </div>
+                    
+                    <!-- Error Display -->
+                    <div id="errorDisplay" class="error-container">
+                        <div class="d-flex align-items-center">
+                            <i class="fas fa-exclamation-triangle error-icon"></i>
+                            <div>
+                                <strong>Error al cargar el reporte:</strong>
+                                <span id="errorMessage" class="ms-1"></span>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Report Container -->
+                    <div id="reportContainer" class="report-container"></div>
+                    
+                    <!-- Footer -->
+                    <div class="footer">
+                        <div class="d-flex justify-content-between align-items-center flex-wrap">
+                            <div>
+                                <i class="fas fa-shield-alt me-1"></i>
+                                Reporte seguro - Solo visualización
+                            </div>
+                            <div>
+                                Powered by 
+                                <strong>Microsoft Power BI</strong>
+                                <img src="https://app.powerbi.com/13.0.40.338/Images/pbi_logo_transparent.png" 
+                                     alt="Power BI" class="powerbi-logo">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Wait for DOM to be fully loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            const models = window['powerbi-client']?.models || window.powerbi?.models;
+            const container = document.getElementById("reportContainer");
+            const loadingOverlay = document.getElementById("loadingOverlay");
+            const errorDisplay = document.getElementById("errorDisplay");
+            const errorMessage = document.getElementById("errorMessage");
+            const fullscreenBtn = document.getElementById("fullscreenBtn");
+            const exitFullscreenBtn = document.getElementById("exitFullscreenBtn");
+            const body = document.body;
+            
+            let isFullscreen = false;
+            let report; // Variable global para el reporte
+            
+            // Hide error display initially
+            errorDisplay.style.display = 'none';
+            
+            // Embed configuration
+            const config = {
+                type: 'report',
+                tokenType: models.TokenType.Aad,
+                accessToken: "{{ embed_token }}",
+                embedUrl: "{{ embed_url }}",
+                id: "{{ report_id }}",
+                settings: {
+                    layoutType: models.LayoutType.Custom,
+                    panes: { 
+                        filters: { 
+                            expanded: false,
+                            visible: false 
+                        }, 
+                        pageNavigation: { 
+                            visible: true 
+                        }
+                    },
+                    bars: { 
+                        statusBar: { 
+                            visible: true 
+                        } 
+                    },
+                    background: models.BackgroundType.Transparent,
+                    hideErrors: false
+                }
+            };
+
+            // Función para entrar en pantalla completa
+            function enterFullscreen() {
+                body.classList.add('fullscreen-mode');
+                isFullscreen = true;
+                
+                // Re-renderizar el reporte para adaptarse al nuevo tamaño
+                if (report) {
+                    setTimeout(() => {
+                        report.refresh();
+                    }, 300);
+                }
+                
+                // Cambiar el título del documento
+                document.title = "📊 " + "{{ config_name }}" + " - Pantalla completa";
+            }
+            
+            // Función para salir de pantalla completa
+            function exitFullscreen() {
+                body.classList.remove('fullscreen-mode');
+                isFullscreen = false;
+                
+                // Re-renderizar el reporte
+                if (report) {
+                    setTimeout(() => {
+                        report.refresh();
+                    }, 300);
+                }
+                
+                // Restaurar título original
+                document.title = "Reporte - {{ config_name }}";
+            }
+            
+            // Event listeners para los botones de pantalla completa
+            fullscreenBtn.addEventListener('click', enterFullscreen);
+            exitFullscreenBtn.addEventListener('click', exitFullscreen);
+            
+            // También soporte para la tecla ESC
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape' && isFullscreen) {
+                    exitFullscreen();
+                }
+            });
+            
+            try {
+                // Show loading state
+                loadingOverlay.style.display = 'flex';
+                
+                // Embed the report
+                report = powerbi.embed(container, config);
+                
+                // Event handlers
+                report.on("loaded", function() {
+                    console.log("Report loaded successfully");
+                    loadingOverlay.style.display = 'none';
+                });
+                
+                report.on("error", function(event) {
+                    console.error("Power BI Error:", event);
+                    loadingOverlay.style.display = 'none';
+                    
+                    const errorMsg = event.detail?.message || 
+                                   event.detail?.detailedMessage || 
+                                   JSON.stringify(event.detail);
+                    
+                    errorMessage.textContent = errorMsg;
+                    errorDisplay.style.display = 'block';
+                });
+                
+                report.on("rendered", function() {
+                    console.log("Report rendered");
+                });
+                
+                // Handle window resize
+                window.addEventListener('resize', function() {
+                    if (report) {
+                        setTimeout(() => {
+                            report.refresh();
+                        }, 100);
+                    }
+                });
+                
+            } catch (e) {
+                console.error("Embed exception:", e);
+                loadingOverlay.style.display = 'none';
+                errorMessage.textContent = e.message;
+                errorDisplay.style.display = 'block';
+            }
+        });
+    </script>
+
+    <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

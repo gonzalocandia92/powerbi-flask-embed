@@ -1,0 +1,170 @@
+{% extends "layout.html" %}
+
+{% block title %}{% if usuario %}Editar{% else %}Nuevo{% endif %} Usuario PBI - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <h4 class="card-title mb-0">
+                    <i class="bi bi-{% if usuario %}person-gear{% else %}person-plus{% endif %}"></i>
+                    {% if usuario %}Editar{% else %}Nuevo{% endif %} Usuario Power BI
+                </h4>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    {{ form.hidden_tag() }}
+                    
+                    <!-- Campo Nombre -->
+                    <div class="mb-3">
+                        {{ form.nombre.label(class="form-label") }}
+                        {{ form.nombre(class="form-control" + (" is-invalid" if form.nombre.errors else ""), placeholder="Ej: Usuario Contabilidad") }}
+                        <div class="form-text">
+                            Nombre descriptivo para identificar este usuario en el sistema.
+                        </div>
+                        {% if form.nombre.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.nombre.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Campo Username -->
+                    <div class="mb-3">
+                        {{ form.username.label(class="form-label") }}
+                        {{ form.username(class="form-control" + (" is-invalid" if form.username.errors else ""), placeholder="Ej: usuario@empresa.com") }}
+                        <div class="form-text">
+                            Email o nombre de usuario de Power BI.
+                        </div>
+                        {% if form.username.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.username.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Campo Password -->
+                    <div class="mb-4">
+                        {{ form.password.label(class="form-label") }}
+                        {{ form.password(class="form-control" + (" is-invalid" if form.password.errors else ""), placeholder="Ingresa la contraseña") }}
+                        <div class="form-text">
+                            {% if usuario %}
+                                Deja en blanco si no quieres cambiar la contraseña actual.
+                            {% else %}
+                                Contraseña del usuario de Power BI.
+                            {% endif %}
+                        </div>
+                        {% if form.password.errors %}
+                            <div class="invalid-feedback">
+                                {% for error in form.password.errors %}
+                                    {{ error }}
+                                {% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Información de seguridad -->
+                    <div class="alert alert-info">
+                        <h6 class="alert-heading"><i class="bi bi-shield-check"></i> Información de Seguridad</h6>
+                        <ul class="mb-0 small">
+                            <li>La contraseña se cifrará antes de almacenarse en la base de datos</li>
+                            <li>Se utiliza el algoritmo Fernet para el cifrado</li>
+                            <li>Nunca se almacenan contraseñas en texto plano</li>
+                            <li>El usuario debe tener permisos adecuados en Power BI</li>
+                        </ul>
+                    </div>
+
+                    <!-- Botones de acción -->
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="bi bi-{% if usuario %}check-lg{% else %}plus-circle{% endif %}"></i>
+                                {% if usuario %}Actualizar{% else %}Crear{% endif %} Usuario
+                            </button>
+                            <a href="{{ url_for('usuarios_pbi_list') }}" class="btn btn-secondary">
+                                <i class="bi bi-arrow-left"></i> Cancelar
+                            </a>
+                        </div>
+                        
+                        {% if usuario %}
+                        <div class="text-muted small">
+                            <i class="bi bi-clock"></i>
+                            Creado: {{ usuario.created_at.strftime('%d/%m/%Y %H:%M') if usuario.created_at else 'N/A' }}
+                        </div>
+                        {% endif %}
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Panel de información adicional -->
+        <div class="card mt-4">
+            <div class="card-header">
+                <h6 class="card-title mb-0"><i class="bi bi-info-circle"></i> Requisitos del Usuario Power BI</h6>
+            </div>
+            <div class="card-body">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-primary">Permisos Requeridos:</h6>
+                        <ul class="small">
+                            <li>Acceso al workspace de Power BI</li>
+                            <li>Permisos de lectura en los reportes</li>
+                            <li>Licencia Power BI Pro o Premium</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-primary">Configuración Azure AD:</h6>
+                        <ul class="small">
+                            <li>Usuario debe existir en el tenant</li>
+                            <li>ROPC debe estar habilitado si es requerido</li>
+                            <li>Credenciales deben ser válidas</li>
+                        </ul>
+                    </div>
+                </div>
+                
+                <div class="alert alert-warning small mb-0">
+                    <i class="bi bi-exclamation-triangle"></i>
+                    <strong>Nota:</strong> Este usuario se utilizará para el flujo ROPC (Resource Owner Password Credentials) de autenticación.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // Validación en tiempo real para el campo nombre
+    const nombreField = document.getElementById('nombre');
+    if (nombreField) {
+        nombreField.addEventListener('input', function() {
+            if (this.value.length > 0) {
+                this.classList.remove('is-invalid');
+            }
+        });
+    }
+
+    // Validación en tiempo real para el campo username
+    const usernameField = document.getElementById('username');
+    if (usernameField) {
+        usernameField.addEventListener('input', function() {
+            if (this.value.length > 0) {
+                this.classList.remove('is-invalid');
+            }
+        });
+    }
+
+    // Mostrar/ocultar lógica para la contraseña (si quisieras agregar un toggle)
+    const passwordField = document.getElementById('password');
+    if (passwordField) {
+        // Podrías agregar un botón para mostrar/ocultar contraseña aquí
+    }
+});
+</script>
+{% endblock %}

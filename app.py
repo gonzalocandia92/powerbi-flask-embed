@@ -1,82 +1,528 @@
-from flask import Flask, render_template
-import requests
-import json
-import logging
-from dotenv import load_dotenv
 import os
+import uuid
+import requests
+import logging
+from datetime import datetime, timedelta
 
-# Cargar variables de entorno desde .env
+from flask import Flask, render_template, redirect, url_for, request, flash, abort, send_from_directory
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, login_user, login_required, logout_user, current_user, UserMixin
+from flask_migrate import Migrate
+from werkzeug.security import generate_password_hash, check_password_hash
+from cryptography.fernet import Fernet, InvalidToken
+from dotenv import load_dotenv
+
+# Carga .env
 load_dotenv()
 
 # Configuración del logger
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 
-# Variables de entorno
-TENANT_ID     = os.getenv("TENANT_ID")
-CLIENT_ID     = os.getenv("CLIENT_ID")
-CLIENT_SECRET = os.getenv("CLIENT_SECRET")
-USERNAME      = os.getenv("USER")
-PASSWORD      = os.getenv("PASS")
-WORKSPACE_ID  = os.getenv("WORKSPACE_ID")
-REPORT_ID     = os.getenv("REPORT_ID")
-
-# Endpoints
-AUTHORITY = f"https://login.microsoftonline.com/{TENANT_ID}/oauth2/v2.0/token"
-SCOPE     = "https://analysis.windows.net/powerbi/api/.default"
-API_BASE  = "https://api.powerbi.com/v1.0/myorg"
-
 app = Flask(__name__)
+app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Obtener access token via ROPC
-def get_access_token():
+# Inicializa DB
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+
+# Login manager
+login_manager = LoginManager()
+login_manager.login_view = 'login'
+login_manager.init_app(app)
+
+# Cifra/decifra con Fernet
+FERNET_KEY = os.getenv('FERNET_KEY')
+if not FERNET_KEY:
+    raise RuntimeError("FERNET_KEY no está definida en .env. Generala con cryptography.Fernet.generate_key()")
+
+fernet = Fernet(FERNET_KEY.encode() if isinstance(FERNET_KEY, str) else FERNET_KEY)
+
+# ---------- MODELOS ----------
+class User(db.Model, UserMixin):
+    __tablename__ = 'users'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    username = db.Column(db.String(120), unique=True, nullable=False)
+    password_hash = db.Column(db.String(256), nullable=False)
+    is_admin = db.Column(db.Boolean, default=True)
+
+    def set_password(self, password):
+        self.password_hash = generate_password_hash(password)
+
+    def check_password(self, password):
+        return check_password_hash(self.password_hash, password)
+
+class Tenant(db.Model):
+    __tablename__ = 'tenants'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    tenant_id = db.Column(db.String(120), nullable=False)
+
+class Client(db.Model):
+    __tablename__ = 'clients'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    client_id = db.Column(db.String(200), nullable=False)
+    _client_secret = db.Column("client_secret", db.LargeBinary, nullable=True)
+
+    def set_secret(self, plain: str):
+        self._client_secret = fernet.encrypt(plain.encode())
+
+    def get_secret(self):
+        if not self._client_secret:
+            return None
+        try:
+            return fernet.decrypt(self._client_secret).decode()
+        except InvalidToken:
+            return None
+
+class Workspace(db.Model):
+    __tablename__ = 'workspaces'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    workspace_id = db.Column(db.String(200), nullable=False)
+
+class Report(db.Model):
+    __tablename__ = 'reports'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    report_id = db.Column(db.String(200), nullable=False)
+    embed_url = db.Column(db.String(1000), nullable=True)
+
+# NUEVO MODELO: UsuarioPBI
+class UsuarioPBI(db.Model):
+    __tablename__ = 'usuarios_pbi'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    nombre = db.Column(db.String(200), nullable=False, unique=True)
+    username = db.Column(db.String(200), nullable=False)
+    _password = db.Column("password", db.LargeBinary, nullable=False)
+
+    def set_password(self, plain: str):
+        self._password = fernet.encrypt(plain.encode())
+
+    def get_password(self):
+        try:
+            return fernet.decrypt(self._password).decode()
+        except InvalidToken:
+            return None
+
+class ReportConfig(db.Model):
+    __tablename__ = 'report_configs'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+
+    tenant_id = db.Column(db.BigInteger, db.ForeignKey('tenants.id'), nullable=False)
+    client_id = db.Column(db.BigInteger, db.ForeignKey('clients.id'), nullable=False)
+    workspace_id = db.Column(db.BigInteger, db.ForeignKey('workspaces.id'), nullable=False)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=False)
+    usuario_pbi_id = db.Column(db.BigInteger, db.ForeignKey('usuarios_pbi.id'), nullable=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    tenant = db.relationship('Tenant')
+    client = db.relationship('Client')
+    workspace = db.relationship('Workspace')
+    report = db.relationship('Report')
+    usuario_pbi = db.relationship('UsuarioPBI')
+    
+    #public_links = db.relationship('PublicLink', backref='report_config', lazy=True, cascade='all, delete-orphan')
+
+    
+
+class PublicLink(db.Model):
+    __tablename__ = 'public_links'
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    token = db.Column(db.String(120), unique=True, nullable=False)
+    custom_slug = db.Column(db.String(120), unique=True, nullable=True)  # NUEVO: Slug personalizado
+    report_config_id = db.Column(db.BigInteger, db.ForeignKey('report_configs.id'), nullable=False)
+    is_active = db.Column(db.Boolean, default=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    report_config = db.relationship('ReportConfig')
+
+# ---------- LOGIN ----------
+@login_manager.user_loader
+def load_user(user_id):
+    return User.query.get(int(user_id))
+
+# ---------- RUTAS DE AUTENTICACIÓN ----------
+from flask_wtf import FlaskForm
+from wtforms import StringField, PasswordField, BooleanField, SubmitField
+from wtforms.validators import DataRequired, Length
+
+class LoginForm(FlaskForm):
+    username = StringField('Usuario', validators=[DataRequired()])
+    password = PasswordField('Contraseña', validators=[DataRequired()])
+    remember = BooleanField('Recordarme')
+    submit = SubmitField('Entrar')
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    form = LoginForm()
+    if form.validate_on_submit():
+        user = User.query.filter_by(username=form.username.data).first()
+        if user and user.check_password(form.password.data):
+            login_user(user, remember=form.remember.data)
+            return redirect(url_for('index'))
+        flash('Usuario o contraseña inválidos', 'danger')
+    return render_template('login.html', form=form)
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
+# ---------- PÁGINAS PRINCIPALES ----------
+@app.route('/')
+@login_required
+def index():
+    # Cargar configuraciones con sus links públicos
+    configs = ReportConfig.query.options(
+        db.joinedload(ReportConfig.tenant),
+        db.joinedload(ReportConfig.client),
+        db.joinedload(ReportConfig.workspace),
+        db.joinedload(ReportConfig.report),
+        db.joinedload(ReportConfig.usuario_pbi)
+    ).order_by(ReportConfig.created_at.desc()).all()
+    
+    # Obtener todos los links públicos activos
+    public_links = PublicLink.query.filter_by(is_active=True).all()
+    
+    # Crear un diccionario para acceso rápido: config_id -> [links]
+    links_by_config = {}
+    for link in public_links:
+        if link.report_config_id not in links_by_config:
+            links_by_config[link.report_config_id] = []
+        links_by_config[link.report_config_id].append(link)
+    
+    return render_template('index.html', configs=configs, links_by_config=links_by_config)
+
+# ---------- CRUDs simplificados ----------
+from wtforms import SelectField, TextAreaField
+
+class TenantForm(FlaskForm):
+    name = StringField("Nombre", validators=[DataRequired()])
+    tenant_id = StringField("Tenant ID", validators=[DataRequired()])
+    submit = SubmitField("Guardar")
+
+@app.route('/tenants')
+@login_required
+def tenants_list():
+    tenants = Tenant.query.all()
+    return render_template('tenants_list.html', tenants=tenants)
+
+@app.route('/tenants/new', methods=['GET','POST'])
+@login_required
+def tenants_new():
+    form = TenantForm()
+    if form.validate_on_submit():
+        t = Tenant(name=form.name.data, tenant_id=form.tenant_id.data)
+        db.session.add(t)
+        db.session.commit()
+        flash("Tenant creado", "success")
+        return redirect(url_for('tenants_list'))
+    return render_template('tenant_form.html', form=form)
+
+class ClientForm(FlaskForm):
+    name = StringField("Nombre cliente", validators=[DataRequired()])
+    client_id = StringField("Client ID", validators=[DataRequired()])
+    client_secret = PasswordField("Client Secret (se cifrará)")
+    submit = SubmitField("Guardar")
+
+@app.route('/clients')
+@login_required
+def clients_list():
+    clients = Client.query.all()
+    return render_template('clients_list.html', clients=clients)
+
+@app.route('/clients/new', methods=['GET','POST'])
+@login_required
+def clients_new():
+    form = ClientForm()
+    if form.validate_on_submit():
+        c = Client(name=form.name.data, client_id=form.client_id.data)
+        if form.client_secret.data:
+            c.set_secret(form.client_secret.data)
+        db.session.add(c)
+        db.session.commit()
+        flash("Client creado", "success")
+        return redirect(url_for('clients_list'))
+    return render_template('client_form.html', form=form)
+
+class WorkspaceForm(FlaskForm):
+    name = StringField("Nombre", validators=[DataRequired()])
+    workspace_id = StringField("Workspace ID", validators=[DataRequired()])
+    submit = SubmitField("Guardar")
+
+@app.route('/workspaces')
+@login_required
+def workspaces_list():
+    ws = Workspace.query.all()
+    return render_template('workspaces_list.html', workspaces=ws)
+
+@app.route('/workspaces/new', methods=['GET','POST'])
+@login_required
+def workspaces_new():
+    form = WorkspaceForm()
+    if form.validate_on_submit():
+        w = Workspace(name=form.name.data, workspace_id=form.workspace_id.data)
+        db.session.add(w)
+        db.session.commit()
+        flash("Workspace creado", "success")
+        return redirect(url_for('workspaces_list'))
+    return render_template('workspace_form.html', form=form)
+
+class ReportForm(FlaskForm):
+    name = StringField("Nombre", validators=[DataRequired()])
+    report_id = StringField("Report ID", validators=[DataRequired()])
+    embed_url = StringField("Embed URL (opcional)")
+    submit = SubmitField("Guardar")
+
+@app.route('/reports')
+@login_required
+def reports_list():
+    r = Report.query.all()
+    return render_template('reports_list.html', reports=r)
+
+@app.route('/reports/new', methods=['GET','POST'])
+@login_required
+def reports_new():
+    form = ReportForm()
+    if form.validate_on_submit():
+        rp = Report(name=form.name.data, report_id=form.report_id.data, embed_url=form.embed_url.data)
+        db.session.add(rp)
+        db.session.commit()
+        flash("Reporte creado", "success")
+        return redirect(url_for('reports_list'))
+    return render_template('report_form.html', form=form)
+
+# NUEVO: Formulario para UsuarioPBI
+class UsuarioPBIForm(FlaskForm):
+    nombre = StringField("Nombre identificador", validators=[DataRequired()])
+    username = StringField("Usuario Power BI", validators=[DataRequired()])
+    password = PasswordField("Contraseña Power BI", validators=[DataRequired()])
+    submit = SubmitField("Guardar")
+
+@app.route('/usuarios-pbi')
+@login_required
+def usuarios_pbi_list():
+    usuarios = UsuarioPBI.query.all()
+    return render_template('usuarios_pbi_list.html', usuarios=usuarios)
+
+@app.route('/usuarios-pbi/new', methods=['GET','POST'])
+@login_required
+def usuarios_pbi_new():
+    form = UsuarioPBIForm()
+    if form.validate_on_submit():
+        usuario = UsuarioPBI(
+            nombre=form.nombre.data,
+            username=form.username.data
+        )
+        usuario.set_password(form.password.data)
+        db.session.add(usuario)
+        db.session.commit()
+        flash("Usuario PBI creado", "success")
+        return redirect(url_for('usuarios_pbi_list'))
+    return render_template('usuario_pbi_form.html', form=form)
+
+# MODIFICADO: ReportConfigForm ahora usa SelectField para UsuarioPBI
+class ReportConfigForm(FlaskForm):
+    name = StringField("Nombre configuración", validators=[DataRequired()])
+    tenant = SelectField("Tenant", coerce=int, validators=[DataRequired()])
+    client = SelectField("Client", coerce=int, validators=[DataRequired()])
+    workspace = SelectField("Workspace", coerce=int, validators=[DataRequired()])
+    report = SelectField("Report", coerce=int, validators=[DataRequired()])
+    usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])  # Campo correcto
+    submit = SubmitField("Guardar")
+
+@app.route('/configs')
+@login_required
+def configs_list():
+    cs = ReportConfig.query.all()
+    return render_template('configs_list.html', configs=cs)
+
+@app.route('/configs/new', methods=['GET','POST'])
+@login_required
+def configs_new():
+    form = ReportConfigForm()
+    # poblar selects
+    form.tenant.choices = [(t.id, t.name) for t in Tenant.query.order_by(Tenant.name).all()]
+    form.client.choices = [(c.id, c.name) for c in Client.query.order_by(Client.name).all()]
+    form.workspace.choices = [(w.id, w.name) for w in Workspace.query.order_by(Workspace.name).all()]
+    form.report.choices = [(r.id, r.name) for r in Report.query.order_by(Report.name).all()]
+    form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]  # NUEVO
+
+    if form.validate_on_submit():
+        rc = ReportConfig(
+            name=form.name.data,
+            tenant_id=form.tenant.data,
+            client_id=form.client.data,
+            workspace_id=form.workspace.data,
+            report_id_fk=form.report.data,
+            usuario_pbi_id=form.usuario_pbi.data  # NUEVO: Relación con UsuarioPBI
+        )
+        db.session.add(rc)
+        db.session.commit()
+        flash("Configuración creada", "success")
+        return redirect(url_for('configs_list'))
+    return render_template('config_form.html', form=form)
+
+# NUEVO: Formulario para crear link personalizado
+class PublicLinkForm(FlaskForm):
+    custom_slug = StringField("Nombre personalizado para el link", validators=[DataRequired(), Length(max=120)])
+    submit = SubmitField("Crear Link")
+
+# MODIFICADO: Ahora usa formulario con slug personalizado
+@app.route('/configs/<int:config_id>/link/new', methods=['GET','POST'])
+@login_required
+def configs_new_link(config_id):
+    cfg = ReportConfig.query.get_or_404(config_id)
+    form = PublicLinkForm()
+    
+    if form.validate_on_submit():
+        custom_slug = form.custom_slug.data.lower().strip()
+        
+        # Verificar si el slug ya existe
+        existing_link = PublicLink.query.filter_by(custom_slug=custom_slug).first()
+        if existing_link:
+            flash("Este nombre personalizado ya está en uso. Por favor elige otro.", "danger")
+            return render_template('create_public_link.html', form=form, config=cfg)
+        
+        # Generar token único (para seguridad interna)
+        token = uuid.uuid4().hex[:16]
+        
+        link = PublicLink(
+            token=token, 
+            custom_slug=custom_slug,
+            report_config_id=cfg.id, 
+            is_active=True
+        )
+        db.session.add(link)
+        db.session.commit()
+        
+        # Generar URL completa para mostrar al usuario
+        base_url = request.url_root.rstrip('/')
+        public_url = f"{base_url}/p/{custom_slug}"
+        
+        flash(f"Link público creado: {public_url}", "success")
+        return redirect(url_for('configs_list'))
+    
+    return render_template('create_public_link.html', form=form, config=cfg)
+
+# MODIFICADO: Ahora usa custom_slug en lugar de token
+@app.route('/p/<custom_slug>')
+def public_view(custom_slug):
+    link = PublicLink.query.filter_by(custom_slug=custom_slug, is_active=True).first_or_404()
+    cfg = link.report_config
+
+    try:
+        embed_token, embed_url, report_id = get_embed_for_config(cfg)
+    except Exception as e:
+        logging.error(f"Error generando embed token: {e}")
+        return render_template('error_public.html', 
+                             error_message=f"Error generando embed token: {e}",
+                             config_name=cfg.name), 500
+
+    return render_template('report_public.html',
+                           embed_token=embed_token,
+                           embed_url=embed_url,
+                           report_id=report_id,
+                           config_name=cfg.name)
+
+# ---------- LÓGICA PARA OBTENER EMBED TOKEN ----------
+def get_embed_for_config(cfg: ReportConfig):
+    """
+    Obtiene el embed token y la URL del reporte para Power BI usando ROPC.
+    Usa la configuración almacenada en la base de datos.
+    """
+    # Obtener las credenciales y IDs desde el modelo
+    tenant_id = cfg.tenant.tenant_id
+    client_id = cfg.client.client_id
+    client_secret = cfg.client.get_secret()
+    
+    # NUEVO: Obtener usuario y contraseña desde UsuarioPBI relacionado
+    user_pbi = cfg.usuario_pbi.username
+    pass_pbi = cfg.usuario_pbi.get_password()
+    
+    workspace_id = cfg.workspace.workspace_id
+    report_id = cfg.report.report_id
+
+    # Verificar que tenemos los datos necesarios
+    if not client_secret:
+        raise RuntimeError("Client secret no disponible. Guarda el secret en el cliente.")
+    if not user_pbi or not pass_pbi:
+        raise RuntimeError("Usuario o contraseña de Power BI no disponibles.")
+
+    logging.info(f"Obteniendo token para tenant: {tenant_id}, client: {client_id}, user: {user_pbi}")
+
+    # 1. Obtener token de Azure AD
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
     data = {
         "grant_type": "password",
-        "client_id": CLIENT_ID,
-        "client_secret": CLIENT_SECRET,
-        "username": USERNAME,
-        "password": PASSWORD,
-        "scope": SCOPE
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "scope": "https://analysis.windows.net/powerbi/api/.default",
+        "username": user_pbi,
+        "password": pass_pbi
     }
-    try:
-        logging.info("Solicitando access token...")
-        resp = requests.post(AUTHORITY, data=data)
-        resp.raise_for_status()
-        token = resp.json().get("access_token")
-        logging.info("Access token recibido")
-        return token
-    except Exception as err:
-        logging.error(f"Error obteniendo access token: {err} - {getattr(resp, 'text', '')}")
-        raise
 
-# Obtener embedUrl dinámico
-def get_report_info(access_token):
-    url = f"{API_BASE}/groups/{WORKSPACE_ID}/reports/{REPORT_ID}"
+    r = requests.post(token_url, data=data)
+    r.raise_for_status()
+    access_token = r.json().get("access_token")
+    logging.info("Access token recibido correctamente")
+
+    # 2. Obtener información del reporte desde Power BI REST API
+    report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report_id}"
     headers = {"Authorization": f"Bearer {access_token}"}
-    try:
-        logging.info("Obteniendo información del reporte...")
-        resp = requests.get(url, headers=headers)
-        resp.raise_for_status()
-        info = resp.json()
-        logging.info("Embed URL obtenido: %s", info.get("embedUrl"))
-        return info.get("embedUrl")
-    except Exception as err:
-        logging.error(f"Error obteniendo embedUrl: {err} - {getattr(resp, 'text', '')}")
-        raise
+    resp = requests.get(report_url, headers=headers)
+    resp.raise_for_status()
+    report_info = resp.json()
+    logging.info(f"Embed URL obtenido: {report_info.get('embedUrl')}")
 
-@app.route('/')
-def index():
-    try:
-        access_token = get_access_token()
-        embed_url    = get_report_info(access_token)
-        embed_token  = access_token
+    # 3. Retornar el token de acceso (como embed token) y la embed URL
+    embed_token = access_token
+    embed_url = report_info["embedUrl"]
 
-        return render_template("report.html",
-                               embed_token=embed_token,
-                               embed_url=embed_url,
-                               report_id=REPORT_ID)
+    return embed_token, embed_url, report_id
+
+# ---------- RUTA PARA VISUALIZACIÓN PRIVADA (PARA ADMIN) ----------
+@app.route('/configs/<int:config_id>/view')
+@login_required
+def config_view(config_id):
+    cfg = ReportConfig.query.get_or_404(config_id)
+    
+    try:
+        embed_token, embed_url, report_id = get_embed_for_config(cfg)
     except Exception as e:
-        logging.error(f"Error en index route: {e}")
-        return f"<h1>Error cargando reporte: {e}</h1>", 500
+        logging.error(f"Error generando embed token: {e}")
+        flash(f"Error cargando reporte: {e}", "danger")
+        return redirect(url_for('configs_list'))
 
+    return render_template('report_private.html',
+                           embed_token=embed_token,
+                           embed_url=embed_url,
+                           report_id=report_id,
+                           config_name=cfg.name)
+
+# ---------- UTILIDADES ADMIN ----------
+@app.cli.command("create-admin")
+def create_admin():
+    username = input("Username admin: ")
+    password = input("Password: ")
+    if User.query.filter_by(username=username).first():
+        print("Usuario ya existe")
+        return
+    u = User(username=username, is_admin=True)
+    u.set_password(password)
+    db.session.add(u)
+    db.session.commit()
+    print("Admin creado")
+
+# ---------- ARRANQUE ----------
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000)
+    # Crear tablas si no existen (para dev). En prod usar migraciones.
+    with app.app_context():
+        db.create_all()
+    app.run(host='0.0.0.0', port=5000, debug=True)
