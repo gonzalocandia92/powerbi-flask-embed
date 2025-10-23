@@ -1,73 +1,126 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
 <head>
     <meta charset="utf-8">
-    <title>Power BI Pro Embebido</title>
+    <title>Reporte - {{ config_name }}</title>
     <script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
-    <link rel="icon" href="data:;base64,iVBORw0KGgo=">
-    <style>#reportContainer{height:80vh;width:100%;border:1px solid #ccc;}</style>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: {% if is_public %}#f8f9fa{% else %}white{% endif %};
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+        
+        .header {
+            background: white;
+            padding: 20px;
+            border-bottom: 1px solid #dee2e6;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .header h1 {
+            margin: 0;
+            color: #495057;
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+        
+        #reportContainer {
+            height: {% if is_public %}calc(100vh - 80px){% else %}calc(100vh - 120px){% endif %};
+            width: 100%;
+        }
+        
+        #errorDisplay {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            margin: 20px;
+            border-radius: 5px;
+            border: 1px solid #f5c6cb;
+        }
+        
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            flex-direction: column;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #007bff;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+    </style>
 </head>
 <body>
-    <h1>Reporte embebido Power BI</h1>
-    <div id="reportContainer"></div>
-    <div id="errorDisplay" style="color: red; margin-top: 1em;"></div>
+    {% if not is_public %}
+    <div class="header">
+        <h1><i class="bi bi-bar-chart-line"></i> {{ config_name }}</h1>
+    </div>
+    {% endif %}
+    
+    <div id="reportContainer">
+        <div class="loading">
+            <div class="spinner"></div>
+            <p>Cargando reporte...</p>
+        </div>
+    </div>
+    
+    <div id="errorDisplay" style="display: none;"></div>
 
     <script>
-        console.log("Iniciando embebido de Power BI...");
-        if (typeof window.powerbi === 'undefined') {
-            console.error("SDK de Power BI no encontrado.");
-            document.getElementById("errorDisplay").innerText = "SDK de Power BI no encontrado.";
-        } else {
-            const models = window['powerbi-client']?.models || window.powerbi?.models;
-            if (!models) {
-                console.error("Modelos de Power BI no disponibles.");
-                document.getElementById("errorDisplay").innerText = "Modelos de Power BI no disponibles.";
-            } else {
-                const config = {
-                    type: 'report',
-                    tokenType: models.TokenType.Aad,
-                    accessToken: '{{ embed_token }}',
-                    embedUrl: '{{ embed_url }}',
-                    id: '{{ report_id }}',
-                    settings: {
-                        panes: {
-                            filters: { visible: true },
-                            pageNavigation: { visible: true }
-                        },
-                        bars: {
-                            statusBar: { visible: true }
-                        },
-                        hideErrors: false
-                    }
-                };
-
-                console.log("Configuración de incrustación:", config);
-                let container = document.getElementById("reportContainer");
-
-                try {
-                    const report = powerbi.embed(container, config);
-                    console.log("Embed invocado correctamente.");
-
-                    report.off("loaded");
-                    report.on("loaded", function () {
-                        console.log("Evento 'loaded': el informe se inicializó.");
-                    });
-
-                    report.off("rendered");
-                    report.on("rendered", function () {
-                        console.log("Evento 'rendered': el informe se renderizó.");
-                    });
-
-                    report.off("error");
-                    report.on("error", function (event) {
-                        console.error("Evento 'error':", event.detail);
-                        document.getElementById("errorDisplay").innerText = "Error al renderizar Power BI: " + event.detail?.message;
-                    });
-                } catch (e) {
-                    console.error("Excepción al intentar incrustar:", e);
-                    document.getElementById("errorDisplay").innerText = "Excepción en el embed: " + e.message;
-                }
+        const models = window['powerbi-client']?.models || window.powerbi?.models;
+        const config = {
+            type: 'report',
+            tokenType: models.TokenType.Aad,
+            accessToken: "{{ embed_token }}",
+            embedUrl: "{{ embed_url }}",
+            id: "{{ report_id }}",
+            settings: {
+                panes: { 
+                    filters: { visible: {% if is_public %}false{% else %}true{% endif %} }, 
+                    pageNavigation: { visible: true }
+                },
+                bars: { statusBar: { visible: true }},
+                hideErrors: false
             }
+        };
+
+        const container = document.getElementById("reportContainer");
+        const errorDisplay = document.getElementById("errorDisplay");
+        const loading = container.querySelector('.loading');
+
+        try {
+            const report = powerbi.embed(container, config);
+            
+            report.on("loaded", function() {
+                if (loading) loading.style.display = 'none';
+                console.log("Report loaded successfully");
+            });
+            
+            report.on("error", function (event) {
+                if (loading) loading.style.display = 'none';
+                const errorMsg = event.detail?.message || JSON.stringify(event.detail);
+                errorDisplay.innerHTML = "Error al renderizar Power BI: " + errorMsg;
+                errorDisplay.style.display = 'block';
+            });
+            
+        } catch (e) {
+            if (loading) loading.style.display = 'none';
+            errorDisplay.innerHTML = "Excepción en el embed: " + e.message;
+            errorDisplay.style.display = 'block';
         }
     </script>
 </body>

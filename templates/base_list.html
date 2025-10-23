@@ -1,0 +1,241 @@
+{% extends "layout.html" %}
+
+{% block body %}
+<div class="container-fluid py-4">
+  <!-- Header mejorado -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2 class="h4 fw-bold text-dark mb-1">
+        <i class="bi bi-table me-2 text-primary"></i>{{ title }}
+      </h2>
+      <p class="text-muted mb-0">
+        <i class="bi bi-info-circle me-1"></i>
+        Gestión de {{ model_name_plural|lower }} del sistema
+      </p>
+    </div>
+    {% if new_url %}
+    <a href="{{ new_url }}" class="btn btn-primary px-4">
+      <i class="bi bi-plus-circle me-2"></i>Nuevo {{ model_name }}
+    </a>
+    {% endif %}
+  </div>
+
+  {% if items %}
+  <!-- Tabla con diseño moderno -->
+  <div class="card border-0 shadow-lg">
+    <div class="card-header bg-white border-0 py-3">
+      <div class="d-flex justify-content-between align-items-center">
+        <h6 class="mb-0 text-dark fw-semibold">
+          <i class="bi bi-list-check me-2"></i>Lista de {{ model_name_plural }}
+        </h6>
+        <span class="badge bg-primary bg-opacity-10 text-primary">
+          {{ items|length }} registros
+        </span>
+      </div>
+    </div>
+    
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead class="table-dark">
+            <tr>
+              {% for header in headers %}
+              <th class="px-4 py-3 border-0 fw-semibold">
+                <div class="d-flex align-items-center">
+                  <span>{{ header }}</span>
+                </div>
+              </th>
+              {% endfor %}
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in items %}
+            <tr class="border-bottom">
+              {% for field in fields %}
+              <td class="px-4 py-3">
+                <div class="d-flex align-items-center">
+                  {% if field == 'client_secret' %}
+                    {% if item._client_secret %}
+                      <i class="bi bi-shield-check text-success me-2"></i>
+                      <span class="text-success fw-medium">Cifrado</span>
+                    {% else %}
+                      <i class="bi bi-shield-exclamation text-warning me-2"></i>
+                      <span class="text-warning">No configurado</span>
+                    {% endif %}
+                  
+                  {% elif field == 'embed_url' %}
+                    {% if item[field] %}
+                      <i class="bi bi-link-45deg text-primary me-2"></i>
+                      <a href="{{ item[field] }}" target="_blank" class="text-primary text-decoration-none">
+                        <small>Ver URL</small>
+                      </a>
+                    {% else %}
+                      <i class="bi bi-dash-circle text-muted me-2"></i>
+                      <span class="text-muted">No disponible</span>
+                    {% endif %}
+                  
+                  {% else %}
+                    <!-- Para IDs mostrar como código -->
+                    {% if 'id' in field|lower or 'ID' in header %}
+                      <code class="bg-light px-2 py-1 rounded border">{{ item[field] }}</code>
+                    {% else %}
+                      <span class="text-dark">{{ item[field] }}</span>
+                    {% endif %}
+                  {% endif %}
+                </div>
+              </td>
+              {% endfor %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    
+    <!-- Footer de la tabla -->
+    <div class="card-footer bg-light border-0 py-3">
+      <div class="row align-items-center">
+        <div class="col-md-6">
+          <small class="text-muted">
+            <i class="bi bi-database me-1"></i>
+            Total: <strong>{{ items|length }}</strong> {{ model_name_plural|lower }}
+          </small>
+        </div>
+        <div class="col-md-6 text-md-end">
+          <small class="text-muted">
+            <i class="bi bi-clock me-1"></i>
+            Actualizado recientemente
+          </small>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <!-- Estado vacío mejorado -->
+  <div class="text-center py-5">
+    <div class="mb-4">
+      <div class="bg-primary bg-opacity-10 rounded-circle d-inline-flex p-4">
+        <i class="bi bi-inboxes-fill display-4 text-primary"></i>
+      </div>
+    </div>
+    <h3 class="text-dark mb-3">No hay {{ model_name_plural|lower }}</h3>
+    <p class="text-muted mb-4 lead">
+      No se han encontrado {{ model_name_plural|lower }} registrados en el sistema.
+    </p>
+    {% if new_url %}
+    <a href="{{ new_url }}" class="btn btn-primary btn-lg px-4">
+      <i class="bi bi-plus-circle me-2"></i>Crear primer {{ model_name }}
+    </a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block styles %}
+<style>
+.card {
+  border-radius: 12px;
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+.table th {
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  background: rgba(0, 2, 50, 1);
+  color: white;
+}
+
+.table tbody tr {
+  transition: all 0.2s ease;
+  border-left: 3px solid transparent;
+}
+
+.table tbody tr:hover {
+  border-left-color: #34db93ff;
+  background-color: rgba(52, 152, 219, 0.05);
+  transform: translateX(2px);
+}
+
+.table tbody tr:last-child {
+  border-bottom: none;
+}
+
+.table td {
+  border-bottom: 1px solid rgba(0,0,0,0.04);
+  vertical-align: middle;
+}
+
+code {
+  font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', 'Menlo', monospace;
+  font-size: 0.8em;
+  background: rgba(0,0,0,0.04);
+  border: 1px solid rgba(0,0,0,0.1);
+}
+
+.badge {
+  font-weight: 500;
+  padding: 0.4em 0.8em;
+  border-radius: 6px;
+}
+
+.card-header {
+  border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+
+.card-footer {
+  background: linear-gradient(to right, #f8f9fa, #ffffff);
+}
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Efectos de hover mejorados
+  const tableRows = document.querySelectorAll('.table tbody tr');
+  
+  tableRows.forEach(row => {
+    row.addEventListener('mouseenter', function() {
+      this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+      this.style.transition = 'all 0.3s ease';
+    });
+    
+    row.addEventListener('mouseleave', function() {
+      this.style.boxShadow = 'none';
+    });
+  });
+
+  // Actualizar la hora en el footer
+  function updateTime() {
+    const now = new Date();
+    const timeElements = document.querySelectorAll('.update-time');
+    const timeString = now.toLocaleTimeString('es-ES', { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+    
+    timeElements.forEach(el => {
+      el.textContent = `Actualizado: ${timeString}`;
+    });
+  }
+  
+  // Crear elemento de tiempo si no existe
+  const timeFooter = document.querySelector('.card-footer .text-md-end');
+  if (timeFooter) {
+    const timeElement = document.createElement('small');
+    timeElement.className = 'text-muted update-time';
+    timeElement.innerHTML = '<i class="bi bi-clock me-1"></i>Actualizado: ' + 
+      new Date().toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
+    timeFooter.innerHTML = '';
+    timeFooter.appendChild(timeElement);
+  }
+  
+  // Actualizar cada minuto
+  setInterval(updateTime, 60000);
+});
+</script>
+{% endblock %}

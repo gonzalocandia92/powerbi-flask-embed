@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+
+{% block body %}
+<div class="container mt-4">
+  <div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">{{ title }}</h5>
+        </div>
+        <div class="card-body">
+          <form method="post">
+            {{ form.hidden_tag() }}
+
+            {% for field in form %}
+              {% if field.type not in ['CSRFTokenField', 'SubmitField'] %}
+                <div class="mb-3">
+                  {{ field.label(class="form-label") }}
+                  {{ field(class="form-control" + (" is-invalid" if field.errors else "")) }}
+                  {% if field.errors %}
+                    <div class="invalid-feedback">
+                      {% for error in field.errors %}
+                        {{ error }}
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                  {% if field.description %}
+                    <div class="form-text">{{ field.description }}</div>
+                  {% endif %}
+                </div>
+              {% endif %}
+            {% endfor %}
+
+            <div class="d-flex justify-content-between align-items-center">
+              <a href="{{ back_url }}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left"></i> Volver
+              </a>
+              {{ form.submit(class="btn btn-primary") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

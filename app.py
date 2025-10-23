@@ -125,16 +125,12 @@ class ReportConfig(db.Model):
     workspace = db.relationship('Workspace')
     report = db.relationship('Report')
     usuario_pbi = db.relationship('UsuarioPBI')
-    
-    #public_links = db.relationship('PublicLink', backref='report_config', lazy=True, cascade='all, delete-orphan')
-
-    
 
 class PublicLink(db.Model):
     __tablename__ = 'public_links'
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     token = db.Column(db.String(120), unique=True, nullable=False)
-    custom_slug = db.Column(db.String(120), unique=True, nullable=True)  # NUEVO: Slug personalizado
+    custom_slug = db.Column(db.String(120), unique=True, nullable=True)
     report_config_id = db.Column(db.BigInteger, db.ForeignKey('report_configs.id'), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -207,11 +203,19 @@ class TenantForm(FlaskForm):
     tenant_id = StringField("Tenant ID", validators=[DataRequired()])
     submit = SubmitField("Guardar")
 
+# Tenants
 @app.route('/tenants')
 @login_required
 def tenants_list():
     tenants = Tenant.query.all()
-    return render_template('tenants_list.html', tenants=tenants)
+    return render_template('base_list.html', 
+                         items=tenants,
+                         title='Tenants',
+                         model_name='Tenant',
+                         model_name_plural='tenants',
+                         new_url=url_for('tenants_new'),
+                         headers=['#', 'Nombre', 'Tenant ID'],
+                         fields=['id', 'name', 'tenant_id'])
 
 @app.route('/tenants/new', methods=['GET','POST'])
 @login_required
@@ -223,7 +227,10 @@ def tenants_new():
         db.session.commit()
         flash("Tenant creado", "success")
         return redirect(url_for('tenants_list'))
-    return render_template('tenant_form.html', form=form)
+    return render_template('base_form.html', 
+                         form=form,
+                         title='Nuevo Tenant',
+                         back_url=url_for('tenants_list'))
 
 class ClientForm(FlaskForm):
     name = StringField("Nombre cliente", validators=[DataRequired()])
@@ -231,11 +238,19 @@ class ClientForm(FlaskForm):
     client_secret = PasswordField("Client Secret (se cifrará)")
     submit = SubmitField("Guardar")
 
+# Clients
 @app.route('/clients')
 @login_required
 def clients_list():
     clients = Client.query.all()
-    return render_template('clients_list.html', clients=clients)
+    return render_template('base_list.html', 
+                         items=clients,
+                         title='Clients',
+                         model_name='Client',
+                         model_name_plural='clients',
+                         new_url=url_for('clients_new'),
+                         headers=['#', 'Nombre', 'Client ID', 'Secret'],
+                         fields=['id', 'name', 'client_id', 'client_secret'])
 
 @app.route('/clients/new', methods=['GET','POST'])
 @login_required
@@ -249,18 +264,29 @@ def clients_new():
         db.session.commit()
         flash("Client creado", "success")
         return redirect(url_for('clients_list'))
-    return render_template('client_form.html', form=form)
+    return render_template('base_form.html', 
+                         form=form,
+                         title='Nuevo Client',
+                         back_url=url_for('clients_list'))
 
 class WorkspaceForm(FlaskForm):
     name = StringField("Nombre", validators=[DataRequired()])
     workspace_id = StringField("Workspace ID", validators=[DataRequired()])
     submit = SubmitField("Guardar")
 
+# Workspaces
 @app.route('/workspaces')
 @login_required
 def workspaces_list():
     ws = Workspace.query.all()
-    return render_template('workspaces_list.html', workspaces=ws)
+    return render_template('base_list.html', 
+                         items=ws,
+                         title='Workspaces',
+                         model_name='Workspace',
+                         model_name_plural='workspaces',
+                         new_url=url_for('workspaces_new'),
+                         headers=['#', 'Nombre', 'Workspace ID'],
+                         fields=['id', 'name', 'workspace_id'])
 
 @app.route('/workspaces/new', methods=['GET','POST'])
 @login_required
@@ -272,7 +298,10 @@ def workspaces_new():
         db.session.commit()
         flash("Workspace creado", "success")
         return redirect(url_for('workspaces_list'))
-    return render_template('workspace_form.html', form=form)
+    return render_template('base_form.html', 
+                         form=form,
+                         title='Nuevo Workspace',
+                         back_url=url_for('workspaces_list'))
 
 class ReportForm(FlaskForm):
     name = StringField("Nombre", validators=[DataRequired()])
@@ -280,11 +309,19 @@ class ReportForm(FlaskForm):
     embed_url = StringField("Embed URL (opcional)")
     submit = SubmitField("Guardar")
 
+# Reports
 @app.route('/reports')
 @login_required
 def reports_list():
     r = Report.query.all()
-    return render_template('reports_list.html', reports=r)
+    return render_template('base_list.html', 
+                         items=r,
+                         title='Reports',
+                         model_name='Report',
+                         model_name_plural='reports',
+                         new_url=url_for('reports_new'),
+                         headers=['#', 'Nombre', 'Report ID', 'Embed URL'],
+                         fields=['id', 'name', 'report_id', 'embed_url'])
 
 @app.route('/reports/new', methods=['GET','POST'])
 @login_required
@@ -296,9 +333,12 @@ def reports_new():
         db.session.commit()
         flash("Reporte creado", "success")
         return redirect(url_for('reports_list'))
-    return render_template('report_form.html', form=form)
+    return render_template('base_form.html', 
+                         form=form,
+                         title='Nuevo Report',
+                         back_url=url_for('reports_list'))
 
-# NUEVO: Formulario para UsuarioPBI
+# UsuarioPBI
 class UsuarioPBIForm(FlaskForm):
     nombre = StringField("Nombre identificador", validators=[DataRequired()])
     username = StringField("Usuario Power BI", validators=[DataRequired()])
@@ -309,7 +349,14 @@ class UsuarioPBIForm(FlaskForm):
 @login_required
 def usuarios_pbi_list():
     usuarios = UsuarioPBI.query.all()
-    return render_template('usuarios_pbi_list.html', usuarios=usuarios)
+    return render_template('base_list.html', 
+                         items=usuarios,
+                         title='Usuarios Power BI',
+                         model_name='Usuario PBI',
+                         model_name_plural='usuarios PBI',
+                         new_url=url_for('usuarios_pbi_new'),
+                         headers=['#', 'Nombre', 'Username'],
+                         fields=['id', 'nombre', 'username'])
 
 @app.route('/usuarios-pbi/new', methods=['GET','POST'])
 @login_required
@@ -325,23 +372,40 @@ def usuarios_pbi_new():
         db.session.commit()
         flash("Usuario PBI creado", "success")
         return redirect(url_for('usuarios_pbi_list'))
-    return render_template('usuario_pbi_form.html', form=form)
+    return render_template('base_form.html', 
+                         form=form,
+                         title='Nuevo Usuario PBI',
+                         back_url=url_for('usuarios_pbi_list'))
 
-# MODIFICADO: ReportConfigForm ahora usa SelectField para UsuarioPBI
+# ReportConfig
 class ReportConfigForm(FlaskForm):
     name = StringField("Nombre configuración", validators=[DataRequired()])
     tenant = SelectField("Tenant", coerce=int, validators=[DataRequired()])
     client = SelectField("Client", coerce=int, validators=[DataRequired()])
     workspace = SelectField("Workspace", coerce=int, validators=[DataRequired()])
     report = SelectField("Report", coerce=int, validators=[DataRequired()])
-    usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])  # Campo correcto
+    usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])
     submit = SubmitField("Guardar")
 
 @app.route('/configs')
 @login_required
 def configs_list():
-    cs = ReportConfig.query.all()
-    return render_template('configs_list.html', configs=cs)
+    cs = ReportConfig.query.options(
+        db.joinedload(ReportConfig.tenant),
+        db.joinedload(ReportConfig.client),
+        db.joinedload(ReportConfig.workspace),
+        db.joinedload(ReportConfig.report),
+        db.joinedload(ReportConfig.usuario_pbi)
+    ).all()
+    
+    return render_template('base_list.html', 
+                         items=cs,
+                         title='Configuraciones',
+                         model_name='Configuración',
+                         model_name_plural='configuraciones',
+                         new_url=url_for('configs_new'),
+                         headers=['#', 'Nombre', 'Tenant', 'Client', 'Workspace', 'Report', 'Usuario PBI'],
+                         fields=['id', 'name', 'tenant.name', 'client.name', 'workspace.name', 'report.name', 'usuario_pbi.nombre'])
 
 @app.route('/configs/new', methods=['GET','POST'])
 @login_required
@@ -352,7 +416,7 @@ def configs_new():
     form.client.choices = [(c.id, c.name) for c in Client.query.order_by(Client.name).all()]
     form.workspace.choices = [(w.id, w.name) for w in Workspace.query.order_by(Workspace.name).all()]
     form.report.choices = [(r.id, r.name) for r in Report.query.order_by(Report.name).all()]
-    form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]  # NUEVO
+    form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]
 
     if form.validate_on_submit():
         rc = ReportConfig(
@@ -361,20 +425,22 @@ def configs_new():
             client_id=form.client.data,
             workspace_id=form.workspace.data,
             report_id_fk=form.report.data,
-            usuario_pbi_id=form.usuario_pbi.data  # NUEVO: Relación con UsuarioPBI
+            usuario_pbi_id=form.usuario_pbi.data
         )
         db.session.add(rc)
         db.session.commit()
         flash("Configuración creada", "success")
         return redirect(url_for('configs_list'))
-    return render_template('config_form.html', form=form)
+    return render_template('base_form.html', 
+                         form=form,
+                         title='Nueva Configuración',
+                         back_url=url_for('configs_list'))
 
-# NUEVO: Formulario para crear link personalizado
+# Public Links
 class PublicLinkForm(FlaskForm):
     custom_slug = StringField("Nombre personalizado para el link", validators=[DataRequired(), Length(max=120)])
     submit = SubmitField("Crear Link")
 
-# MODIFICADO: Ahora usa formulario con slug personalizado
 @app.route('/configs/<int:config_id>/link/new', methods=['GET','POST'])
 @login_required
 def configs_new_link(config_id):
@@ -411,7 +477,7 @@ def configs_new_link(config_id):
     
     return render_template('create_public_link.html', form=form, config=cfg)
 
-# MODIFICADO: Ahora usa custom_slug en lugar de token
+# ---------- VISTAS DE REPORTES ----------
 @app.route('/p/<custom_slug>')
 def public_view(custom_slug):
     link = PublicLink.query.filter_by(custom_slug=custom_slug, is_active=True).first_or_404()
@@ -425,11 +491,31 @@ def public_view(custom_slug):
                              error_message=f"Error generando embed token: {e}",
                              config_name=cfg.name), 500
 
-    return render_template('report_public.html',
+    return render_template('report_base.html',
                            embed_token=embed_token,
                            embed_url=embed_url,
                            report_id=report_id,
-                           config_name=cfg.name)
+                           config_name=cfg.name,
+                           is_public=True)
+
+@app.route('/configs/<int:config_id>/view')
+@login_required
+def config_view(config_id):
+    cfg = ReportConfig.query.get_or_404(config_id)
+    
+    try:
+        embed_token, embed_url, report_id = get_embed_for_config(cfg)
+    except Exception as e:
+        logging.error(f"Error generando embed token: {e}")
+        flash(f"Error cargando reporte: {e}", "danger")
+        return redirect(url_for('configs_list'))
+
+    return render_template('report_base.html',
+                           embed_token=embed_token,
+                           embed_url=embed_url,
+                           report_id=report_id,
+                           config_name=cfg.name,
+                           is_public=False)
 
 # ---------- LÓGICA PARA OBTENER EMBED TOKEN ----------
 def get_embed_for_config(cfg: ReportConfig):
@@ -442,7 +528,6 @@ def get_embed_for_config(cfg: ReportConfig):
     client_id = cfg.client.client_id
     client_secret = cfg.client.get_secret()
     
-    # NUEVO: Obtener usuario y contraseña desde UsuarioPBI relacionado
     user_pbi = cfg.usuario_pbi.username
     pass_pbi = cfg.usuario_pbi.get_password()
     
@@ -486,25 +571,6 @@ def get_embed_for_config(cfg: ReportConfig):
     embed_url = report_info["embedUrl"]
 
     return embed_token, embed_url, report_id
-
-# ---------- RUTA PARA VISUALIZACIÓN PRIVADA (PARA ADMIN) ----------
-@app.route('/configs/<int:config_id>/view')
-@login_required
-def config_view(config_id):
-    cfg = ReportConfig.query.get_or_404(config_id)
-    
-    try:
-        embed_token, embed_url, report_id = get_embed_for_config(cfg)
-    except Exception as e:
-        logging.error(f"Error generando embed token: {e}")
-        flash(f"Error cargando reporte: {e}", "danger")
-        return redirect(url_for('configs_list'))
-
-    return render_template('report_private.html',
-                           embed_token=embed_token,
-                           embed_url=embed_url,
-                           report_id=report_id,
-                           config_name=cfg.name)
 
 # ---------- UTILIDADES ADMIN ----------
 @app.cli.command("create-admin")

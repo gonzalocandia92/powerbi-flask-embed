@@ -1,166 +1,313 @@
 {% extends "layout.html" %}
-{% block body %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="bi bi-gear-fill"></i> Configuraciones Disponibles</h2>
-    <a class="btn btn-success" href="{{ url_for('configs_new') }}">
-        <i class="bi bi-plus-circle"></i> Nueva Configuración
-    </a>
-</div>
 
-<div class="card">
-    <div class="card-body">
-        {% if configs %}
-        <div class="table-responsive">
-            <table class="table table-striped table-hover">
-                <thead class="table-dark">
-                    <tr>
-                        <th>Nombre</th>
-                        <th>Tenant</th>
-                        <th>Client</th>
-                        <th>Workspace</th>
-                        <th>Report</th>
-                        <th>Links Públicos</th>
-                        <th>Acciones</th>
-                    </tr>
-                </thead>
-                <tbody>
-                {% for c in configs %}
-                    <tr>
-                        <td>
-                            <strong>{{ c.name }}</strong>
-                        </td>
-                        <td>{{ c.tenant.name }}</td>
-                        <td>{{ c.client.name }}</td>
-                        <td>{{ c.workspace.name }}</td>
-                        <td>{{ c.report.name }}</td>
-                        <td>
-                            {% set config_links = links_by_config.get(c.id, []) %}
-                            {% if config_links %}
-                                {% for link in config_links %}
+{% block body %}
+<div class="container-fluid py-4">
+    <!-- Header mejorado -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h2 class="h3 fw-bold text-dark mb-1">
+                <i class="bi bi-speedometer2 me-2 text-primary"></i>Dashboard
+            </h2>
+            <p class="text-muted mb-0">
+                <i class="bi bi-info-circle me-1"></i>
+                Resumen y gestión de configuraciones Power BI
+            </p>
+        </div>
+        <a class="btn btn-success px-4" href="{{ url_for('configs_new') }}">
+            <i class="bi bi-plus-circle me-2"></i> Nueva Configuración
+        </a>
+    </div>
+
+    <!-- Estadísticas mejoradas -->
+    {% if configs %}
+    <div class="row mb-4">
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            <h3 class="card-title fw-bold text-primary mb-1">{{ configs|length }}</h3>
+                            <p class="card-text text-muted mb-0">Configuraciones</p>
+                        </div>
+                        <div class="bg-primary bg-opacity-10 rounded-circle p-3">
+                            <i class="bi bi-gear-fill text-primary fs-4"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            {% set total_links = [] %}
+                            {% for c in configs %}
+                                {% for link in c.public_links %}
                                     {% if link.is_active %}
-                                    <div class="d-flex align-items-center mb-1">
-                                        <input type="text" 
-                                            id="link-{{ link.id }}" 
-                                            value="{{ request.url_root.rstrip('/') }}/p/{{ link.custom_slug }}" 
-                                            readonly 
-                                            class="form-control form-control-sm" 
-                                            style="min-width: 250px; font-size: 0.8rem;">
-                                        <button class="btn btn-sm btn-outline-primary ms-1" 
-                                                onclick="copyToClipboard('link-{{ link.id }}', this)"
-                                                title="Copiar link">
-                                            <i class="bi bi-clipboard"></i>
-                                        </button>
-                                    </div>
+                                        {% set _ = total_links.append(1) %}
                                     {% endif %}
                                 {% endfor %}
-                            {% else %}
-                                <span class="text-muted">No hay links</span>
-                            {% endif %}
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm">
-                                <a href="{{ url_for('configs_new_link', config_id=c.id) }}" 
-                                class="btn btn-outline-success" 
-                                title="Crear nuevo link público">
-                                    <i class="bi bi-link"></i> Nuevo Link
-                                </a>
-                                <a href="{{ url_for('config_view', config_id=c.id) }}" 
-                                   class="btn btn-outline-info" 
-                                   title="Vista previa del reporte">
-                                    <i class="bi bi-eye"></i> Ver
-                                </a>
-                            </div>
-                        </td>
-                    </tr>
-                {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <div class="text-center py-5">
-            <div class="mb-3">
-                <i class="bi bi-inboxes display-1 text-muted"></i>
+                            {% endfor %}
+                            <h3 class="card-title fw-bold text-success mb-1">{{ total_links|length }}</h3>
+                            <p class="card-text text-muted mb-0">Links Activos</p>
+                        </div>
+                        <div class="bg-success bg-opacity-10 rounded-circle p-3">
+                            <i class="bi bi-link-45deg text-success fs-4"></i>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <h4 class="text-muted">No hay configuraciones</h4>
-            <p class="text-muted">Comienza creando tu primera configuración.</p>
-            <a href="{{ url_for('configs_new') }}" class="btn btn-primary">
-                <i class="bi bi-plus-circle"></i> Crear Primera Configuración
-            </a>
         </div>
-        {% endif %}
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            {% set max_links = 0 %}
+                            {% for c in configs %}
+                                {% set link_count = 0 %}
+                                {% for link in c.public_links %}
+                                    {% if link.is_active %}
+                                        {% set link_count = link_count + 1 %}
+                                    {% endif %}
+                                {% endfor %}
+                                {% if link_count > max_links %}
+                                    {% set max_links = link_count %}
+                                {% endif %}
+                            {% endfor %}
+                            <h3 class="card-title fw-bold text-info mb-1">{{ max_links }}</h3>
+                            <p class="card-text text-muted mb-0">Máx por configuración</p>
+                        </div>
+                        <div class="bg-info bg-opacity-10 rounded-circle p-3">
+                            <i class="bi bi-graph-up text-info fs-4"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-0 shadow-sm h-100">
+                <div class="card-body">
+                    <div class="d-flex justify-content-between align-items-center">
+                        <div>
+                            {% set active_configs = [] %}
+                            {% for c in configs %}
+                                {% if c.public_links and c.public_links|selectattr('is_active')|list|length > 0 %}
+                                    {% set _ = active_configs.append(1) %}
+                                {% endif %}
+                            {% endfor %}
+                            <h3 class="card-title fw-bold text-warning mb-1">{{ active_configs|length }}</h3>
+                            <p class="card-text text-muted mb-0">Configs con links</p>
+                        </div>
+                        <div class="bg-warning bg-opacity-10 rounded-circle p-3">
+                            <i class="bi bi-check-circle text-warning fs-4"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
-</div>
 
-<!-- Estadísticas rápidas -->
-{% if configs %}
-<div class="row mt-4">
-    <div class="col-md-4">
-        <div class="card text-white bg-primary">
-            <div class="card-body">
-                <div class="d-flex justify-content-between">
-                    <div>
-                        <h4 class="card-title">{{ configs|length }}</h4>
-                        <p class="card-text">Configuraciones</p>
-                    </div>
-                    <div class="align-self-center">
-                        <i class="bi bi-gear display-4 opacity-50"></i>
-                    </div>
-                </div>
+    <!-- Tabla de configuraciones mejorada -->
+    <div class="card border-0 shadow-lg">
+        <div class="card-header bg-white border-0 py-3">
+            <div class="d-flex justify-content-between align-items-center">
+                <h5 class="mb-0 text-dark fw-semibold">
+                    <i class="bi bi-list-check me-2"></i>Configuraciones Disponibles
+                </h5>
+                <span class="badge bg-primary bg-opacity-10 text-primary fs-6">
+                    {{ configs|length }} registros
+                </span>
             </div>
         </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card text-white bg-success">
-            <div class="card-body">
-                <div class="d-flex justify-content-between">
-                    <div>
-                        {% set total_links = [] %}
-                        {% for c in configs %}
-                            {% for link in c.public_links %}
-                                {% if link.is_active %}
-                                    {% set _ = total_links.append(1) %}
+        
+        <div class="card-body p-0">
+            <div class="table-responsive">
+                <table class="table table-hover align-middle mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th class="px-4 py-3 border-0 fw-semibold">Nombre</th>
+                            <th class="px-4 py-3 border-0 fw-semibold">Tenant</th>
+                            <th class="px-4 py-3 border-0 fw-semibold">Client</th>
+                            <th class="px-4 py-3 border-0 fw-semibold">Workspace</th>
+                            <th class="px-4 py-3 border-0 fw-semibold">Report</th>
+                            <th class="px-4 py-3 border-0 fw-semibold">Links Públicos</th>
+                            <th class="px-4 py-3 border-0 fw-semibold text-center">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for c in configs %}
+                        <tr class="border-bottom">
+                            <td class="px-4 py-3">
+                                <div class="d-flex align-items-center">
+                                    <div class="bg-primary bg-opacity-10 rounded-circle p-2 me-3">
+                                        <i class="bi bi-gear text-primary"></i>
+                                    </div>
+                                    <div>
+                                        <strong class="text-dark d-block">{{ c.name }}</strong>
+                                        <small class="text-muted">Creado: {{ c.created_at.strftime('%d/%m/%Y') if c.created_at else 'N/A' }}</small>
+                                    </div>
+                                </div>
+                            </td>
+                            <td class="px-4 py-3">
+                                <span class="badge bg-light text-dark border">
+                                    <i class="bi bi-buildings me-1"></i>{{ c.tenant.name }}
+                                </span>
+                            </td>
+                            <td class="px-4 py-3">
+                                <span class="badge bg-light text-dark border">
+                                    <i class="bi bi-person-badge me-1"></i>{{ c.client.name }}
+                                </span>
+                            </td>
+                            <td class="px-4 py-3">
+                                <span class="badge bg-light text-dark border">
+                                    <i class="bi bi-columns-gap me-1"></i>{{ c.workspace.name }}
+                                </span>
+                            </td>
+                            <td class="px-4 py-3">
+                                <span class="badge bg-light text-dark border">
+                                    <i class="bi bi-bar-chart-line me-1"></i>{{ c.report.name }}
+                                </span>
+                            </td>
+                            <td class="px-4 py-3">
+                                {% set config_links = links_by_config.get(c.id, []) %}
+                                {% if config_links %}
+                                    <div class="d-flex flex-column gap-2">
+                                        {% for link in config_links %}
+                                            {% if link.is_active %}
+                                            <div class="d-flex align-items-center">
+                                                <div class="input-group input-group-sm" style="min-width: 280px;">
+                                                    <input type="text" 
+                                                        id="link-{{ link.id }}" 
+                                                        value="{{ request.url_root.rstrip('/') }}/p/{{ link.custom_slug }}" 
+                                                        readonly 
+                                                        class="form-control border-end-0">
+                                                    <button class="btn btn-outline-primary border-start-0" 
+                                                            onclick="copyToClipboard('link-{{ link.id }}', this)"
+                                                            title="Copiar link"
+                                                            data-bs-toggle="tooltip">
+                                                        <i class="bi bi-clipboard"></i>
+                                                    </button>
+                                                </div>
+                                            </div>
+                                            {% endif %}
+                                        {% endfor %}
+                                    </div>
+                                {% else %}
+                                    <span class="text-muted small">
+                                        <i class="bi bi-link-45deg me-1"></i>No hay links
+                                    </span>
                                 {% endif %}
-                            {% endfor %}
-                        {% endfor %}
-                        <h4 class="card-title">{{ total_links|length }}</h4>
-                        <p class="card-text">Links Activos</p>
-                    </div>
-                    <div class="align-self-center">
-                        <i class="bi bi-link display-4 opacity-50"></i>
-                    </div>
+                            </td>
+                            <td class="px-4 py-3 text-center">
+                                <div class="btn-group-vertical btn-group-sm">
+                                    <a href="{{ url_for('configs_new_link', config_id=c.id) }}" 
+                                    class="btn btn-outline-success mb-1" 
+                                    title="Crear nuevo link público"
+                                    data-bs-toggle="tooltip">
+                                        <i class="bi bi-plus-circle me-1"></i>Nuevo Link
+                                    </a>
+                                    <a href="{{ url_for('config_view', config_id=c.id) }}" 
+                                       class="btn btn-outline-primary" 
+                                       title="Vista previa del reporte"
+                                       data-bs-toggle="tooltip">
+                                        <i class="bi bi-eye me-1"></i>Ver Reporte
+                                    </a>
+                                </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        
+        <!-- Footer de la tabla -->
+        <div class="card-footer bg-light border-0 py-3">
+            <div class="row align-items-center">
+                <div class="col-md-6">
+                    <small class="text-muted">
+                        <i class="bi bi-database me-1"></i>
+                        Total: <strong>{{ configs|length }}</strong> configuraciones
+                    </small>
+                </div>
+                <div class="col-md-6 text-md-end">
+                    <small class="text-muted update-time">
+                        <i class="bi bi-clock me-1"></i>
+                        Actualizado recientemente
+                    </small>
                 </div>
             </div>
         </div>
     </div>
-    <div class="col-md-4">
-        <div class="card text-white bg-info">
-            <div class="card-body">
-                <div class="d-flex justify-content-between">
-                    <div>
-                        {% set max_links = 0 %}
-                        {% for c in configs %}
-                            {% set link_count = 0 %}
-                            {% for link in c.public_links %}
-                                {% if link.is_active %}
-                                    {% set link_count = link_count + 1 %}
-                                {% endif %}
-                            {% endfor %}
-                            {% if link_count > max_links %}
-                                {% set max_links = link_count %}
-                            {% endif %}
-                        {% endfor %}
-                        <h4 class="card-title">{{ max_links }}</h4>
-                        <p class="card-text">Máx links por config</p>
-                    </div>
-                    <div class="align-self-center">
-                        <i class="bi bi-graph-up display-4 opacity-50"></i>
-                    </div>
-                </div>
+    {% else %}
+    <!-- Estado vacío mejorado -->
+    <div class="text-center py-5">
+        <div class="mb-4">
+            <div class="bg-primary bg-opacity-10 rounded-circle d-inline-flex p-5">
+                <i class="bi bi-inboxes-fill display-2 text-primary"></i>
             </div>
         </div>
+        <h3 class="text-dark mb-3">No hay configuraciones</h3>
+        <p class="text-muted mb-4 lead">
+            Comienza creando tu primera configuración para visualizar reportes Power BI.
+        </p>
+        <a href="{{ url_for('configs_new') }}" class="btn btn-primary btn-lg px-4">
+            <i class="bi bi-plus-circle me-2"></i> Crear Primera Configuración
+        </a>
     </div>
+    {% endif %}
 </div>
-{% endif %}
+{% endblock %}
+
+{% block styles %}
+<style>
+.card {
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.table th {
+    font-weight: 600;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    background: linear-gradient(135deg, #2c3e50, #3498db);
+    color: white;
+}
+
+.table tbody tr {
+    transition: all 0.2s ease;
+    border-left: 3px solid transparent;
+}
+
+.table tbody tr:hover {
+    border-left-color: #3498db;
+    background-color: rgba(52, 152, 219, 0.03);
+    transform: translateX(2px);
+}
+
+.badge {
+    font-weight: 500;
+    padding: 0.4em 0.8em;
+    border-radius: 6px;
+}
+
+.input-group .form-control:focus {
+    box-shadow: none;
+    border-color: #dee2e6;
+}
+
+.btn-group-vertical .btn {
+    border-radius: 6px !important;
+    margin-bottom: 0.25rem;
+}
+
+.card-header {
+    border-bottom: 1px solid rgba(0,0,0,0.08);
+}
+</style>
 {% endblock %}
 
 {% block scripts %}
@@ -170,33 +317,118 @@ function copyToClipboard(elementId, button) {
     copyText.select();
     copyText.setSelectionRange(0, 99999);
     
-    navigator.clipboard.writeText(copyText.value).then(function() {
+    // Fallback robusto para clipboard
+    const copyToClipboardFallback = (text) => {
+        // Método 1: navigator.clipboard (moderno)
+        if (navigator.clipboard && window.isSecureContext) {
+            return navigator.clipboard.writeText(text);
+        }
+        
+        // Método 2: execCommand (legacy)
+        const textArea = document.createElement('textarea');
+        textArea.value = text;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-999999px';
+        textArea.style.top = '-999999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        
+        try {
+            const successful = document.execCommand('copy');
+            document.body.removeChild(textArea);
+            if (successful) {
+                return Promise.resolve();
+            } else {
+                return Promise.reject(new Error('Fallback copy failed'));
+            }
+        } catch (err) {
+            document.body.removeChild(textArea);
+            return Promise.reject(err);
+        }
+    };
+    
+    copyToClipboardFallback(copyText.value).then(function() {
         // Feedback visual temporal
         const originalHTML = button.innerHTML;
         button.innerHTML = '<i class="bi bi-check-lg"></i>';
         button.classList.remove('btn-outline-primary');
         button.classList.add('btn-success');
+        button.setAttribute('data-bs-original-title', '¡Copiado!');
+        
+        // Actualizar tooltip
+        const tooltip = bootstrap.Tooltip.getInstance(button);
+        if (tooltip) {
+            tooltip.setContent({ '.tooltip-inner': '¡Copiado!' });
+        }
         
         setTimeout(() => {
             button.innerHTML = originalHTML;
             button.classList.remove('btn-success');
             button.classList.add('btn-outline-primary');
+            button.setAttribute('data-bs-original-title', 'Copiar link');
+            
+            if (tooltip) {
+                tooltip.setContent({ '.tooltip-inner': 'Copiar link' });
+            }
         }, 2000);
     }).catch(function(err) {
-        // Fallback para navegadores antiguos
         console.error('Error al copiar: ', err);
-        alert('Error al copiar el link: ' + err);
+        // Fallback: mostrar el texto para copiar manualmente
+        copyText.focus();
+        copyText.select();
+        alert('Presiona Ctrl+C para copiar el link: ' + copyText.value);
     });
 }
 
-// Seleccionar automáticamente el texto al hacer clic en el input
 document.addEventListener('DOMContentLoaded', function() {
+    // Inicializar tooltips
+    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
+    var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
+        return new bootstrap.Tooltip(tooltipTriggerEl);
+    });
+
+    // Seleccionar texto al hacer clic en inputs
     const linkInputs = document.querySelectorAll('input[readonly]');
     linkInputs.forEach(input => {
         input.addEventListener('click', function() {
             this.select();
         });
+        
+        // También agregar doble clic para selección completa
+        input.addEventListener('dblclick', function() {
+            this.select();
+        });
     });
+
+    // Efectos hover en filas
+    const tableRows = document.querySelectorAll('.table tbody tr');
+    tableRows.forEach(row => {
+        row.addEventListener('mouseenter', function() {
+            this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+        });
+        
+        row.addEventListener('mouseleave', function() {
+            this.style.boxShadow = 'none';
+        });
+    });
+
+    // Actualizar hora
+    function updateTime() {
+        const now = new Date();
+        const timeElements = document.querySelectorAll('.update-time');
+        const timeString = now.toLocaleTimeString('es-ES', { 
+            hour: '2-digit', 
+            minute: '2-digit' 
+        });
+        
+        timeElements.forEach(el => {
+            el.innerHTML = `<i class="bi bi-clock me-1"></i>Actualizado: ${timeString}`;
+        });
+    }
+    
+    updateTime();
+    setInterval(updateTime, 60000);
 });
 </script>
 {% endblock %}
