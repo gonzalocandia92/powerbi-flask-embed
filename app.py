@@ -2,7 +2,9 @@ import os
 import uuid
 import requests
 import logging
+import time
 from datetime import datetime, timedelta
+from functools import wraps
 
 from flask import Flask, render_template, redirect, url_for, request, flash, abort, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
@@ -11,6 +13,7 @@ from flask_migrate import Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet, InvalidToken
 from dotenv import load_dotenv
+from sqlalchemy.exc import OperationalError, DBAPIError
 
 # Carga .env
 load_dotenv()
@@ -23,6 +26,18 @@ app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
 app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
+# Configuración del pool de conexiones para evitar conexiones perdidas
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_size': 10,                # Número de conexiones permanentes en el pool
+    'pool_recycle': 3600,           # Reciclar conexiones después de 1 hora
+    'pool_pre_ping': True,          # Verificar conexión antes de usarla
+    'max_overflow': 20,             # Conexiones adicionales permitidas
+    'pool_timeout': 30,             # Tiempo de espera para obtener una conexión
+    'connect_args': {
+        'connect_timeout': 10       # Timeout para establecer conexión inicial
+    }
+}
+
 # Inicializa DB
 db = SQLAlchemy(app)
 migrate = Migrate(app, db)
@@ -31,6 +46,49 @@ migrate = Migrate(app, db)
 login_manager = LoginManager()
 login_manager.login_view = 'login'
 login_manager.init_app(app)
+
+# Teardown para cerrar sesiones de base de datos después de cada request
+@app.teardown_appcontext
+def shutdown_session(exception=None):
+    """
+    Cierra la sesión de base de datos al final de cada request.
+    Esto asegura que las conexiones se devuelvan al pool correctamente.
+    """
+    db.session.remove()
+
+# Decorador para reintentar operaciones de base de datos
+def retry_on_db_error(max_retries=3, delay=1):
+    """
+    Decorador que reintenta operaciones de base de datos en caso de error de conexión.
+    
+    Args:
+        max_retries: Número máximo de reintentos
+        delay: Tiempo de espera entre reintentos (en segundos)
+    """
+    def decorator(func):
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+            last_exception = None
+            for attempt in range(max_retries):
+                try:
+                    return func(*args, **kwargs)
+                except (OperationalError, DBAPIError) as e:
+                    last_exception = e
+                    logging.warning(f"Error de conexión a la base de datos (intento {attempt + 1}/{max_retries}): {e}")
+                    
+                    # Cerrar y limpiar la sesión actual
+                    db.session.rollback()
+                    db.session.remove()
+                    
+                    # Esperar antes de reintentar (excepto en el último intento)
+                    if attempt < max_retries - 1:
+                        time.sleep(delay * (attempt + 1))  # Backoff exponencial
+                    else:
+                        logging.error(f"Error de conexión a la base de datos después de {max_retries} intentos: {e}")
+                        raise last_exception
+            return None
+        return wrapper
+    return decorator
 
 # Cifra/decifra con Fernet
 FERNET_KEY = os.getenv('FERNET_KEY')
@@ -139,6 +197,7 @@ class PublicLink(db.Model):
 
 # ---------- LOGIN ----------
 @login_manager.user_loader
+@retry_on_db_error(max_retries=3, delay=1)
 def load_user(user_id):
     return User.query.get(int(user_id))
 
@@ -154,6 +213,7 @@ class LoginForm(FlaskForm):
     submit = SubmitField('Entrar')
 
 @app.route('/login', methods=['GET', 'POST'])
+@retry_on_db_error(max_retries=3, delay=1)
 def login():
     form = LoginForm()
     if form.validate_on_submit():
@@ -173,6 +233,7 @@ def logout():
 # ---------- PÁGINAS PRINCIPALES ----------
 @app.route('/')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def index():
     # Cargar configuraciones con sus links públicos
     configs = ReportConfig.query.options(
@@ -206,6 +267,7 @@ class TenantForm(FlaskForm):
 # Tenants
 @app.route('/tenants')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def tenants_list():
     tenants = Tenant.query.all()
     return render_template('base_list.html', 
@@ -219,6 +281,7 @@ def tenants_list():
 
 @app.route('/tenants/new', methods=['GET','POST'])
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def tenants_new():
     form = TenantForm()
     if form.validate_on_submit():
@@ -241,6 +304,7 @@ class ClientForm(FlaskForm):
 # Clients
 @app.route('/clients')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def clients_list():
     clients = Client.query.all()
     return render_template('base_list.html', 
@@ -254,6 +318,7 @@ def clients_list():
 
 @app.route('/clients/new', methods=['GET','POST'])
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def clients_new():
     form = ClientForm()
     if form.validate_on_submit():
@@ -277,6 +342,7 @@ class WorkspaceForm(FlaskForm):
 # Workspaces
 @app.route('/workspaces')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def workspaces_list():
     ws = Workspace.query.all()
     return render_template('base_list.html', 
@@ -290,6 +356,7 @@ def workspaces_list():
 
 @app.route('/workspaces/new', methods=['GET','POST'])
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def workspaces_new():
     form = WorkspaceForm()
     if form.validate_on_submit():
@@ -312,6 +379,7 @@ class ReportForm(FlaskForm):
 # Reports
 @app.route('/reports')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def reports_list():
     r = Report.query.all()
     return render_template('base_list.html', 
@@ -325,6 +393,7 @@ def reports_list():
 
 @app.route('/reports/new', methods=['GET','POST'])
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def reports_new():
     form = ReportForm()
     if form.validate_on_submit():
@@ -347,6 +416,7 @@ class UsuarioPBIForm(FlaskForm):
 
 @app.route('/usuarios-pbi')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def usuarios_pbi_list():
     usuarios = UsuarioPBI.query.all()
     return render_template('base_list.html', 
@@ -360,6 +430,7 @@ def usuarios_pbi_list():
 
 @app.route('/usuarios-pbi/new', methods=['GET','POST'])
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def usuarios_pbi_new():
     form = UsuarioPBIForm()
     if form.validate_on_submit():
@@ -389,6 +460,7 @@ class ReportConfigForm(FlaskForm):
 
 @app.route('/configs')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def configs_list():
     cs = ReportConfig.query.options(
         db.joinedload(ReportConfig.tenant),
@@ -409,6 +481,7 @@ def configs_list():
 
 @app.route('/configs/new', methods=['GET','POST'])
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def configs_new():
     form = ReportConfigForm()
     # poblar selects
@@ -443,6 +516,7 @@ class PublicLinkForm(FlaskForm):
 
 @app.route('/configs/<int:config_id>/link/new', methods=['GET','POST'])
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def configs_new_link(config_id):
     cfg = ReportConfig.query.get_or_404(config_id)
     form = PublicLinkForm()
@@ -479,6 +553,7 @@ def configs_new_link(config_id):
 
 # ---------- VISTAS DE REPORTES ----------
 @app.route('/p/<custom_slug>')
+@retry_on_db_error(max_retries=3, delay=1)
 def public_view(custom_slug):
     link = PublicLink.query.filter_by(custom_slug=custom_slug, is_active=True).first_or_404()
     cfg = link.report_config
@@ -500,6 +575,7 @@ def public_view(custom_slug):
 
 @app.route('/configs/<int:config_id>/view')
 @login_required
+@retry_on_db_error(max_retries=3, delay=1)
 def config_view(config_id):
     cfg = ReportConfig.query.get_or_404(config_id)
     
