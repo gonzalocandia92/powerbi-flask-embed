@@ -51,8 +51,8 @@ def my_route():
 ```
 
 Características:
-- **3 reintentos** automáticos en caso de error de conexión
-- **Backoff exponencial**: 1s, 2s, 3s entre reintentos
+- **Hasta 3 intentos** automáticos en caso de error de conexión
+- **Backoff exponencial**: espera de 1s antes del 2do intento, 2s antes del 3er intento
 - Limpia la sesión en cada reintento
 - Registra advertencias en logs
 - Aplicado a **todas las rutas** que acceden a la base de datos
@@ -135,10 +135,11 @@ Si ves estos mensajes frecuentemente:
   - pool_pre_ping agrega ~1ms por query (imperceptible)
   
 - **Caso con conexión perdida**: 
-  - Primer reintento: +1 segundo
-  - Segundo reintento: +2 segundos
-  - Tercer reintento: +3 segundos
-  - **Usuario ve resultado correcto** en lugar de un error
+  - Intento 1 falla → espera 1s → Intento 2
+  - Intento 2 falla → espera 2s → Intento 3
+  - Intento 3 falla → error (después de 3 intentos totales)
+  - Tiempo máximo total de espera: ~3 segundos
+  - **Usuario ve resultado correcto** en lugar de un error (en la mayoría de casos)
 
 ## Testing
 
