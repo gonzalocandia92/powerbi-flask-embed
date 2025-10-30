@@ -3,7 +3,7 @@ services:
     build: .
     container_name: flask_powerbi_embed
     ports:
-      - "5000:5000"
+      - "2052:2052"
     env_file:
       - .env
     volumes:

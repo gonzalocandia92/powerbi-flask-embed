@@ -180,7 +180,7 @@
                                                 <div class="input-group input-group-sm" style="min-width: 280px;">
                                                     <input type="text" 
                                                         id="link-{{ link.id }}" 
-                                                        value="{{ request.url_root.rstrip('/') }}/p/{{ link.custom_slug }}" 
+                                                        value="https://{{ request.host }}/p/{{ link.custom_slug }}" 
                                                         readonly 
                                                         class="form-control border-end-0">
                                                     <button class="btn btn-outline-primary border-start-0" 

@@ -543,7 +543,8 @@ def configs_new_link(config_id):
         db.session.commit()
         
         # Generar URL completa para mostrar al usuario
-        base_url = request.url_root.rstrip('/')
+        #base_url = request.url_root.rstrip('/') --> Esto servía en desarrollo sin SSL de cloudflare
+        base_url = f"https://{request.host}"
         public_url = f"{base_url}/p/{custom_slug}"
         
         flash(f"Link público creado: {public_url}", "success")
@@ -616,7 +617,7 @@ def get_embed_for_config(cfg: ReportConfig):
     if not user_pbi or not pass_pbi:
         raise RuntimeError("Usuario o contraseña de Power BI no disponibles.")
 
-    logging.info(f"Obteniendo token para tenant: {tenant_id}, client: {client_id}, user: {user_pbi}")
+    logging.debug(f"Obteniendo token para tenant: {tenant_id}, client: {client_id}, user: {user_pbi}")
 
     # 1. Obtener token de Azure AD
     token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
@@ -632,7 +633,7 @@ def get_embed_for_config(cfg: ReportConfig):
     r = requests.post(token_url, data=data)
     r.raise_for_status()
     access_token = r.json().get("access_token")
-    logging.info("Access token recibido correctamente")
+    logging.debug("Access token recibido correctamente")
 
     # 2. Obtener información del reporte desde Power BI REST API
     report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report_id}"
@@ -640,7 +641,7 @@ def get_embed_for_config(cfg: ReportConfig):
     resp = requests.get(report_url, headers=headers)
     resp.raise_for_status()
     report_info = resp.json()
-    logging.info(f"Embed URL obtenido: {report_info.get('embedUrl')}")
+    logging.debug(f"Embed URL obtenido: {report_info.get('embedUrl')}")
 
     # 3. Retornar el token de acceso (como embed token) y la embed URL
     embed_token = access_token
@@ -667,4 +668,4 @@ if __name__ == '__main__':
     # Crear tablas si no existen (para dev). En prod usar migraciones.
     with app.app_context():
         db.create_all()
-    app.run(host='0.0.0.0', port=2052, debug=True)
+    app.run(host='0.0.0.0', port=2052, debug=False)
