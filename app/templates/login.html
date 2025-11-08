@@ -1,0 +1,173 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Login - Power BI Embed</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+  <style>
+    body {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    }
+    
+    .login-container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      overflow: hidden;
+      max-width: 450px;
+      width: 100%;
+    }
+    
+    .login-header {
+      background: linear-gradient(135deg, #2c3e50, #3498db);
+      color: white;
+      padding: 40px 30px 30px;
+      text-align: center;
+    }
+    
+    .login-header h1 {
+      font-size: 1.8rem;
+      font-weight: 600;
+      margin: 0;
+    }
+    
+    .login-header p {
+      margin: 10px 0 0;
+      opacity: 0.9;
+      font-size: 0.95rem;
+    }
+    
+    .login-body {
+      padding: 40px 30px;
+    }
+    
+    .form-control {
+      border: 2px solid #e9ecef;
+      padding: 12px 16px;
+      border-radius: 8px;
+      transition: all 0.3s ease;
+    }
+    
+    .form-control:focus {
+      border-color: #3498db;
+      box-shadow: 0 0 0 0.2rem rgba(52, 152, 219, 0.15);
+    }
+    
+    .form-label {
+      font-weight: 600;
+      color: #2c3e50;
+      margin-bottom: 8px;
+    }
+    
+    .btn-login {
+      background: linear-gradient(135deg, #3498db, #2980b9);
+      border: none;
+      padding: 14px;
+      border-radius: 8px;
+      font-weight: 600;
+      color: white;
+      width: 100%;
+      transition: all 0.3s ease;
+    }
+    
+    .btn-login:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(52, 152, 219, 0.4);
+    }
+    
+    .icon-container {
+      background: rgba(255,255,255,0.2);
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 20px;
+    }
+    
+    .icon-container i {
+      font-size: 2.5rem;
+    }
+    
+    .form-check-input:checked {
+      background-color: #3498db;
+      border-color: #3498db;
+    }
+    
+    .alert {
+      border-radius: 8px;
+      border: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-container">
+    <div class="login-header">
+      <div class="icon-container">
+        <i class="bi bi-graph-up"></i>
+      </div>
+      <h1>Power BI Embed</h1>
+      <p>Accede para gestionar tus reportes</p>
+    </div>
+    
+    <div class="login-body">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          {% for category, message in messages %}
+            <div class="alert alert-{{ category }} mb-4" role="alert">
+              <i class="bi bi-exclamation-triangle-fill me-2"></i>
+              {{ message }}
+            </div>
+          {% endfor %}
+        {% endif %}
+      {% endwith %}
+      
+      <form method="post">
+        {{ form.hidden_tag() }}
+        
+        <div class="mb-3">
+          {{ form.username.label(class="form-label") }}
+          <div class="input-group">
+            <span class="input-group-text bg-light border-2 border-end-0" style="border-color: #e9ecef;">
+              <i class="bi bi-person"></i>
+            </span>
+            {{ form.username(class="form-control border-start-0", placeholder="Ingresa tu usuario") }}
+          </div>
+        </div>
+        
+        <div class="mb-3">
+          {{ form.password.label(class="form-label") }}
+          <div class="input-group">
+            <span class="input-group-text bg-light border-2 border-end-0" style="border-color: #e9ecef;">
+              <i class="bi bi-lock"></i>
+            </span>
+            {{ form.password(class="form-control border-start-0", placeholder="Ingresa tu contraseña") }}
+          </div>
+        </div>
+        
+        <div class="mb-4">
+          <div class="form-check">
+            {{ form.remember(class="form-check-input") }}
+            {{ form.remember.label(class="form-check-label") }}
+          </div>
+        </div>
+        
+        <button type="submit" class="btn btn-login">
+          <i class="bi bi-box-arrow-in-right me-2"></i>
+          Iniciar Sesión
+        </button>
+      </form>
+    </div>
+  </div>
+  
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>
