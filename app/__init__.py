@@ -37,16 +37,22 @@ def create_app():
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
     
-    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
-        'pool_size': 10,
-        'pool_recycle': 3600,
-        'pool_pre_ping': True,
-        'max_overflow': 20,
-        'pool_timeout': 30,
-        'connect_args': {
-            'connect_timeout': 10
+    db_uri = app.config['SQLALCHEMY_DATABASE_URI']
+    if db_uri and 'sqlite' not in db_uri.lower():
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+            'pool_size': 10,
+            'pool_recycle': 3600,
+            'pool_pre_ping': True,
+            'max_overflow': 20,
+            'pool_timeout': 30,
+            'connect_args': {
+                'connect_timeout': 10
+            }
         }
-    }
+    else:
+        app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+            'pool_pre_ping': True
+        }
     
     db.init_app(app)
     migrate.init_app(app, db)
