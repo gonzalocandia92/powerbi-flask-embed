@@ -1,0 +1,444 @@
+{% extends "layout.html" %}
+
+{% block title %}Analytics Dashboard - PowerBI Embed{% endblock %}
+
+{% block styles %}
+<style>
+  .analytics-card {
+    border-radius: 12px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s;
+    border: none;
+  }
+  
+  .analytics-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  
+  .stat-number {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #2c3e50;
+  }
+  
+  .stat-label {
+    font-size: 0.9rem;
+    color: #7f8c8d;
+    text-transform: uppercase;
+    font-weight: 600;
+    letter-spacing: 1px;
+  }
+  
+  .chart-container {
+    position: relative;
+    height: 300px;
+  }
+  
+  .table-container {
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  
+  .filter-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    border: none;
+  }
+  
+  .filter-card .form-label {
+    color: white;
+    font-weight: 600;
+  }
+  
+  .filter-card .form-control,
+  .filter-card .form-select {
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.3);
+    color: white;
+  }
+  
+  .filter-card .form-control::placeholder {
+    color: rgba(255,255,255,0.7);
+  }
+  
+  .filter-card .btn-light {
+    font-weight: 600;
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="row mb-4">
+    <div class="col">
+      <h1 class="display-5 fw-bold">
+        <i class="bi bi-graph-up text-primary"></i> Analytics Dashboard
+      </h1>
+      <p class="text-muted">Track visits and metrics for public links</p>
+    </div>
+  </div>
+
+  <!-- Filters -->
+  <div class="row mb-4">
+    <div class="col-12">
+      <div class="card analytics-card filter-card">
+        <div class="card-body">
+          <form method="get" action="{{ url_for('analytics.dashboard') }}">
+            <div class="row align-items-end">
+              <div class="col-md-4 mb-3 mb-md-0">
+                <label for="link_slug" class="form-label">
+                  <i class="bi bi-link-45deg me-1"></i>Link Slug
+                </label>
+                <input type="text" class="form-control" id="link_slug" name="link_slug" 
+                       value="{{ link_slug or '' }}" placeholder="Filter by link slug (optional)">
+              </div>
+              <div class="col-md-3 mb-3 mb-md-0">
+                <label for="days" class="form-label">
+                  <i class="bi bi-calendar-range me-1"></i>Time Range
+                </label>
+                <select class="form-select" id="days" name="days">
+                  <option value="7" {% if days == 7 %}selected{% endif %}>Last 7 days</option>
+                  <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
+                  <option value="60" {% if days == 60 %}selected{% endif %}>Last 60 days</option>
+                  <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
+                </select>
+              </div>
+              <div class="col-md-2">
+                <button type="submit" class="btn btn-light w-100">
+                  <i class="bi bi-search me-1"></i>Apply
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Overview Stats -->
+  <div class="row mb-4">
+    <div class="col-md-3 mb-3">
+      <div class="card analytics-card bg-primary text-white">
+        <div class="card-body">
+          <div class="stat-label text-white-50">Total Visits</div>
+          <div class="stat-number">{{ stats.total_visits }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3 mb-3">
+      <div class="card analytics-card bg-success text-white">
+        <div class="card-body">
+          <div class="stat-label text-white-50">Unique Visitors</div>
+          <div class="stat-number">{{ stats.unique_visitors }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3 mb-3">
+      <div class="card analytics-card bg-warning text-white">
+        <div class="card-body">
+          <div class="stat-label text-white-50">Bot Visits</div>
+          <div class="stat-number">{{ stats.bot_visits }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-3 mb-3">
+      <div class="card analytics-card bg-info text-white">
+        <div class="card-body">
+          <div class="stat-label text-white-50">Avg. per Day</div>
+          <div class="stat-number">{{ (stats.total_visits / days)|round(1) }}</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Row 1 -->
+  <div class="row mb-4">
+    <div class="col-lg-8 mb-3">
+      <div class="card analytics-card">
+        <div class="card-header bg-white">
+          <h5 class="card-title mb-0">
+            <i class="bi bi-graph-up me-2"></i>Daily Trend
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="dailyChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4 mb-3">
+      <div class="card analytics-card">
+        <div class="card-header bg-white">
+          <h5 class="card-title mb-0">
+            <i class="bi bi-clock me-2"></i>Hourly Distribution
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="chart-container">
+            <canvas id="hourlyChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Charts Row 2 -->
+  <div class="row mb-4">
+    <div class="col-lg-6 mb-3">
+      <div class="card analytics-card">
+        <div class="card-header bg-white">
+          <h5 class="card-title mb-0">
+            <i class="bi bi-phone me-2"></i>Device Types
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="chart-container" style="height: 250px;">
+            <canvas id="deviceChart"></canvas>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+      <div class="card analytics-card">
+        <div class="card-header bg-white">
+          <h5 class="card-title mb-0">
+            <i class="bi bi-browser-chrome me-2"></i>Top Browsers
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="table-container">
+            <table class="table table-sm table-hover">
+              <thead>
+                <tr>
+                  <th>Browser</th>
+                  <th class="text-end">Visits</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for browser in browsers[:10] %}
+                <tr>
+                  <td>{{ browser.name }}</td>
+                  <td class="text-end"><span class="badge bg-primary">{{ browser.visits }}</span></td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td colspan="2" class="text-center text-muted">No data available</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Data Tables Row -->
+  <div class="row mb-4">
+    <div class="col-lg-6 mb-3">
+      <div class="card analytics-card">
+        <div class="card-header bg-white">
+          <h5 class="card-title mb-0">
+            <i class="bi bi-link-45deg me-2"></i>Top Referrers
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="table-container">
+            <table class="table table-sm table-hover">
+              <thead>
+                <tr>
+                  <th>Referrer</th>
+                  <th class="text-end">Visits</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for ref in referrers %}
+                <tr>
+                  <td class="text-truncate" style="max-width: 300px;" title="{{ ref.referrer }}">
+                    {{ ref.referrer }}
+                  </td>
+                  <td class="text-end"><span class="badge bg-primary">{{ ref.visits }}</span></td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td colspan="2" class="text-center text-muted">No referrer data available</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-6 mb-3">
+      <div class="card analytics-card">
+        <div class="card-header bg-white">
+          <h5 class="card-title mb-0">
+            <i class="bi bi-tag me-2"></i>UTM Campaigns
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="table-container">
+            <h6 class="text-muted mb-2">Sources</h6>
+            <table class="table table-sm table-hover mb-3">
+              <tbody>
+                {% for source in utm_stats.sources %}
+                <tr>
+                  <td>{{ source.name }}</td>
+                  <td class="text-end"><span class="badge bg-info">{{ source.visits }}</span></td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td class="text-center text-muted">No UTM source data</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+            
+            <h6 class="text-muted mb-2">Campaigns</h6>
+            <table class="table table-sm table-hover">
+              <tbody>
+                {% for campaign in utm_stats.campaigns %}
+                <tr>
+                  <td>{{ campaign.name }}</td>
+                  <td class="text-end"><span class="badge bg-success">{{ campaign.visits }}</span></td>
+                </tr>
+                {% else %}
+                <tr>
+                  <td class="text-center text-muted">No UTM campaign data</td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+  // Daily Trend Chart
+  const dailyData = {{ daily | tojson }};
+  const dailyLabels = dailyData.map(d => d.date);
+  const dailyValues = dailyData.map(d => d.visits);
+  
+  const dailyCtx = document.getElementById('dailyChart').getContext('2d');
+  new Chart(dailyCtx, {
+    type: 'line',
+    data: {
+      labels: dailyLabels,
+      datasets: [{
+        label: 'Visits',
+        data: dailyValues,
+        borderColor: 'rgb(52, 152, 219)',
+        backgroundColor: 'rgba(52, 152, 219, 0.1)',
+        tension: 0.4,
+        fill: true
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: false
+        }
+      },
+      scales: {
+        y: {
+          beginAtZero: true
+        }
+      }
+    }
+  });
+  
+  // Hourly Distribution Chart
+  const hourlyData = {{ hourly | tojson }};
+  const hourlyLabels = hourlyData.map(d => d.hour + ':00');
+  const hourlyValues = hourlyData.map(d => d.visits);
+  
+  const hourlyCtx = document.getElementById('hourlyChart').getContext('2d');
+  new Chart(hourlyCtx, {
+    type: 'bar',
+    data: {
+      labels: hourlyLabels,
+      datasets: [{
+        label: 'Visits',
+        data: hourlyValues,
+        backgroundColor: 'rgba(155, 89, 182, 0.8)',
+        borderColor: 'rgb(155, 89, 182)',
+        borderWidth: 1
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: false
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            maxRotation: 90,
+            minRotation: 45,
+            font: {
+              size: 9
+            }
+          }
+        },
+        y: {
+          beginAtZero: true
+        }
+      }
+    }
+  });
+  
+  // Device Chart
+  const devices = {{ devices | tojson }};
+  const deviceLabels = devices.map(d => d.name);
+  const deviceValues = devices.map(d => d.visits);
+  
+  const deviceCtx = document.getElementById('deviceChart').getContext('2d');
+  new Chart(deviceCtx, {
+    type: 'doughnut',
+    data: {
+      labels: deviceLabels,
+      datasets: [{
+        data: deviceValues,
+        backgroundColor: [
+          'rgba(52, 152, 219, 0.8)',
+          'rgba(46, 204, 113, 0.8)',
+          'rgba(241, 196, 15, 0.8)',
+          'rgba(231, 76, 60, 0.8)',
+          'rgba(155, 89, 182, 0.8)'
+        ],
+        borderColor: [
+          'rgb(52, 152, 219)',
+          'rgb(46, 204, 113)',
+          'rgb(241, 196, 15)',
+          'rgb(231, 76, 60)',
+          'rgb(155, 89, 182)'
+        ],
+        borderWidth: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          position: 'bottom'
+        }
+      }
+    }
+  });
+</script>
+{% endblock %}

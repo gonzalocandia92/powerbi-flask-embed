@@ -148,3 +148,26 @@ class PublicLink(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     report_config = db.relationship('ReportConfig')
+
+
+class Visit(db.Model):
+    """Analytics tracking for public link visits."""
+    
+    __tablename__ = 'visits'
+    
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    link_slug = db.Column(db.String(120), nullable=False, index=True)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow, nullable=False, index=True)
+    visitor_id = db.Column(db.String(36), nullable=True, index=True)  # UUID from cookie
+    ip_hash = db.Column(db.String(64), nullable=True)  # Hashed IP for privacy
+    user_agent = db.Column(db.String(500), nullable=True)
+    referrer = db.Column(db.String(1000), nullable=True)
+    utm_source = db.Column(db.String(100), nullable=True)
+    utm_medium = db.Column(db.String(100), nullable=True)
+    utm_campaign = db.Column(db.String(100), nullable=True)
+    device_type = db.Column(db.String(50), nullable=True)  # mobile, tablet, pc
+    browser = db.Column(db.String(100), nullable=True)
+    os = db.Column(db.String(100), nullable=True)
+    country = db.Column(db.String(2), nullable=True)  # ISO country code
+    is_bot = db.Column(db.Boolean, default=False, nullable=False)
+    session_duration = db.Column(db.Integer, nullable=True)  # seconds, for bounce rate calculation
