@@ -1,8 +1,25 @@
-TENANT_ID=tu_tenant_id_aqui
-CLIENT_ID=tu_client_id_aqui
-CLIENT_SECRET=tu_client_secret_aqui
-USER=tu_usuario_email_aqui
-PASS=tu_password_aqui
-WORKSPACE_ID=tu_workspace_id_aqui
-REPORT_ID=tu_report_id_aqui
+# Flask Configuration
+SECRET_KEY=your-secret-key-here
+FERNET_KEY=your-fernet-key-here
+
+# Database
+SQLALCHEMY_DATABASE_URI=postgresql://user:password@host:port/database
+
+# Azure AD Configuration
+TENANT_ID=your-tenant-id
+CLIENT_ID=your-client-id
+CLIENT_SECRET=your-client-secret
+
+# Power BI User Credentials
+USER=powerbi-user@domain.com
+PASS=powerbi-password
+
+# Power BI Configuration
+WORKSPACE_ID=your-workspace-id
+REPORT_ID=your-report-id
+
+# Analytics Configuration (optional)
+ANALYTICS_ENABLED=true
+ANALYTICS_SALT=change-this-to-random-salt-in-production
+ANALYTICS_RESPECT_DNT=true
 

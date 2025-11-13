@@ -7,6 +7,7 @@ A professional Flask application for embedding Microsoft Power BI reports using 
 - **Secure Authentication**: Uses Azure AD ROPC (Resource Owner Password Credentials) flow
 - **Report Management**: Centralized management of Power BI reports and configurations
 - **Public Links**: Generate shareable public links for reports without authentication
+- **Analytics & Metrics**: Comprehensive visit tracking with privacy-first approach
 - **Modular Architecture**: Clean, maintainable code structure with separation of concerns
 - **Database Connection Resilience**: Automatic retry mechanism for database connection failures
 - **Responsive UI**: Professional, mobile-friendly interface built with Bootstrap 5
@@ -24,6 +25,7 @@ app/
 ├── routes/              # Blueprint routes
 │   ├── auth.py          # Authentication routes
 │   ├── main.py          # Dashboard routes
+│   ├── analytics.py     # Analytics and metrics
 │   ├── tenants.py       # Tenant management
 │   ├── clients.py       # Client management
 │   ├── workspaces.py    # Workspace management
@@ -33,14 +35,16 @@ app/
 │   └── public.py        # Public report viewing
 ├── utils/               # Utility functions
 │   ├── decorators.py    # Database retry decorator
-│   └── powerbi.py       # Power BI API integration
+│   ├── powerbi.py       # Power BI API integration
+│   └── analytics.py     # Analytics tracking service
 └── templates/           # Jinja2 templates
 ```
 
 ## Requirements
 
 - Python 3.11+
-- PostgreSQL database
+- PostgreSQL database (recommended for production)
+  - SQLite is supported for development but has limitations with autoincrement on BigInteger fields
 - Docker (optional, for containerized deployment)
 - Azure AD application with configured permissions:
   - `Report.Read.All`
@@ -196,6 +200,88 @@ The application will be available at `http://localhost:2052`
 - **Private**: Requires login, click "Ver Reporte" on any configuration
 - **Public**: Access via generated public link, no authentication required
 
+### Analytics and Metrics
+
+The application includes comprehensive analytics for tracking visits to public links.
+
+#### Accessing Analytics
+
+1. Log in to the application
+2. Click **Analytics** in the navigation bar
+3. View metrics for all public links or filter by specific link slug
+4. Select time range (7, 30, 60, or 90 days)
+
+#### Metrics Tracked
+
+The analytics dashboard provides the following insights:
+
+1. **Total Visits**: Count of all human visits (bots excluded)
+2. **Unique Visitors**: Number of distinct visitors based on cookie ID
+3. **Bot Visits**: Automated traffic detected and filtered out
+4. **Hourly Distribution**: 24-hour breakdown of visit patterns
+5. **Daily Trend**: Visit trends over the selected time period
+6. **Top Referrers**: Sources directing traffic to your reports
+7. **UTM Parameters**: Track campaign sources, mediums, and campaigns
+8. **Device Types**: Mobile, tablet, and desktop breakdowns
+9. **Browser Statistics**: Most popular browsers accessing your reports
+10. **Operating Systems**: OS distribution of visitors
+
+#### Privacy and Compliance
+
+Analytics are designed with privacy in mind:
+
+- **IP Anonymization**: IP addresses are hashed with a salt before storage
+- **Do Not Track**: Respects DNT header when present
+- **No PII**: No personally identifiable information is collected
+- **Cookie-based**: Uses anonymous UUID for visitor identification
+- **Bot Detection**: Filters out 30+ bot patterns automatically
+
+#### API Access
+
+For programmatic access to analytics data:
+
+```bash
+GET /analytics/api/stats?link_slug=my-report&days=30
+```
+
+Response includes all metrics in JSON format. Requires authentication.
+
+#### Configuration
+
+Analytics can be configured via environment variables:
+
+```env
+# Enable/disable analytics tracking
+ANALYTICS_ENABLED=true
+
+# Salt for IP address hashing (change in production!)
+ANALYTICS_SALT=your-random-salt-here
+
+# Respect Do Not Track header
+ANALYTICS_RESPECT_DNT=true
+```
+
+#### Testing with Sample Data
+
+To test the analytics dashboard with sample data:
+
+```bash
+# Generate sample data for a demo link
+python seed_analytics.py demo-report 30 50
+
+# Parameters:
+# 1. Link slug (default: demo-report)
+# 2. Number of days (default: 30)
+# 3. Visits per day (default: 50)
+```
+
+This will create realistic sample visits including:
+- Varied visit patterns across different hours
+- Multiple unique visitors with return visits
+- Referrer data and UTM parameters
+- Device and browser variety
+- Bot visits (automatically filtered in analytics)
+
 ## Database Schema
 
 The application uses the following main models:
@@ -208,6 +294,7 @@ The application uses the following main models:
 - **UsuarioPBI**: Power BI service account credentials
 - **ReportConfig**: Complete configuration linking all components
 - **PublicLink**: Public access links for reports
+- **Visit**: Analytics data for public link visits
 
 ## Security Features
 
@@ -271,6 +358,12 @@ flask db downgrade
 - Verify Power BI service account has access to the workspace
 - Check report ID and workspace ID are correct
 - Review browser console for JavaScript errors
+
+**SQLite Autoincrement Issues**
+- SQLite has limitations with BigInteger autoincrement fields
+- If you encounter "NOT NULL constraint failed: *.id" errors, use PostgreSQL instead
+- For development only: You can use `db.create_all()` but migrations are preferred
+- **Recommendation**: Use PostgreSQL for production deployments
 
 ## Contributing
 
