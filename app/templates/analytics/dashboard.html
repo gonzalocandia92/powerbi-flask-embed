@@ -88,10 +88,21 @@
             <div class="row align-items-end">
               <div class="col-md-4 mb-3 mb-md-0">
                 <label for="link_slug" class="form-label">
-                  <i class="bi bi-link-45deg me-1"></i>Link Slug
+                  <i class="bi bi-link-45deg me-1"></i>Report / Link
                 </label>
                 <input type="text" class="form-control" id="link_slug" name="link_slug" 
-                       value="{{ link_slug or '' }}" placeholder="Filter by link slug (optional)">
+                       value="{{ link_slug or '' }}" 
+                       list="link_suggestions"
+                       placeholder="Type to search reports (optional)"
+                       autocomplete="off">
+                <datalist id="link_suggestions">
+                  {% for link in available_links %}
+                  <option value="{{ link.custom_slug }}">{{ link.report_config.name if link.report_config else link.custom_slug }}</option>
+                  {% endfor %}
+                </datalist>
+                <small class="text-white-50 d-block mt-1">
+                  <i class="bi bi-info-circle me-1"></i>Start typing to filter reports
+                </small>
               </div>
               <div class="col-md-3 mb-3 mb-md-0">
                 <label for="days" class="form-label">
@@ -438,6 +449,41 @@
           position: 'bottom'
         }
       }
+    }
+  });
+  
+  // Dynamic link search functionality
+  const linkSlugInput = document.getElementById('link_slug');
+  const linkSuggestions = document.getElementById('link_suggestions');
+  let searchTimeout;
+  
+  linkSlugInput.addEventListener('input', function() {
+    const query = this.value.trim();
+    
+    // Clear previous timeout
+    clearTimeout(searchTimeout);
+    
+    // Only search if query has at least 1 character
+    if (query.length > 0) {
+      searchTimeout = setTimeout(() => {
+        fetch(`/analytics/api/search-links?q=${encodeURIComponent(query)}`)
+          .then(response => response.json())
+          .then(data => {
+            if (data.success) {
+              // Clear existing options
+              linkSuggestions.innerHTML = '';
+              
+              // Add new options
+              data.links.forEach(link => {
+                const option = document.createElement('option');
+                option.value = link.slug;
+                option.textContent = `${link.report_name} (${link.slug})`;
+                linkSuggestions.appendChild(option);
+              });
+            }
+          })
+          .catch(err => console.error('Error fetching links:', err));
+      }, 300); // Debounce for 300ms
     }
   });
 </script>

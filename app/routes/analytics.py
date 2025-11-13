@@ -89,6 +89,62 @@ def api_stats():
         }), 500
 
 
+@bp.route('/api/search-links')
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def search_links():
+    """
+    Search for public links by slug or report name.
+    
+    Query parameters:
+        - q: Search query
+        
+    Returns:
+        JSON array of matching links (max 10)
+    """
+    from app.models import PublicLink, ReportConfig
+    from sqlalchemy import or_
+    
+    query = request.args.get('q', '').strip()
+    
+    try:
+        # Build query to search by custom_slug or report config name
+        links_query = PublicLink.query.filter(
+            PublicLink.is_active == True
+        ).join(PublicLink.report_config)
+        
+        if query:
+            # Search in custom_slug or related report config name
+            links_query = links_query.filter(
+                or_(
+                    PublicLink.custom_slug.ilike(f'%{query}%'),
+                    ReportConfig.name.ilike(f'%{query}%')
+                )
+            )
+        
+        # Limit to 10 results and order by custom_slug
+        links = links_query.order_by(PublicLink.custom_slug).limit(10).all()
+        
+        results = []
+        for link in links:
+            results.append({
+                'slug': link.custom_slug,
+                'report_name': link.report_config.name if link.report_config else 'Unknown'
+            })
+        
+        return jsonify({
+            'success': True,
+            'links': results
+        })
+        
+    except Exception as e:
+        logger.error(f"Error searching links: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'error': 'An error occurred while searching links'
+        }), 500
+
+
 @bp.route('/dashboard')
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
@@ -100,6 +156,8 @@ def dashboard():
         - link_slug: Optional filter by link slug
         - days: Number of days to look back (default 30)
     """
+    from app.models import PublicLink
+    
     link_slug = request.args.get('link_slug')
     days = request.args.get('days', '30')
     
@@ -110,6 +168,9 @@ def dashboard():
         days_int = 30
     
     start_date, end_date = parse_date_range(days)
+    
+    # Get available public links for the dropdown
+    available_links = PublicLink.query.filter_by(is_active=True).limit(10).all()
     
     # Get statistics
     stats = get_visit_stats(link_slug, start_date, end_date)
@@ -129,5 +190,6 @@ def dashboard():
         devices=device_browser['devices'],
         browsers=device_browser['browsers'],
         link_slug=link_slug,
-        days=days_int
+        days=days_int,
+        available_links=available_links
     )
