@@ -25,4 +25,9 @@ instance/
 # VSCode settings
 .vscode/
 .env*
-migrations
+
+# SQLite database files
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
