@@ -276,12 +276,12 @@ def get_visit_stats(
         }
         
     except Exception as e:
-        logger.error(f"Error getting visit stats: {e}")
+        logger.error(f"Error getting visit stats: {e}", exc_info=True)
         return {
             'total_visits': 0,
             'unique_visitors': 0,
             'bot_visits': 0,
-            'error': str(e)
+            'error': 'Failed to retrieve statistics'
         }
 
 

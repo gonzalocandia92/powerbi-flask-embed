@@ -82,10 +82,10 @@ def api_stats():
         })
         
     except Exception as e:
-        logger.error(f"Error in analytics API: {e}")
+        logger.error(f"Error in analytics API: {e}", exc_info=True)
         return jsonify({
             'success': False,
-            'error': str(e)
+            'error': 'An error occurred while fetching analytics data'
         }), 500
 
 
