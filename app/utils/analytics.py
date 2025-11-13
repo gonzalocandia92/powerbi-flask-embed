@@ -8,7 +8,14 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 import uuid
 
-from user_agents import parse
+try:
+    from user_agents import parse
+except ImportError as e:
+    raise ImportError(
+        "The 'user-agents' package is required for analytics functionality. "
+        "Please install it with: pip install -r requirements.txt"
+    ) from e
+
 from sqlalchemy import func, extract
 from sqlalchemy.exc import SQLAlchemyError
 
