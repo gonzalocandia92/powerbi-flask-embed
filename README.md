@@ -495,6 +495,12 @@ PRIVATE_JWT_SECRET=your-secret-key-for-jwt
 JWT_EXPIRATION=3600
 ```
 
+**Important Notes:**
+- The `PRIVATE_JWT_SECRET` must remain consistent across server restarts. If you change this value, all previously issued JWT tokens will become invalid.
+- In production, use a strong, randomly generated secret (e.g., output of `python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+- Keep this secret secure and never commit it to version control.
+- If tokens are being rejected with "Invalid token" errors, verify that `PRIVATE_JWT_SECRET` in your `.env` file matches the value used when the tokens were originally generated.
+
 ## Database Schema
 
 The application uses the following main models:
