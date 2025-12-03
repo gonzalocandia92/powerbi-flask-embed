@@ -32,7 +32,7 @@ def login():
             "expires_in": integer
         }
     """
-    data = request.get_json()
+    data = request.get_json(silent=True)
     
     if not data:
         return jsonify({'error': 'Request body must be JSON'}), 400
@@ -103,7 +103,7 @@ def report_config():
         return jsonify({'error': 'Invalid token'}), 401
     
     # Get request data
-    data = request.get_json()
+    data = request.get_json(silent=True)
     
     if not data:
         return jsonify({'error': 'Request body must be JSON'}), 400
