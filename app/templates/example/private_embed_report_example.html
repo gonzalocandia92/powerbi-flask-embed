@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <title>Power BI Embed - Ejemplo básico</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- SDK de Power BI -->
+  <script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
+  <style>
+    html, body {
+      height: 100%;
+    }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", "Apple Color Emoji", "Segoe UI Emoji";
+      background: #fff;
+      color: #212529;
+    }
+    header {
+      padding: 12px 16px;
+      border-bottom: 1px solid #e9ecef;
+      font-weight: 600;
+    }
+    #reportContainer {
+      width: 100%;
+      height: calc(100vh - 50px);
+      position: relative;
+      background: #f8f9fa;
+    }
+    .loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-direction: column;
+      gap: 10px;
+      color: #6c757d;
+    }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 4px solid #e9ecef;
+      border-top-color: #0d6efd;
+      border-radius: 50%;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    #errorDisplay {
+      display: none;
+      margin: 12px 16px;
+      padding: 12px;
+      border: 1px solid #f5c6cb;
+      border-radius: 6px;
+      background: #f8d7da;
+      color: #721c24;
+      font-size: 14px;
+    }
+    footer {
+      padding: 8px 16px;
+      font-size: 12px;
+      color: #6c757d;
+      border-top: 1px solid #e9ecef;
+    }
+    .controls {
+      padding: 8px 16px;
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      border-bottom: 1px solid #e9ecef;
+      background: #fff;
+    }
+    .controls label {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      color: #495057;
+      user-select: none;
+    }
+    .switch {
+      position: relative;
+      width: 42px;
+      height: 22px;
+      background: #dee2e6;
+      border-radius: 11px;
+      cursor: pointer;
+    }
+    .switch::after {
+      content: "";
+      position: absolute;
+      top: 2px;
+      left: 2px;
+      width: 18px;
+      height: 18px;
+      background: #fff;
+      border-radius: 50%;
+      transition: left .15s ease, background .15s ease;
+      box-shadow: 0 1px 2px rgba(0,0,0,.1);
+    }
+    input[type="checkbox"] {
+      display: none;
+    }
+    input[type="checkbox"]:checked + .switch {
+      background: #0d6efd33;
+      outline: 1px solid #0d6efd55;
+    }
+    input[type="checkbox"]:checked + .switch::after {
+      left: 22px;
+      background: #0d6efd;
+    }
+  </style>
+</head>
+<body>
+  <header>Ejemplo básico de incrustación de Power BI</header>
+
+  <div class="controls">
+    <label title="Mostrar/ocultar panel de filtros">
+      Filtros
+      <input id="toggleFilters" type="checkbox" />
+      <span class="switch" aria-hidden="true"></span>
+    </label>
+    <label title="Mostrar/ocultar navegación de páginas">
+      Navegación
+      <input id="toggleNavigation" type="checkbox" checked />
+      <span class="switch" aria-hidden="true"></span>
+    </label>
+    <label title="Mostrar/ocultar barra de estado">
+      Barra de estado
+      <input id="toggleStatusBar" type="checkbox" checked />
+      <span class="switch" aria-hidden="true"></span>
+    </label>
+  </div>
+
+  <div id="reportContainer">
+    <div class="loading">
+      <div class="spinner" aria-hidden="true"></div>
+      <div>Cargando reporte...</div>
+    </div>
+  </div>
+
+  <div id="errorDisplay" role="alert"></div>
+
+  <footer>
+    Reemplace los valores del objeto "embedConfig" con sus datos reales de Power BI (accessToken, embedUrl, reportId, workspaceId).
+  </footer>
+
+  <script>
+    // 1) Pegue aquí los valores reales. Estos son solo de ejemplo.
+    const embedConfig = {
+      accessToken: "accessToken",
+      embedUrl: "embedUrl",
+      reportId: "reportId",
+      workspaceId: "workspaceId"
+      // datasetId no es obligatorio para visualizar un reporte ya existente
+      // datasetId: "asdasdasd-0472-4cda-b39a-asdasdasd",
+    };
+
+    // 2) Configuración mínima para incrustar el reporte
+    const models = window['powerbi-client']?.models || window.powerbi?.models;
+
+    const config = {
+      type: 'report',
+      tokenType: models?.TokenType?.Aad ?? 0, // Usa AAD por defecto
+      accessToken: embedConfig.accessToken,
+      embedUrl: embedConfig.embedUrl,
+      id: embedConfig.reportId,
+      settings: {
+        panes: {
+          filters: { visible: false },
+          pageNavigation: { visible: true }
+        },
+        bars: {
+          statusBar: { visible: true }
+        },
+        // hideErrors: false // puede dejarse en false para depuración
+      }
+    };
+
+    const container = document.getElementById("reportContainer");
+    const errorDisplay = document.getElementById("errorDisplay");
+    const loading = container.querySelector(".loading");
+
+    function showError(message) {
+      if (loading) loading.style.display = "none";
+      errorDisplay.textContent = "Error al renderizar Power BI: " + message;
+      errorDisplay.style.display = "block";
+    }
+
+    // 3) Incrustar el reporte
+    try {
+      const report = powerbi.embed(container, config);
+
+      report.on("loaded", function () {
+        if (loading) loading.style.display = "none";
+        console.log("Reporte cargado correctamente");
+      });
+
+      report.on("rendered", function () {
+        console.log("Reporte renderizado");
+      });
+
+      report.on("error", function (event) {
+        const errorMsg = event.detail?.message || JSON.stringify(event.detail);
+        showError(errorMsg);
+      });
+
+      // Controles de UI para alternar visibilidad de filtros, navegación y barra de estado
+      const toggleFilters = document.getElementById("toggleFilters");
+      const toggleNavigation = document.getElementById("toggleNavigation");
+      const toggleStatusBar = document.getElementById("toggleStatusBar");
+
+      toggleFilters.addEventListener("change", async () => {
+        try {
+          await report.updateSettings({
+            panes: { filters: { visible: toggleFilters.checked } }
+          });
+        } catch (e) {
+          showError(e.message || String(e));
+        }
+      });
+
+      toggleNavigation.addEventListener("change", async () => {
+        try {
+          await report.updateSettings({
+            panes: { pageNavigation: { visible: toggleNavigation.checked } }
+          });
+        } catch (e) {
+          showError(e.message || String(e));
+        }
+      });
+
+      toggleStatusBar.addEventListener("change", async () => {
+        try {
+          await report.updateSettings({
+            bars: { statusBar: { visible: toggleStatusBar.checked } }
+          });
+        } catch (e) {
+          showError(e.message || String(e));
+        }
+      });
+
+    } catch (e) {
+      showError(e.message || String(e));
+    }
+  </script>
+</body>
+</html>
