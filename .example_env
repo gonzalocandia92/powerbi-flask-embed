@@ -5,6 +5,10 @@ FERNET_KEY=your-fernet-key-here
 # Database
 SQLALCHEMY_DATABASE_URI=postgresql://user:password@host:port/database
 
+# Private Client API - JWT Configuration
+PRIVATE_JWT_SECRET=your-jwt-secret-key-for-private-clients
+JWT_EXPIRATION=3600
+
 # Azure AD Configuration
 TENANT_ID=your-tenant-id
 CLIENT_ID=your-client-id

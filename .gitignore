@@ -30,4 +30,4 @@ instance/
 *.db
 *.db-journal
 *.sqlite
-*.sqlite3
+*.sqlite3=2.7.0

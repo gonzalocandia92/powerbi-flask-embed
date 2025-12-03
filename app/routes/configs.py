@@ -7,7 +7,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required
 
 from app import db
-from app.models import ReportConfig, Tenant, Client, Workspace, Report, UsuarioPBI, PublicLink
+from app.models import ReportConfig, Tenant, Client, Workspace, Report, UsuarioPBI, PublicLink, ClientePrivado
 from app.forms import ReportConfigForm, PublicLinkForm
 from app.utils.decorators import retry_on_db_error
 from app.utils.powerbi import get_embed_for_config
@@ -52,15 +52,31 @@ def new():
     form.workspace.choices = [(w.id, w.name) for w in Workspace.query.order_by(Workspace.name).all()]
     form.report.choices = [(r.id, r.name) for r in Report.query.order_by(Report.name).all()]
     form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]
+    form.cliente_privado.choices = [(0, '-- Ninguno --')] + [(cp.id, cp.nombre) for cp in ClientePrivado.query.filter_by(estado_activo=True).order_by(ClientePrivado.nombre).all()]
     
     if form.validate_on_submit():
+        tipo_privacidad = form.tipo_privacidad.data
+        cliente_privado_id = form.cliente_privado.data if form.cliente_privado.data != 0 else None
+        
+        # Validation: if private, cliente_privado_id is required
+        if tipo_privacidad == 'privado' and not cliente_privado_id:
+            flash("Para configuraciones privadas debe seleccionar un Cliente Privado", "danger")
+            return render_template(
+                'base_form.html',
+                form=form,
+                title='Nueva Configuración',
+                back_url=url_for('configs.list')
+            )
+        
         config = ReportConfig(
             name=form.name.data,
             tenant_id=form.tenant.data,
             client_id=form.client.data,
             workspace_id=form.workspace.data,
             report_id_fk=form.report.data,
-            usuario_pbi_id=form.usuario_pbi.data
+            usuario_pbi_id=form.usuario_pbi.data,
+            tipo_privacidad=tipo_privacidad,
+            cliente_privado_id=cliente_privado_id
         )
         db.session.add(config)
         db.session.commit()

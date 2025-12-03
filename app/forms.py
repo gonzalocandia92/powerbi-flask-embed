@@ -67,6 +67,8 @@ class ReportConfigForm(FlaskForm):
     workspace = SelectField("Workspace", coerce=int, validators=[DataRequired()])
     report = SelectField("Report", coerce=int, validators=[DataRequired()])
     usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])
+    tipo_privacidad = SelectField("Tipo de Privacidad", choices=[('publico', 'Público'), ('privado', 'Privado')], validators=[DataRequired()])
+    cliente_privado = SelectField("Cliente Privado", coerce=int, validators=[])
     submit = SubmitField("Guardar")
 
 
@@ -78,3 +80,10 @@ class PublicLinkForm(FlaskForm):
         validators=[DataRequired(), Length(max=120)]
     )
     submit = SubmitField("Crear Link")
+
+
+class ClientePrivadoForm(FlaskForm):
+    """Form for creating/editing private clients."""
+    
+    nombre = StringField("Nombre del Cliente", validators=[DataRequired(), Length(max=200)])
+    submit = SubmitField("Guardar")

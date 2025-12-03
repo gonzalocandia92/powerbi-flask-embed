@@ -7,6 +7,7 @@ A professional Flask application for embedding Microsoft Power BI reports using 
 - **Secure Authentication**: Uses Azure AD ROPC (Resource Owner Password Credentials) flow
 - **Report Management**: Centralized management of Power BI reports and configurations
 - **Public Links**: Generate shareable public links for reports without authentication
+- **Private Client API**: Secure API access with client credentials and JWT authentication
 - **Analytics & Metrics**: Comprehensive visit tracking with privacy-first approach
 - **Modular Architecture**: Clean, maintainable code structure with separation of concerns
 - **Database Connection Resilience**: Automatic retry mechanism for database connection failures
@@ -32,7 +33,12 @@ app/
 │   ├── reports.py       # Report management
 │   ├── usuarios_pbi.py  # Power BI user management
 │   ├── configs.py       # Configuration management
-│   └── public.py        # Public report viewing
+│   ├── public.py        # Public report viewing
+│   ├── private.py       # Private API endpoints
+│   └── admin_clientes_privados.py  # Private client CRUD
+├── services/            # Business logic services
+│   ├── jwt_service.py   # JWT token generation and validation
+│   └── credentials_service.py  # Client credentials management
 ├── utils/               # Utility functions
 │   ├── decorators.py    # Database retry decorator
 │   ├── powerbi.py       # Power BI API integration
@@ -110,6 +116,12 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 3. Install dependencies:
 ```bash
 pip install -r requirements.txt
+```
+
+**Note:** If you encounter an error like `AttributeError: module 'jwt' has no attribute 'encode'`, ensure you have the correct JWT package installed. The `requirements.txt` specifies `PyJWT>=2.7.0`. If you have an old `jwt` package installed, uninstall it first:
+```bash
+pip uninstall jwt
+pip install PyJWT>=2.7.0
 ```
 
 4. Configure environment variables (create `.env` file as shown above)
@@ -282,6 +294,213 @@ This will create realistic sample visits including:
 - Device and browser variety
 - Bot visits (automatically filtered in analytics)
 
+## Private Client API
+
+The application provides a secure API for programmatic access to private Power BI reports using client credentials and JWT authentication.
+
+### Overview
+
+Private clients allow you to:
+- Authenticate using client_id and client_secret
+- Access private Power BI report configurations via API
+- Embed reports programmatically in external applications
+- Maintain separate access control from public links
+
+### Managing Private Clients
+
+1. **Navigate to Admin Panel**:
+   - Log in to the application
+   - Go to **Configuration** → **Clientes Privados**
+
+2. **Create a Private Client**:
+   - Click "Nuevo Cliente Privado"
+   - Enter a descriptive name (e.g., "Mobile App", "Partner Portal")
+   - Click "Guardar"
+   - **IMPORTANT**: Save the generated credentials immediately - they won't be shown again
+
+3. **Manage Clients**:
+   - **Edit**: Update the client name
+   - **Activate/Deactivate**: Enable or disable client access
+   - **Regenerate Credentials**: Create new credentials (invalidates old ones)
+   - **Delete**: Remove client (only if no reports are associated)
+
+### Configuring Private Reports
+
+1. **Create or Edit a Report Configuration**:
+   - Navigate to **Configuration** → **Configuraciones**
+   - Select "Privado" as the **Tipo de Privacidad**
+   - Choose the **Cliente Privado** that should have access
+   - Complete other required fields
+
+2. **Validation**:
+   - Private configurations must be associated with an active private client
+   - Public configurations don't require a private client
+
+### API Usage
+
+#### 1. Authentication
+
+Obtain a JWT access token using your client credentials:
+
+```bash
+curl -X POST https://yourdomain.com/private/login \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_id": "your-client-id",
+    "client_secret": "your-client-secret"
+  }'
+```
+
+**Response (200 OK)**:
+```json
+{
+  "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+  "token_type": "Bearer",
+  "expires_in": 3600
+}
+```
+
+**Error Responses**:
+- `400`: Missing required fields
+- `401`: Invalid credentials
+- `403`: Client is inactive
+
+#### 2. Get Report Configuration
+
+Retrieve embed configuration for a private report:
+
+```bash
+curl -X POST https://yourdomain.com/private/report-config \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -d '{
+    "config_id": 1
+  }'
+```
+
+**Response (200 OK)**:
+```json
+{
+  "embedUrl": "https://app.powerbi.com/reportEmbed?reportId=...",
+  "reportId": "abcd-1234",
+  "accessToken": "AAD-token-for-powerbi",
+  "workspaceId": "wxyz-9876",
+  "datasetId": "data-5555"
+}
+```
+
+**Error Responses**:
+- `400`: Missing config_id
+- `401`: Invalid or expired token
+- `403`: Configuration is not private or doesn't belong to this client
+- `404`: Configuration not found
+
+### Integration Example
+
+**JavaScript Example**:
+```javascript
+// 1. Authenticate
+const authResponse = await fetch('https://yourdomain.com/private/login', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    client_id: 'your-client-id',
+    client_secret: 'your-client-secret'
+  })
+});
+const { access_token } = await authResponse.json();
+
+// 2. Get report configuration
+const configResponse = await fetch('https://yourdomain.com/private/report-config', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${access_token}`
+  },
+  body: JSON.stringify({ config_id: 1 })
+});
+const reportConfig = await configResponse.json();
+
+// 3. Embed the report using Power BI JavaScript SDK
+const embedContainer = document.getElementById('reportContainer');
+const report = powerbi.embed(embedContainer, {
+  type: 'report',
+  id: reportConfig.reportId,
+  embedUrl: reportConfig.embedUrl,
+  accessToken: reportConfig.accessToken,
+  tokenType: models.TokenType.Aad,
+  settings: {
+    panes: { filters: { visible: false } },
+    background: models.BackgroundType.Transparent
+  }
+});
+```
+
+**Python Example**:
+```python
+import requests
+
+# 1. Authenticate
+auth_response = requests.post(
+    'https://yourdomain.com/private/login',
+    json={
+        'client_id': 'your-client-id',
+        'client_secret': 'your-client-secret'
+    }
+)
+access_token = auth_response.json()['access_token']
+
+# 2. Get report configuration
+config_response = requests.post(
+    'https://yourdomain.com/private/report-config',
+    headers={'Authorization': f'Bearer {access_token}'},
+    json={'config_id': 1}
+)
+report_config = config_response.json()
+
+print(f"Embed URL: {report_config['embedUrl']}")
+print(f"Report ID: {report_config['reportId']}")
+```
+
+### Security Best Practices
+
+1. **Credential Storage**:
+   - Store client credentials securely (environment variables, secrets manager)
+   - Never commit credentials to source control
+   - Rotate credentials periodically
+
+2. **Token Management**:
+   - Tokens expire after 1 hour (configurable via `JWT_EXPIRATION` env variable)
+   - Implement token refresh logic in your application
+   - Store tokens securely in memory, not in localStorage
+
+3. **Access Control**:
+   - Deactivate unused clients immediately
+   - Assign separate clients for different applications/environments
+   - Monitor access logs for suspicious activity
+
+4. **HTTPS Only**:
+   - Always use HTTPS in production
+   - Never send credentials or tokens over unencrypted connections
+
+### Configuration
+
+Add these environment variables to `.env`:
+
+```env
+# JWT Secret for private client authentication
+PRIVATE_JWT_SECRET=your-secret-key-for-jwt
+
+# JWT Token expiration time in seconds (default: 3600 = 1 hour)
+JWT_EXPIRATION=3600
+```
+
+**Important Notes:**
+- The `PRIVATE_JWT_SECRET` must remain consistent across server restarts. If you change this value, all previously issued JWT tokens will become invalid.
+- In production, use a strong, randomly generated secret (e.g., output of `python -c "import secrets; print(secrets.token_urlsafe(32))"`).
+- Keep this secret secure and never commit it to version control.
+- If tokens are being rejected with "Invalid token" errors, verify that `PRIVATE_JWT_SECRET` in your `.env` file matches the value used when the tokens were originally generated.
+
 ## Database Schema
 
 The application uses the following main models:
@@ -292,9 +511,10 @@ The application uses the following main models:
 - **Workspace**: Power BI workspaces
 - **Report**: Power BI reports
 - **UsuarioPBI**: Power BI service account credentials
-- **ReportConfig**: Complete configuration linking all components
+- **ReportConfig**: Complete configuration linking all components (with privacy settings)
 - **PublicLink**: Public access links for reports
 - **Visit**: Analytics data for public link visits
+- **ClientePrivado**: Private client credentials for API access
 
 ## Security Features
 

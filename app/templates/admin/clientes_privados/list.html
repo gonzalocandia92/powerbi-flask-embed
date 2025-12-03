@@ -1,0 +1,91 @@
+{% extends "layout.html" %}
+
+{% block title %}Clientes Privados - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-shield-lock me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('admin_clientes_privados.new') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-1"></i> Nuevo Cliente Privado
+    </a>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      {% if clientes %}
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Nombre</th>
+              <th>Client ID</th>
+              <th>Estado</th>
+              <th>Creado</th>
+              <th>Actualizado</th>
+              <th class="text-end">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for cliente in clientes %}
+            <tr>
+              <td>{{ cliente.id }}</td>
+              <td><strong>{{ cliente.nombre }}</strong></td>
+              <td><code>{{ cliente.client_id }}</code></td>
+              <td>
+                {% if cliente.estado_activo %}
+                <span class="badge bg-success">Activo</span>
+                {% else %}
+                <span class="badge bg-secondary">Inactivo</span>
+                {% endif %}
+              </td>
+              <td>{{ cliente.created_at.strftime('%Y-%m-%d %H:%M') if cliente.created_at else 'N/A' }}</td>
+              <td>{{ cliente.updated_at.strftime('%Y-%m-%d %H:%M') if cliente.updated_at else 'N/A' }}</td>
+              <td class="text-end">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('admin_clientes_privados.edit', cliente_id=cliente.id) }}" 
+                     class="btn btn-sm btn-outline-primary" title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  
+                  <form method="POST" action="{{ url_for('admin_clientes_privados.toggle_status', cliente_id=cliente.id) }}" style="display:inline;">
+                    <button type="submit" class="btn btn-sm btn-outline-warning" 
+                            title="{% if cliente.estado_activo %}Desactivar{% else %}Activar{% endif %}">
+                      <i class="bi bi-{% if cliente.estado_activo %}pause-circle{% else %}play-circle{% endif %}"></i>
+                    </button>
+                  </form>
+                  
+                  <form method="POST" action="{{ url_for('admin_clientes_privados.regenerate_credentials', cliente_id=cliente.id) }}" style="display:inline;">
+                    <button type="submit" class="btn btn-sm btn-outline-info" 
+                            title="Regenerar Credenciales"
+                            onclick="return confirm('¿Está seguro de regenerar las credenciales? Las antiguas dejarán de funcionar.');">
+                      <i class="bi bi-arrow-clockwise"></i>
+                    </button>
+                  </form>
+                  
+                  <form method="POST" action="{{ url_for('admin_clientes_privados.delete', cliente_id=cliente.id) }}" style="display:inline;">
+                    <button type="submit" class="btn btn-sm btn-outline-danger" 
+                            title="Eliminar"
+                            onclick="return confirm('¿Está seguro de eliminar este cliente privado?');">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle me-2"></i>
+        No hay clientes privados registrados. 
+        <a href="{{ url_for('admin_clientes_privados.new') }}" class="alert-link">Crear el primero</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
