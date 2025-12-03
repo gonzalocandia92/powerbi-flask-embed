@@ -144,7 +144,7 @@ class ReportConfig(db.Model):
     usuario_pbi_id = db.Column(db.BigInteger, db.ForeignKey('usuarios_pbi.id'), nullable=False)
     
     # Privacy fields
-    tipo_privacidad = db.Column(db.String(20), default='publico', nullable=False)  # 'publico' or 'privado'
+    tipo_privacidad = db.Column(db.String(20), default='publico', nullable=True)  # 'publico' or 'privado'
     cliente_privado_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id'), nullable=True)
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)

@@ -11,3 +11,4 @@ flask_sqlalchemy
 flask-migrate
 user-agents>=2.2
 geoip2>=4.7
+jwt
