@@ -96,7 +96,8 @@ def report_config():
     
     try:
         payload = verify_token(token)
-        cliente_privado_id = payload.get('sub')
+        # Convert 'sub' from string to integer for database comparison
+        cliente_privado_id = int(payload.get('sub'))
     except pyjwt.ExpiredSignatureError:
         logging.warning(f"Expired token used in /private/report-config")
         return jsonify({'error': 'Token has expired'}), 401

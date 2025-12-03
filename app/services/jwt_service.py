@@ -25,7 +25,7 @@ def generate_token(cliente_privado_id, client_id):
     """
     now = datetime.utcnow()
     payload = {
-        'sub': cliente_privado_id,
+        'sub': str(cliente_privado_id),  # JWT 'sub' claim must be a string per RFC 7519
         'client_id': client_id,
         'iat': now,
         'exp': now + timedelta(seconds=JWT_EXPIRATION)
