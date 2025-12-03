@@ -112,6 +112,23 @@ class UsuarioPBI(db.Model):
             return None
 
 
+class ClientePrivado(db.Model):
+    """Private client configuration for API access."""
+    
+    __tablename__ = 'clientes_privados'
+    
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    nombre = db.Column(db.String(200), nullable=False, unique=True)
+    client_id = db.Column(db.String(200), nullable=False, unique=True)
+    client_secret_hash = db.Column(db.String(256), nullable=False)
+    estado_activo = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+    
+    # Relationship to report configs
+    report_configs = db.relationship('ReportConfig', back_populates='cliente_privado')
+
+
 class ReportConfig(db.Model):
     """Complete configuration for embedding a Power BI report."""
     
@@ -126,6 +143,10 @@ class ReportConfig(db.Model):
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=False)
     usuario_pbi_id = db.Column(db.BigInteger, db.ForeignKey('usuarios_pbi.id'), nullable=False)
     
+    # Privacy fields
+    tipo_privacidad = db.Column(db.String(20), default='publico', nullable=False)  # 'publico' or 'privado'
+    cliente_privado_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id'), nullable=True)
+    
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     tenant = db.relationship('Tenant')
@@ -133,6 +154,7 @@ class ReportConfig(db.Model):
     workspace = db.relationship('Workspace')
     report = db.relationship('Report')
     usuario_pbi = db.relationship('UsuarioPBI')
+    cliente_privado = db.relationship('ClientePrivado', back_populates='report_configs')
 
 
 class PublicLink(db.Model):
