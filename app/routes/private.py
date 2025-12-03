@@ -100,12 +100,15 @@ def report_config():
     except pyjwt.ExpiredSignatureError:
         logging.warning(f"Expired token used in /private/report-config")
         return jsonify({'error': 'Token has expired'}), 401
-    except pyjwt.InvalidSignatureError:
-        logging.warning(f"Invalid token signature in /private/report-config. Token may have been generated with a different PRIVATE_JWT_SECRET.")
-        return jsonify({'error': 'Invalid token'}), 401
+    except pyjwt.InvalidSignatureError as e:
+        logging.warning(f"Invalid token signature in /private/report-config: {str(e)}. Token may have been generated with a different PRIVATE_JWT_SECRET.")
+        return jsonify({'error': 'Invalid token signature. Ensure PRIVATE_JWT_SECRET is consistent.'}), 401
+    except pyjwt.DecodeError as e:
+        logging.warning(f"Token decode error in /private/report-config: {str(e)}")
+        return jsonify({'error': f'Token format error: {str(e)}'}), 401
     except pyjwt.InvalidTokenError as e:
         logging.warning(f"Invalid token in /private/report-config: {str(e)}")
-        return jsonify({'error': 'Invalid token'}), 401
+        return jsonify({'error': f'Invalid token: {str(e)}'}), 401
     
     # Get request data
     data = request.get_json(silent=True)

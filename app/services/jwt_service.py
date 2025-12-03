@@ -52,15 +52,13 @@ def verify_token(token):
         
     Raises:
         jwt.ExpiredSignatureError: If token is expired
-        jwt.InvalidTokenError: If token is invalid
+        jwt.InvalidSignatureError: If token signature is invalid
+        jwt.DecodeError: If token format is invalid
+        jwt.InvalidTokenError: If token is invalid for other reasons
     """
-    try:
-        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-        return payload
-    except jwt.ExpiredSignatureError:
-        raise jwt.ExpiredSignatureError('Token has expired')
-    except jwt.InvalidTokenError:
-        raise jwt.InvalidTokenError('Invalid token')
+    # Let exceptions propagate naturally - don't catch and re-raise
+    payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    return payload
 
 
 def extract_token_from_header(authorization_header):
