@@ -7,7 +7,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required
 
 from app import db
-from app.models import ReportConfig, Tenant, Client, Workspace, Report, UsuarioPBI, PublicLink
+from app.models import ReportConfig, Tenant, Client, Workspace, Report, UsuarioPBI, PublicLink, ClientePrivado
 from app.forms import ReportConfigForm, PublicLinkForm
 from app.utils.decorators import retry_on_db_error
 from app.utils.powerbi import get_embed_for_config
@@ -45,8 +45,6 @@ def list():
 @retry_on_db_error(max_retries=3, delay=1)
 def new():
     """Create a new report configuration."""
-    from app.models import ClientePrivado
-    
     form = ReportConfigForm()
     
     form.tenant.choices = [(t.id, t.name) for t in Tenant.query.order_by(Tenant.name).all()]
