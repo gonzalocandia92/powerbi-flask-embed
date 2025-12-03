@@ -118,6 +118,12 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
+**Note:** If you encounter an error like `AttributeError: module 'jwt' has no attribute 'encode'`, ensure you have the correct JWT package installed. The `requirements.txt` specifies `PyJWT>=2.7.0`. If you have an old `jwt` package installed, uninstall it first:
+```bash
+pip uninstall jwt
+pip install PyJWT>=2.7.0
+```
+
 4. Configure environment variables (create `.env` file as shown above)
 
 5. Initialize the database:
