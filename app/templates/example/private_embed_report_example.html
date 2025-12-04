@@ -148,14 +148,12 @@
   </footer>
 
   <script>
-    // 1) Pegue aquí los valores reales. Estos son solo de ejemplo.
+    // 1) Reemplazar con valores reales
     const embedConfig = {
-      accessToken: "accessToken",
+      accessToken: "token",
       embedUrl: "embedUrl",
       reportId: "reportId",
       workspaceId: "workspaceId"
-      // datasetId no es obligatorio para visualizar un reporte ya existente
-      // datasetId: "asdasdasd-0472-4cda-b39a-asdasdasd",
     };
 
     // 2) Configuración mínima para incrustar el reporte
@@ -163,7 +161,7 @@
 
     const config = {
       type: 'report',
-      tokenType: models?.TokenType?.Aad ?? 0, // Usa AAD por defecto
+      tokenType: models?.TokenType?.Aad ?? 0, 
       accessToken: embedConfig.accessToken,
       embedUrl: embedConfig.embedUrl,
       id: embedConfig.reportId,

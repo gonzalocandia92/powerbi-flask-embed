@@ -65,7 +65,7 @@ def login():
     return jsonify(token_data), 200
 
 
-@bp.route('/report-config', methods=['POST'])
+@bp.route('/report-config', methods=['GET'])
 def report_config():
     """
     Get report configuration for a private client.
@@ -144,11 +144,11 @@ def report_config():
             'embedUrl': embed_url,
             'reportId': report_id,
             'accessToken': embed_token,
-            'workspaceId': config.workspace.workspace_id,
+            'workspaceId': config.workspace.workspace_id
             # NOTE: Dataset ID is not currently tracked separately in the database.
             # Using workspace_id as a placeholder. To use a specific dataset ID,
             # add a dataset_id field to the Workspace or Report model.
-            'datasetId': config.workspace.workspace_id
+            #'datasetId': config.workspace.workspace_id
         }
         
         logging.info(f"Report config retrieved for private client ID {cliente_privado_id}: {config.name}")
