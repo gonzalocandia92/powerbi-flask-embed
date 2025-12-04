@@ -111,50 +111,35 @@ def report_config():
         logging.warning(f"Invalid token in /private/report-config: {str(e)}")
         return jsonify({'error': f'Invalid token: {str(e)}'}), 401
     
-    # Get request data
-    data = request.get_json(silent=True)
-    
-    if not data:
-        return jsonify({'error': 'Request body must be JSON'}), 400
-    
-    config_id = data.get('config_id')
-    
+    # Preferir query param; usar body JSON como respaldo
+    config_id = request.args.get('config_id', type=int)
+    if config_id is None:
+        data = request.get_json(silent=True) or {}
+        config_id = data.get('config_id')
+
     if not config_id:
-        return jsonify({'error': 'config_id is required'}), 400
-    
-    # Find the report configuration
+        return jsonify({'error': 'config_id is required (query ?config_id= or body JSON)'}), 400
+
+    # Buscar configuración
     config = ReportConfig.query.get(config_id)
-    
     if not config:
         return jsonify({'error': 'Configuration not found'}), 404
-    
-    # Verify that the configuration is private
     if config.tipo_privacidad != 'privado':
         return jsonify({'error': 'Configuration is not private'}), 403
-    
-    # Verify that the configuration belongs to this client
     if config.cliente_privado_id != cliente_privado_id:
         return jsonify({'error': 'Configuration does not belong to this client'}), 403
-    
-    # Generate embed token and return configuration
+
+    # Generar token de embed y responder
     try:
         embed_token, embed_url, report_id = get_embed_for_config(config)
-        
         response_data = {
             'embedUrl': embed_url,
             'reportId': report_id,
             'accessToken': embed_token,
-            'workspaceId': config.workspace.workspace_id
-            # NOTE: Dataset ID is not currently tracked separately in the database.
-            # Using workspace_id as a placeholder. To use a specific dataset ID,
-            # add a dataset_id field to the Workspace or Report model.
-            #'datasetId': config.workspace.workspace_id
+            'workspaceId': config.workspace.workspace_id,
         }
-        
         logging.info(f"Report config retrieved for private client ID {cliente_privado_id}: {config.name}")
-        
         return jsonify(response_data), 200
-        
     except Exception as e:
         logging.error(f"Error generating embed token for config {config_id}: {e}")
         return jsonify({'error': 'Error generating report embed token'}), 500
