@@ -187,6 +187,61 @@ def view(config_id):
     )
 
 
+@bp.route('/<int:config_id>/detail')
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def detail(config_id):
+    """Display detailed information about a report configuration."""
+    config = ReportConfig.query.options(
+        db.joinedload(ReportConfig.tenant),
+        db.joinedload(ReportConfig.client),
+        db.joinedload(ReportConfig.workspace),
+        db.joinedload(ReportConfig.report),
+        db.joinedload(ReportConfig.usuario_pbi),
+        db.joinedload(ReportConfig.empresas)
+    ).get_or_404(config_id)
+    
+    # Get public links for this config
+    public_links = PublicLink.query.filter_by(
+        report_config_id=config_id,
+        is_active=True
+    ).all()
+    
+    return render_template(
+        'configs/detail.html',
+        config=config,
+        public_links=public_links,
+        title=f'Configuración: {config.name}'
+    )
+
+
+@bp.route('/<int:config_id>/delete', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def delete(config_id):
+    """Delete a report configuration."""
+    config = ReportConfig.query.get_or_404(config_id)
+    
+    # Check if config has active public links
+    active_links = PublicLink.query.filter_by(
+        report_config_id=config_id,
+        is_active=True
+    ).count()
+    
+    if active_links > 0:
+        flash("No se puede eliminar la configuración porque tiene links públicos activos. Desactívelos primero.", "danger")
+        return redirect(url_for('configs.detail', config_id=config_id))
+    
+    name = config.name
+    db.session.delete(config)
+    db.session.commit()
+    
+    logging.info(f"Config deleted: {name} (ID: {config_id})")
+    flash("Configuración eliminada exitosamente", "success")
+    
+    return redirect(url_for('configs.list'))
+
+
 @bp.route('/<int:config_id>/link/new', methods=['GET', 'POST'])
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)

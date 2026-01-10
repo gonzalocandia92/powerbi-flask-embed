@@ -31,3 +31,4 @@ instance/
 *.db-journal
 *.sqlite
 *.sqlite3=2.7.0
+.env

@@ -1,0 +1,253 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-gear-fill me-2"></i>{{ title }}</h2>
+    <div>
+      <a href="{{ url_for('configs.edit', config_id=config.id) }}" class="btn btn-primary">
+        <i class="bi bi-pencil me-1"></i> Editar
+      </a>
+      <a href="{{ url_for('configs.list') }}" class="btn btn-outline-secondary">
+        <i class="bi bi-arrow-left me-1"></i> Volver
+      </a>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- Main Information -->
+    <div class="col-md-8">
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0"><i class="bi bi-info-circle me-2"></i>Información General</h5>
+        </div>
+        <div class="card-body">
+          <dl class="row">
+            <dt class="col-sm-3">ID:</dt>
+            <dd class="col-sm-9">{{ config.id }}</dd>
+            
+            <dt class="col-sm-3">Nombre:</dt>
+            <dd class="col-sm-9"><strong>{{ config.name }}</strong></dd>
+            
+            <dt class="col-sm-3">Tenant:</dt>
+            <dd class="col-sm-9">{{ config.tenant.name }}</dd>
+            
+            <dt class="col-sm-3">Client:</dt>
+            <dd class="col-sm-9">{{ config.client.name }}</dd>
+            
+            <dt class="col-sm-3">Workspace:</dt>
+            <dd class="col-sm-9">{{ config.workspace.name }}</dd>
+            
+            <dt class="col-sm-3">Report:</dt>
+            <dd class="col-sm-9">{{ config.report.name }}</dd>
+            
+            <dt class="col-sm-3">Usuario PBI:</dt>
+            <dd class="col-sm-9">{{ config.usuario_pbi.nombre }}</dd>
+            
+            <dt class="col-sm-3">Creado:</dt>
+            <dd class="col-sm-9">{{ config.created_at.strftime('%Y-%m-%d %H:%M:%S') if config.created_at else 'N/A' }}</dd>
+          </dl>
+        </div>
+      </div>
+
+      <!-- Privacy Settings -->
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-shield-check me-2"></i>Configuración de Privacidad</h5>
+        </div>
+        <div class="card-body">
+          <div class="row">
+            <div class="col-md-6">
+              <h6>Público:</h6>
+              {% if config.es_publico %}
+              <span class="badge bg-success fs-6"><i class="bi bi-check-circle me-1"></i>Habilitado</span>
+              <p class="text-muted small mt-2">El reporte puede ser accedido mediante links públicos sin autenticación</p>
+              {% else %}
+              <span class="badge bg-secondary fs-6"><i class="bi bi-x-circle me-1"></i>Deshabilitado</span>
+              {% endif %}
+            </div>
+            <div class="col-md-6">
+              <h6>Privado:</h6>
+              {% if config.es_privado %}
+              <span class="badge bg-info fs-6"><i class="bi bi-check-circle me-1"></i>Habilitado</span>
+              <p class="text-muted small mt-2">El reporte puede ser accedido por empresas autenticadas vía API</p>
+              {% else %}
+              <span class="badge bg-secondary fs-6"><i class="bi bi-x-circle me-1"></i>Deshabilitado</span>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Associated Empresas -->
+      {% if config.es_privado %}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-building me-2"></i>Empresas Asociadas ({{ config.empresas|length }})</h5>
+        </div>
+        <div class="card-body">
+          {% if config.empresas %}
+          <div class="table-responsive">
+            <table class="table table-sm table-hover">
+              <thead class="table-light">
+                <tr>
+                  <th>Nombre</th>
+                  <th>CUIT</th>
+                  <th>Estado</th>
+                  <th class="text-end">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for empresa in config.empresas %}
+                <tr>
+                  <td><strong>{{ empresa.nombre }}</strong></td>
+                  <td>{{ empresa.cuit or '-' }}</td>
+                  <td>
+                    {% if empresa.estado_activo %}
+                    <span class="badge bg-success">Activa</span>
+                    {% else %}
+                    <span class="badge bg-secondary">Inactiva</span>
+                    {% endif %}
+                  </td>
+                  <td class="text-end">
+                    <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" 
+                       class="btn btn-sm btn-outline-info" title="Ver Detalles">
+                      <i class="bi bi-eye"></i>
+                    </a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="alert alert-warning mb-0">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            No hay empresas asociadas. <a href="{{ url_for('configs.edit', config_id=config.id) }}">Editar configuración</a> para asociar empresas.
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+
+      <!-- Public Links -->
+      {% if config.es_publico %}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <h5 class="mb-0"><i class="bi bi-link-45deg me-2"></i>Links Públicos ({{ public_links|length }})</h5>
+          <a href="{{ url_for('configs.new_link', config_id=config.id) }}" class="btn btn-sm btn-success">
+            <i class="bi bi-plus-circle me-1"></i> Nuevo Link
+          </a>
+        </div>
+        <div class="card-body">
+          {% if public_links %}
+          <div class="table-responsive">
+            <table class="table table-sm table-hover">
+              <thead class="table-light">
+                <tr>
+                  <th>Slug</th>
+                  <th>URL Completo</th>
+                  <th>Creado</th>
+                  <th class="text-end">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for link in public_links %}
+                <tr>
+                  <td><code>{{ link.custom_slug }}</code></td>
+                  <td>
+                    <a href="{{ url_for('public.view_report_by_slug', slug=link.custom_slug) }}" 
+                       target="_blank" class="small">
+                      /p/{{ link.custom_slug }}
+                      <i class="bi bi-box-arrow-up-right ms-1"></i>
+                    </a>
+                  </td>
+                  <td class="small">{{ link.created_at.strftime('%Y-%m-%d') if link.created_at else 'N/A' }}</td>
+                  <td class="text-end">
+                    <a href="{{ url_for('analytics.dashboard') }}?link_slug={{ link.custom_slug }}" 
+                       class="btn btn-sm btn-outline-info" title="Ver Analytics">
+                      <i class="bi bi-graph-up"></i>
+                    </a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="alert alert-info mb-0">
+            <i class="bi bi-info-circle me-2"></i>
+            No hay links públicos creados. <a href="{{ url_for('configs.new_link', config_id=config.id) }}">Crear el primero</a>
+          </div>
+          {% endif %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <!-- Actions Sidebar -->
+    <div class="col-md-4">
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-success text-white">
+          <h6 class="mb-0"><i class="bi bi-play-circle me-2"></i>Acciones Rápidas</h6>
+        </div>
+        <div class="card-body">
+          <div class="d-grid gap-2">
+            <a href="{{ url_for('configs.view', config_id=config.id) }}" 
+               class="btn btn-primary">
+              <i class="bi bi-eye me-2"></i>Ver Reporte
+            </a>
+            
+            <a href="{{ url_for('configs.edit', config_id=config.id) }}" 
+               class="btn btn-outline-primary">
+              <i class="bi bi-pencil me-2"></i>Editar Configuración
+            </a>
+            
+            {% if config.es_publico %}
+            <a href="{{ url_for('configs.new_link', config_id=config.id) }}" 
+               class="btn btn-outline-info">
+              <i class="bi bi-link-45deg me-2"></i>Crear Link Público
+            </a>
+            {% endif %}
+            
+            <hr>
+            
+            <form method="POST" action="{{ url_for('configs.delete', config_id=config.id) }}" 
+                  onsubmit="return confirm('¿Está seguro de eliminar esta configuración? Esta acción no se puede deshacer.');">
+              <button type="submit" class="btn btn-outline-danger w-100">
+                <i class="bi bi-trash me-2"></i>Eliminar Configuración
+              </button>
+            </form>
+          </div>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>IDs de Power BI</h6>
+        </div>
+        <div class="card-body">
+          <div class="mb-2">
+            <label class="text-muted small">Tenant ID:</label>
+            <div><code class="small">{{ config.tenant.tenant_id }}</code></div>
+          </div>
+          <div class="mb-2">
+            <label class="text-muted small">Client ID:</label>
+            <div><code class="small">{{ config.client.client_id }}</code></div>
+          </div>
+          <div class="mb-2">
+            <label class="text-muted small">Workspace ID:</label>
+            <div><code class="small">{{ config.workspace.workspace_id }}</code></div>
+          </div>
+          <div class="mb-2">
+            <label class="text-muted small">Report ID:</label>
+            <div><code class="small">{{ config.report.report_id }}</code></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

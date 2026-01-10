@@ -1,0 +1,196 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-file-earmark-bar-graph me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-left me-1"></i> Volver
+    </a>
+  </div>
+
+  <div class="row">
+    <div class="col-md-8">
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">
+            <i class="bi bi-check2-square me-2"></i>
+            Seleccionar Configuraciones de Reportes
+          </h5>
+        </div>
+        <div class="card-body">
+          <form method="POST">
+            <p class="text-muted">
+              Seleccione las configuraciones de reportes que desea asociar a 
+              <strong>{{ empresa.nombre }}</strong>. 
+              Solo se muestran configuraciones con acceso privado habilitado.
+            </p>
+
+            {% if all_configs %}
+            <div class="table-responsive">
+              <table class="table table-hover">
+                <thead class="table-light">
+                  <tr>
+                    <th width="50">
+                      <input type="checkbox" id="selectAll" class="form-check-input">
+                    </th>
+                    <th>ID</th>
+                    <th>Nombre</th>
+                    <th>Report</th>
+                    <th>Workspace</th>
+                    <th>Tenant</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for config in all_configs %}
+                  <tr>
+                    <td>
+                      <input type="checkbox" 
+                             name="configs" 
+                             value="{{ config.id }}" 
+                             class="form-check-input config-checkbox"
+                             {% if config.id in current_config_ids %}checked{% endif %}>
+                    </td>
+                    <td>{{ config.id }}</td>
+                    <td><strong>{{ config.name }}</strong></td>
+                    <td>{{ config.report.name }}</td>
+                    <td>{{ config.workspace.name }}</td>
+                    <td class="small">{{ config.tenant.name }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="alert alert-info mt-3">
+              <i class="bi bi-info-circle me-2"></i>
+              <strong>Nota:</strong> Las configuraciones seleccionadas reemplazarán 
+              completamente las asociaciones actuales.
+            </div>
+
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+              <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" 
+                 class="btn btn-outline-secondary">
+                Cancelar
+              </a>
+              <button type="submit" class="btn btn-primary">
+                <i class="bi bi-check-circle me-2"></i>Guardar Asociaciones
+              </button>
+            </div>
+            {% else %}
+            <div class="alert alert-warning">
+              <i class="bi bi-exclamation-triangle me-2"></i>
+              No hay configuraciones privadas disponibles. 
+              <a href="{{ url_for('configs.new') }}">Crear una configuración</a> 
+              y marcarla como privada para poder asociarla a empresas.
+            </div>
+            
+            <div class="d-grid">
+              <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" 
+                 class="btn btn-outline-secondary">
+                Volver
+              </a>
+            </div>
+            {% endif %}
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="bi bi-info-circle me-2"></i>Información de la Empresa</h6>
+        </div>
+        <div class="card-body">
+          <dl class="mb-0">
+            <dt>Nombre:</dt>
+            <dd>{{ empresa.nombre }}</dd>
+            
+            {% if empresa.cuit %}
+            <dt>CUIT:</dt>
+            <dd>{{ empresa.cuit }}</dd>
+            {% endif %}
+            
+            <dt>Estado:</dt>
+            <dd>
+              {% if empresa.estado_activo %}
+              <span class="badge bg-success">Activa</span>
+              {% else %}
+              <span class="badge bg-secondary">Inactiva</span>
+              {% endif %}
+            </dd>
+            
+            <dt>Reportes actuales:</dt>
+            <dd><span class="badge bg-info">{{ current_config_ids|length }}</span></dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="card shadow-sm mt-3">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="bi bi-lightbulb me-2"></i>Ayuda</h6>
+        </div>
+        <div class="card-body">
+          <p class="small mb-2">
+            <strong>¿Cómo funciona?</strong>
+          </p>
+          <ul class="small mb-0">
+            <li>Marque las configuraciones que desea asociar</li>
+            <li>Solo aparecen configuraciones privadas</li>
+            <li>Las selecciones actuales se mantienen al cargar</li>
+            <li>Use el checkbox superior para seleccionar/deseleccionar todo</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// Select/Deselect all functionality
+document.getElementById('selectAll').addEventListener('change', function() {
+  const checkboxes = document.querySelectorAll('.config-checkbox');
+  checkboxes.forEach(checkbox => {
+    checkbox.checked = this.checked;
+  });
+});
+
+// Update select all checkbox based on individual checkboxes
+document.querySelectorAll('.config-checkbox').forEach(checkbox => {
+  checkbox.addEventListener('change', function() {
+    const allCheckboxes = document.querySelectorAll('.config-checkbox');
+    const checkedCheckboxes = document.querySelectorAll('.config-checkbox:checked');
+    const selectAllCheckbox = document.getElementById('selectAll');
+    
+    if (checkedCheckboxes.length === allCheckboxes.length) {
+      selectAllCheckbox.checked = true;
+      selectAllCheckbox.indeterminate = false;
+    } else if (checkedCheckboxes.length === 0) {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = false;
+    } else {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = true;
+    }
+  });
+});
+
+// Initialize select all state
+window.addEventListener('DOMContentLoaded', function() {
+  const allCheckboxes = document.querySelectorAll('.config-checkbox');
+  const checkedCheckboxes = document.querySelectorAll('.config-checkbox:checked');
+  const selectAllCheckbox = document.getElementById('selectAll');
+  
+  if (allCheckboxes.length > 0) {
+    if (checkedCheckboxes.length === allCheckboxes.length) {
+      selectAllCheckbox.checked = true;
+    } else if (checkedCheckboxes.length > 0) {
+      selectAllCheckbox.indeterminate = true;
+    }
+  }
+});
+</script>
+{% endblock %}

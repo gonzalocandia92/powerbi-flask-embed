@@ -48,6 +48,10 @@
               </td>
               <td class="text-end">
                 <div class="btn-group" role="group">
+                  <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" 
+                     class="btn btn-sm btn-outline-info" title="Ver Detalles">
+                    <i class="bi bi-info-circle"></i>
+                  </a>
                   <a href="{{ url_for('empresas.edit', empresa_id=empresa.id) }}" 
                      class="btn btn-sm btn-outline-primary" title="Editar">
                     <i class="bi bi-pencil"></i>
@@ -61,7 +65,7 @@
                   </form>
                   
                   <form method="POST" action="{{ url_for('empresas.regenerate_credentials', empresa_id=empresa.id) }}" style="display:inline;">
-                    <button type="submit" class="btn btn-sm btn-outline-info" 
+                    <button type="submit" class="btn btn-sm btn-outline-secondary" 
                             title="Regenerar Credenciales"
                             onclick="return confirm('¿Está seguro de regenerar las credenciales? Las antiguas dejarán de funcionar.');">
                       <i class="bi bi-arrow-clockwise"></i>

@@ -7,7 +7,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required
 
 from app import db
-from app.models import Empresa
+from app.models import Empresa, ReportConfig
 from app.forms import EmpresaForm
 from app.services.credentials_service import generate_client_id, generate_client_secret, hash_client_secret
 from app.utils.decorators import retry_on_db_error
@@ -163,6 +163,72 @@ def regenerate_credentials(empresa_id):
         client_id=new_client_id,
         client_secret=new_client_secret,
         title='Nuevas Credenciales de la Empresa'
+    )
+
+
+@bp.route('/<int:empresa_id>/detail')
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def detail(empresa_id):
+    """Display detailed information about an empresa including associated reports."""
+    empresa = Empresa.query.options(
+        db.joinedload(Empresa.report_configs)
+    ).get_or_404(empresa_id)
+    
+    # Manually load related objects for each report config
+    for config in empresa.report_configs:
+        _ = config.report
+        _ = config.tenant
+        _ = config.workspace
+    
+    return render_template(
+        'admin/empresas/detail.html',
+        empresa=empresa,
+        title=f'Empresa: {empresa.nombre}'
+    )
+
+
+@bp.route('/<int:empresa_id>/reports/manage', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def manage_reports(empresa_id):
+    """Manage report associations for an empresa."""
+    empresa = Empresa.query.get_or_404(empresa_id)
+    
+    # Get all private configs
+    all_configs = ReportConfig.query.filter_by(es_privado=True).options(
+        db.joinedload(ReportConfig.report),
+        db.joinedload(ReportConfig.tenant),
+        db.joinedload(ReportConfig.workspace)
+    ).order_by(ReportConfig.name).all()
+    
+    if request.method == 'POST':
+        # Get selected config IDs from form
+        selected_config_ids = request.form.getlist('configs')
+        selected_config_ids = [int(id) for id in selected_config_ids if id]
+        
+        # Clear existing associations and add new ones
+        empresa.report_configs = []
+        for config_id in selected_config_ids:
+            config = ReportConfig.query.get(config_id)
+            if config and config.es_privado:
+                empresa.report_configs.append(config)
+        
+        db.session.commit()
+        
+        logging.info(f"Report associations updated for empresa {empresa.nombre}: {len(selected_config_ids)} configs")
+        flash(f"Reportes asociados actualizados: {len(selected_config_ids)} configuraciones", "success")
+        return redirect(url_for('empresas.detail', empresa_id=empresa_id))
+    
+    # Get currently associated config IDs
+    current_config_ids = [c.id for c in empresa.report_configs]
+    
+    return render_template(
+        'admin/empresas/manage_reports.html',
+        empresa=empresa,
+        all_configs=all_configs,
+        current_config_ids=current_config_ids,
+        title=f'Gestionar Reportes: {empresa.nombre}'
     )
 
 

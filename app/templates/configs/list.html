@@ -69,6 +69,10 @@
               </td>
               <td class="text-end">
                 <div class="btn-group" role="group">
+                  <a href="{{ url_for('configs.detail', config_id=config.id) }}" 
+                     class="btn btn-sm btn-outline-info" title="Ver Detalles">
+                    <i class="bi bi-info-circle"></i>
+                  </a>
                   <a href="{{ url_for('configs.view', config_id=config.id) }}" 
                      class="btn btn-sm btn-outline-primary" title="Ver Reporte">
                     <i class="bi bi-eye"></i>
@@ -79,7 +83,7 @@
                   </a>
                   {% if config.es_publico %}
                   <a href="{{ url_for('configs.new_link', config_id=config.id) }}" 
-                     class="btn btn-sm btn-outline-info" title="Nuevo Link Público">
+                     class="btn btn-sm btn-outline-success" title="Nuevo Link Público">
                     <i class="bi bi-link-45deg"></i>
                   </a>
                   {% endif %}
