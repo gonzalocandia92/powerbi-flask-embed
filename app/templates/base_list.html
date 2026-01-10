@@ -46,6 +46,9 @@
                 </div>
               </th>
               {% endfor %}
+              {% if has_actions %}
+              <th class="px-4 py-3 border-0 fw-semibold text-center">Acciones</th>
+              {% endif %}
             </tr>
           </thead>
           <tbody>
@@ -85,6 +88,36 @@
                 </div>
               </td>
               {% endfor %}
+              {% if has_actions %}
+              <td class="px-4 py-3">
+                <div class="btn-group" role="group">
+                  {% if detail_endpoint %}
+                  <a href="{{ url_for(detail_endpoint, **{model_name_plural.rstrip('s') + '_id': item.id}) }}" 
+                     class="btn btn-sm btn-outline-info" 
+                     title="Ver detalle">
+                    <i class="bi bi-info-circle"></i>
+                  </a>
+                  {% endif %}
+                  {% if edit_endpoint %}
+                  <a href="{{ url_for(edit_endpoint, **{model_name_plural.rstrip('s') + '_id': item.id}) }}" 
+                     class="btn btn-sm btn-outline-secondary" 
+                     title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  {% endif %}
+                  {% if delete_endpoint %}
+                  <form method="POST" 
+                        action="{{ url_for(delete_endpoint, **{model_name_plural.rstrip('s') + '_id': item.id}) }}" 
+                        style="display:inline;"
+                        onsubmit="return confirm('¿Está seguro de eliminar este {{ model_name|lower }}?');">
+                    <button type="submit" class="btn btn-sm btn-outline-danger" title="Eliminar">
+                      <i class="bi bi-trash"></i>
+                    </button>
+                  </form>
+                  {% endif %}
+                </div>
+              </td>
+              {% endif %}
             </tr>
             {% endfor %}
           </tbody>

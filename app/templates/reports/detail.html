@@ -1,0 +1,124 @@
+{% extends "layout.html" %}
+
+{% block title %}Report: {{ report.name }} - PowerBI Embed{% endblock %}
+
+{% block body %}
+<div class="container-fluid py-4">
+  <div class="row">
+    <!-- Main Content -->
+    <div class="col-md-8">
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-primary text-white">
+          <h4 class="mb-0">
+            <i class="bi bi-bar-chart-line me-2"></i>Report: {{ report.name }}
+          </h4>
+        </div>
+        <div class="card-body">
+          <dl class="row">
+            <dt class="col-sm-3">ID</dt>
+            <dd class="col-sm-9"><code>{{ report.id }}</code></dd>
+
+            <dt class="col-sm-3">Nombre</dt>
+            <dd class="col-sm-9">{{ report.name }}</dd>
+
+            <dt class="col-sm-3">Report ID</dt>
+            <dd class="col-sm-9"><code>{{ report.report_id }}</code></dd>
+
+            <dt class="col-sm-3">Embed URL</dt>
+            <dd class="col-sm-9">
+              {% if report.embed_url %}
+                <a href="{{ report.embed_url }}" target="_blank" class="text-primary">
+                  <i class="bi bi-link-45deg me-1"></i>Ver URL
+                </a>
+              {% else %}
+                <span class="text-muted">No configurado</span>
+              {% endif %}
+            </dd>
+          </dl>
+        </div>
+      </div>
+
+      <!-- Associated Configurations -->
+      <div class="card shadow-sm">
+        <div class="card-header bg-white">
+          <h5 class="mb-0">
+            <i class="bi bi-gear me-2"></i>Configuraciones Asociadas
+          </h5>
+        </div>
+        <div class="card-body">
+          {% if configs %}
+          <div class="table-responsive">
+            <table class="table table-hover">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nombre</th>
+                  <th>Tenant</th>
+                  <th>Workspace</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for config in configs %}
+                <tr>
+                  <td><code>{{ config.id }}</code></td>
+                  <td>{{ config.name }}</td>
+                  <td>{{ config.tenant.name if config.tenant else 'N/A' }}</td>
+                  <td>{{ config.workspace.name if config.workspace else 'N/A' }}</td>
+                  <td>
+                    <a href="{{ url_for('configs.detail', config_id=config.id) }}" 
+                       class="btn btn-sm btn-outline-info">
+                      <i class="bi bi-info-circle"></i> Ver
+                    </a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <p class="text-muted">No hay configuraciones asociadas a este report.</p>
+          {% endif %}
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-header bg-light">
+          <h5 class="mb-0">
+            <i class="bi bi-lightning me-2"></i>Acciones Rápidas
+          </h5>
+        </div>
+        <div class="card-body">
+          <div class="d-grid gap-2">
+            <a href="{{ url_for('reports.edit', report_id=report.id) }}" 
+               class="btn btn-outline-secondary">
+              <i class="bi bi-pencil me-2"></i>Editar Report
+            </a>
+            <a href="{{ url_for('reports.list') }}" 
+               class="btn btn-outline-primary">
+              <i class="bi bi-arrow-left me-2"></i>Volver al Listado
+            </a>
+            <hr>
+            <form method="POST" 
+                  action="{{ url_for('reports.delete', report_id=report.id) }}"
+                  onsubmit="return confirm('¿Está seguro de eliminar este report? Esta acción no se puede deshacer.');">
+              <button type="submit" class="btn btn-outline-danger w-100">
+                <i class="bi bi-trash me-2"></i>Eliminar Report
+              </button>
+            </form>
+          </div>
+        </div>
+        <div class="card-footer bg-light">
+          <small class="text-muted">
+            <i class="bi bi-info-circle me-1"></i>
+            {{ configs|length }} configuración(es) asociada(s)
+          </small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
