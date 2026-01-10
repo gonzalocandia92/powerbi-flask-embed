@@ -1,0 +1,192 @@
+{% extends "layout.html" %}
+
+{% block title %}Futuras Empresas - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-building-check me-2"></i>{{ title }}</h2>
+    <form method="POST" action="{{ url_for('futuras_empresas.simulate_fetch') }}" style="display:inline;">
+      <button type="submit" class="btn btn-info">
+        <i class="bi bi-cloud-download me-1"></i> Simular Consulta Externa
+      </button>
+    </form>
+  </div>
+
+  <!-- Pending Empresas -->
+  <div class="card shadow-sm mb-4">
+    <div class="card-header bg-warning text-dark">
+      <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Empresas Pendientes de Aprobación</h5>
+    </div>
+    <div class="card-body">
+      {% if futuras %}
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>ID Externo</th>
+              <th>Nombre</th>
+              <th>CUIT</th>
+              <th>Email</th>
+              <th>Fecha Recepción</th>
+              <th class="text-end">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for futura in futuras %}
+            <tr>
+              <td><code>{{ futura.external_id }}</code></td>
+              <td><strong>{{ futura.nombre }}</strong></td>
+              <td>{{ futura.cuit or '-' }}</td>
+              <td>{{ futura.email or '-' }}</td>
+              <td>{{ futura.fecha_recepcion.strftime('%Y-%m-%d %H:%M') if futura.fecha_recepcion else 'N/A' }}</td>
+              <td class="text-end">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('futuras_empresas.view', futura_id=futura.id) }}" 
+                     class="btn btn-sm btn-outline-info" title="Ver Detalles">
+                    <i class="bi bi-eye"></i>
+                  </a>
+                  
+                  <button type="button" class="btn btn-sm btn-outline-success" 
+                          title="Confirmar"
+                          data-bs-toggle="modal" 
+                          data-bs-target="#confirmModal{{ futura.id }}">
+                    <i class="bi bi-check-circle"></i>
+                  </button>
+                  
+                  <button type="button" class="btn btn-sm btn-outline-danger" 
+                          title="Rechazar"
+                          data-bs-toggle="modal" 
+                          data-bs-target="#rejectModal{{ futura.id }}">
+                    <i class="bi bi-x-circle"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+
+            <!-- Confirm Modal -->
+            <div class="modal fade" id="confirmModal{{ futura.id }}" tabindex="-1">
+              <div class="modal-dialog">
+                <div class="modal-content">
+                  <div class="modal-header bg-success text-white">
+                    <h5 class="modal-title">Confirmar Empresa</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                  </div>
+                  <form method="POST" action="{{ url_for('futuras_empresas.confirm', futura_id=futura.id) }}">
+                    <div class="modal-body">
+                      <p><strong>¿Está seguro de confirmar esta empresa?</strong></p>
+                      <dl class="row">
+                        <dt class="col-sm-4">Nombre:</dt>
+                        <dd class="col-sm-8">{{ futura.nombre }}</dd>
+                        <dt class="col-sm-4">CUIT:</dt>
+                        <dd class="col-sm-8">{{ futura.cuit or 'N/A' }}</dd>
+                      </dl>
+                      <div class="mb-3">
+                        <label for="notas{{ futura.id }}" class="form-label">Notas (opcional):</label>
+                        <textarea class="form-control" id="notas{{ futura.id }}" name="notas" rows="2"></textarea>
+                      </div>
+                      <div class="alert alert-info small mb-0">
+                        <i class="bi bi-info-circle me-1"></i>
+                        Al confirmar, se creará una empresa en el sistema y se generarán credenciales automáticamente.
+                      </div>
+                    </div>
+                    <div class="modal-footer">
+                      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                      <button type="submit" class="btn btn-success">Confirmar Empresa</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+
+            <!-- Reject Modal -->
+            <div class="modal fade" id="rejectModal{{ futura.id }}" tabindex="-1">
+              <div class="modal-dialog">
+                <div class="modal-content">
+                  <div class="modal-header bg-danger text-white">
+                    <h5 class="modal-title">Rechazar Empresa</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                  </div>
+                  <form method="POST" action="{{ url_for('futuras_empresas.reject', futura_id=futura.id) }}">
+                    <div class="modal-body">
+                      <p><strong>¿Está seguro de rechazar esta empresa?</strong></p>
+                      <dl class="row">
+                        <dt class="col-sm-4">Nombre:</dt>
+                        <dd class="col-sm-8">{{ futura.nombre }}</dd>
+                      </dl>
+                      <div class="mb-3">
+                        <label for="notasReject{{ futura.id }}" class="form-label">Motivo del rechazo (opcional):</label>
+                        <textarea class="form-control" id="notasReject{{ futura.id }}" name="notas" rows="2"></textarea>
+                      </div>
+                    </div>
+                    <div class="modal-footer">
+                      <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                      <button type="submit" class="btn btn-danger">Rechazar Empresa</button>
+                    </div>
+                  </form>
+                </div>
+              </div>
+            </div>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-info mb-0">
+        <i class="bi bi-info-circle me-2"></i>
+        No hay empresas pendientes de aprobación. 
+        Use el botón "Simular Consulta Externa" para obtener empresas del sistema externo.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Processed Empresas -->
+  <div class="card shadow-sm">
+    <div class="card-header">
+      <h5 class="mb-0"><i class="bi bi-check2-all me-2"></i>Últimas Empresas Procesadas</h5>
+    </div>
+    <div class="card-body">
+      {% if procesadas %}
+      <div class="table-responsive">
+        <table class="table table-hover table-sm">
+          <thead class="table-light">
+            <tr>
+              <th>Nombre</th>
+              <th>CUIT</th>
+              <th>Estado</th>
+              <th>Procesado Por</th>
+              <th>Fecha Procesamiento</th>
+              <th>Notas</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for futura in procesadas %}
+            <tr>
+              <td>{{ futura.nombre }}</td>
+              <td>{{ futura.cuit or '-' }}</td>
+              <td>
+                {% if futura.estado == 'confirmada' %}
+                <span class="badge bg-success">Confirmada</span>
+                {% else %}
+                <span class="badge bg-danger">Rechazada</span>
+                {% endif %}
+              </td>
+              <td>{{ futura.procesado_por.username if futura.procesado_por else '-' }}</td>
+              <td>{{ futura.fecha_procesamiento.strftime('%Y-%m-%d %H:%M') if futura.fecha_procesamiento else '-' }}</td>
+              <td class="small">{{ futura.notas or '-' }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-secondary mb-0">
+        <i class="bi bi-info-circle me-2"></i>
+        No hay empresas procesadas todavía.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

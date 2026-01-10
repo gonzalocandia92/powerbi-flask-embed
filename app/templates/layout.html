@@ -96,11 +96,33 @@
             <li><a class="dropdown-item" href="{{ url_for('usuarios_pbi.list') }}"><i class="bi bi-person-circle me-2"></i>Usuarios PBI</a></li>
             <li><a class="dropdown-item" href="{{ url_for('configs.list') }}"><i class="bi bi-gear-fill me-2"></i>Configuraciones</a></li>
             <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="{{ url_for('admin_clientes_privados.list') }}"><i class="bi bi-shield-lock me-2"></i>Clientes Privados</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('empresas.list') }}"><i class="bi bi-building me-2"></i>Empresas</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('admin_clientes_privados.list') }}"><i class="bi bi-shield-lock me-2"></i>Clientes Privados (Legacy)</a></li>
+          </ul>
+        </li>
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="navbarFuturas" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-building-check me-1"></i>Futuras Empresas
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="navbarFuturas">
+            <li><a class="dropdown-item" href="{{ url_for('futuras_empresas.list') }}"><i class="bi bi-list-check me-2"></i>Listado</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li>
+              <form method="POST" action="{{ url_for('futuras_empresas.simulate_fetch') }}" style="display:inline;">
+                <button type="submit" class="dropdown-item">
+                  <i class="bi bi-cloud-download me-2"></i>Simular Consulta Externa
+                </button>
+              </form>
+            </li>
           </ul>
         </li>
       </ul>
       <ul class="navbar-nav">
+        <li class="nav-item">
+          <a class="nav-link" href="/docs" target="_blank">
+            <i class="bi bi-file-earmark-text me-1"></i>API Docs
+          </a>
+        </li>
         {% if current_user.is_authenticated %}
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
