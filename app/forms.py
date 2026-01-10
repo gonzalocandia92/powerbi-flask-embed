@@ -81,6 +81,16 @@ class EmpresaForm(FlaskForm):
     submit = SubmitField("Guardar")
 
 
+class PublicLinkForm(FlaskForm):
+    """Form for creating public report links."""
+    
+    custom_slug = StringField(
+        "Nombre personalizado para el link",
+        validators=[DataRequired(), Length(max=120)]
+    )
+    submit = SubmitField("Crear Link")
+
+
 class FuturaEmpresaForm(FlaskForm):
     """Form for reviewing/processing future empresas."""
     
