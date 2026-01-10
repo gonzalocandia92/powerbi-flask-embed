@@ -121,16 +121,10 @@ def openapi_spec():
                                                 "items": {
                                                     "type": "object",
                                                     "properties": {
-                                                        "config_id": {
+                                                        "id": {
                                                             "type": "integer"
                                                         },
-                                                        "config_name": {
-                                                            "type": "string"
-                                                        },
-                                                        "report_id": {
-                                                            "type": "string"
-                                                        },
-                                                        "report_name": {
+                                                        "name": {
                                                             "type": "string"
                                                         }
                                                     }

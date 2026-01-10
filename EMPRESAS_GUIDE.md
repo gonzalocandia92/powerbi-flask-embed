@@ -172,10 +172,8 @@ Authorization: Bearer {access_token}
   "empresa_nombre": "Mi Empresa SA",
   "reports": [
     {
-      "config_id": 1,
-      "config_name": "Dashboard Ventas",
-      "report_id": "abc-123",
-      "report_name": "Ventas 2024"
+      "id": 1,
+      "name": "Dashboard Ventas"
     }
   ]
 }

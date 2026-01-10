@@ -158,7 +158,7 @@
                 <tr>
                   <td><code>{{ link.custom_slug }}</code></td>
                   <td>
-                    <a href="{{ url_for('public.view_report_by_slug', slug=link.custom_slug) }}" 
+                    <a href="{{ url_for('public.view', custom_slug=link.custom_slug) }}" 
                        target="_blank" class="small">
                       /p/{{ link.custom_slug }}
                       <i class="bi bi-box-arrow-up-right ms-1"></i>

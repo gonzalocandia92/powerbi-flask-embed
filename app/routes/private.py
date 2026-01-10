@@ -79,10 +79,8 @@ def list_reports():
             "empresa_nombre": "string",
             "reports": [
                 {
-                    "config_id": integer,
-                    "config_name": "string",
-                    "report_id": "string",
-                    "report_name": "string"
+                    "id": integer,
+                    "name": "string"
                 },
                 ...
             ]
@@ -121,10 +119,8 @@ def list_reports():
     reports_data = []
     for config in report_configs:
         reports_data.append({
-            'config_id': config.id,
-            'config_name': config.name,
-            'report_id': config.report.report_id,
-            'report_name': config.report.name
+            'id': config.id,
+            'name': config.report.name
         })
     
     response_data = {
