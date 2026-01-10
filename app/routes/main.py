@@ -5,7 +5,7 @@ from flask import Blueprint, render_template, request
 from flask_login import login_required
 
 from app import db
-from app.models import ReportConfig, PublicLink
+from app.models import ReportConfig, PublicLink, Report
 from app.utils.decorators import retry_on_db_error
 
 bp = Blueprint('main', __name__)
@@ -35,7 +35,7 @@ def index():
             db.or_(
                 PublicLink.custom_slug.ilike(f'%{search_query}%'),
                 ReportConfig.name.ilike(f'%{search_query}%'),
-                ReportConfig.report.has(db.Report.name.ilike(f'%{search_query}%'))
+                Report.name.ilike(f'%{search_query}%')
             )
         )
     
