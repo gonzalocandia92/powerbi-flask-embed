@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+
+{% block title %}Editar URL Pública - PowerBI Embed{% endblock %}
+
+{% block body %}
+<div class="container-fluid py-4">
+  <div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+          <h4 class="mb-0">
+            <i class="bi bi-pencil-square me-2"></i>Editar URL Pública
+          </h4>
+        </div>
+        <div class="card-body">
+          <div class="alert alert-info mb-4">
+            <i class="bi bi-info-circle me-2"></i>
+            <strong>Configuración:</strong> {{ config.name }}
+          </div>
+
+          <form method="POST" novalidate>
+            {{ form.hidden_tag() }}
+            
+            <div class="mb-4">
+              <label for="custom_slug" class="form-label">
+                <i class="bi bi-link-45deg me-2"></i>
+                <strong>Nombre del URL</strong>
+              </label>
+              {{ form.custom_slug(class="form-control" + (" is-invalid" if form.custom_slug.errors else ""), 
+                                  placeholder="mi-reporte-ventas") }}
+              {% if form.custom_slug.errors %}
+                <div class="invalid-feedback">
+                  {% for error in form.custom_slug.errors %}{{ error }}{% endfor %}
+                </div>
+              {% endif %}
+              <div class="form-text">
+                El URL completo será: <code>https://{{ request.host }}/p/<span id="slug-preview">{{ link.custom_slug }}</span></code>
+              </div>
+            </div>
+
+            <div class="alert alert-warning">
+              <i class="bi bi-exclamation-triangle me-2"></i>
+              <strong>Nota:</strong> Cambiar el nombre afectará a todos los usuarios que tengan el link anterior.
+            </div>
+
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+              <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary">
+                <i class="bi bi-x-circle me-2"></i>Cancelar
+              </a>
+              {{ form.submit(class="btn btn-primary") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const slugInput = document.getElementById('custom_slug');
+  const slugPreview = document.getElementById('slug-preview');
+  
+  if (slugInput && slugPreview) {
+    slugInput.addEventListener('input', function() {
+      const value = this.value.toLowerCase().trim() || '{{ link.custom_slug }}';
+      slugPreview.textContent = value;
+    });
+  }
+});
+</script>
+{% endblock %}

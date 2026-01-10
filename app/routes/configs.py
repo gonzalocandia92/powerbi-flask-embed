@@ -254,6 +254,88 @@ def delete(config_id):
     return redirect(url_for('configs.list'))
 
 
+@bp.route('/<int:config_id>/link/<int:link_id>/edit', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def edit_link(config_id, link_id):
+    """Edit a public link."""
+    config = ReportConfig.query.get_or_404(config_id)
+    link = PublicLink.query.get_or_404(link_id)
+    
+    # Verify link belongs to config
+    if link.report_config_id != config_id:
+        flash("Este link no pertenece a esta configuración", "danger")
+        return redirect(url_for('main.index'))
+    
+    form = PublicLinkForm(obj=link)
+    
+    if form.validate_on_submit():
+        new_slug = form.custom_slug.data.lower().strip()
+        
+        # Check if slug is unique (excluding current link)
+        existing_link = PublicLink.query.filter(
+            PublicLink.custom_slug == new_slug,
+            PublicLink.id != link_id
+        ).first()
+        
+        if existing_link:
+            flash("Este nombre personalizado ya está en uso. Por favor elige otro.", "danger")
+            return render_template('edit_public_link.html', form=form, config=config, link=link)
+        
+        link.custom_slug = new_slug
+        db.session.commit()
+        
+        logging.info(f"Public link edited: {link.custom_slug} (ID: {link.id})")
+        flash(f"Link público actualizado: /p/{new_slug}", "success")
+        return redirect(url_for('main.index'))
+    
+    return render_template('edit_public_link.html', form=form, config=config, link=link)
+
+
+@bp.route('/<int:config_id>/link/<int:link_id>/toggle', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def toggle_link(config_id, link_id):
+    """Toggle active status of a public link (soft delete)."""
+    link = PublicLink.query.get_or_404(link_id)
+    
+    # Verify link belongs to config
+    if link.report_config_id != config_id:
+        flash("Este link no pertenece a esta configuración", "danger")
+        return redirect(url_for('main.index'))
+    
+    link.is_active = not link.is_active
+    db.session.commit()
+    
+    status = "activado" if link.is_active else "desactivado"
+    logging.info(f"Public link {status}: {link.custom_slug} (ID: {link.id})")
+    flash(f"Link público {status}: /p/{link.custom_slug}", "success")
+    
+    return redirect(url_for('main.index'))
+
+
+@bp.route('/<int:config_id>/link/<int:link_id>/delete', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def delete_link(config_id, link_id):
+    """Delete a public link permanently."""
+    link = PublicLink.query.get_or_404(link_id)
+    
+    # Verify link belongs to config
+    if link.report_config_id != config_id:
+        flash("Este link no pertenece a esta configuración", "danger")
+        return redirect(url_for('main.index'))
+    
+    slug = link.custom_slug
+    db.session.delete(link)
+    db.session.commit()
+    
+    logging.info(f"Public link deleted: {slug} (ID: {link_id})")
+    flash(f"Link público eliminado: /p/{slug}", "success")
+    
+    return redirect(url_for('main.index'))
+
+
 @bp.route('/<int:config_id>/link/new', methods=['GET', 'POST'])
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)

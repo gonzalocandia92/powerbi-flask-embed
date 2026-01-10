@@ -1,7 +1,7 @@
 """
 Main application routes.
 """
-from flask import Blueprint, render_template
+from flask import Blueprint, render_template, request
 from flask_login import login_required
 
 from app import db
@@ -15,21 +15,30 @@ bp = Blueprint('main', __name__)
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
 def index():
-    """Display the main dashboard with all report configurations."""
-    configs = ReportConfig.query.options(
-        db.joinedload(ReportConfig.tenant),
-        db.joinedload(ReportConfig.client),
-        db.joinedload(ReportConfig.workspace),
-        db.joinedload(ReportConfig.report),
-        db.joinedload(ReportConfig.usuario_pbi)
-    ).order_by(ReportConfig.created_at.desc()).all()
+    """Display the main dashboard with all public links."""
+    # Get filter parameters
+    search_query = request.args.get('search', '').strip()
     
-    public_links = PublicLink.query.filter_by(is_active=True).all()
+    # Query all active public links with their related configs
+    query = PublicLink.query.filter_by(is_active=True).options(
+        db.joinedload(PublicLink.report_config)
+            .joinedload(ReportConfig.report),
+        db.joinedload(PublicLink.report_config)
+            .joinedload(ReportConfig.workspace),
+        db.joinedload(PublicLink.report_config)
+            .joinedload(ReportConfig.tenant)
+    )
     
-    links_by_config = {}
-    for link in public_links:
-        if link.report_config_id not in links_by_config:
-            links_by_config[link.report_config_id] = []
-        links_by_config[link.report_config_id].append(link)
+    # Apply search filter if provided
+    if search_query:
+        query = query.join(PublicLink.report_config).join(ReportConfig.report).filter(
+            db.or_(
+                PublicLink.custom_slug.ilike(f'%{search_query}%'),
+                ReportConfig.name.ilike(f'%{search_query}%'),
+                ReportConfig.report.has(db.Report.name.ilike(f'%{search_query}%'))
+            )
+        )
     
-    return render_template('index.html', configs=configs, links_by_config=links_by_config)
+    public_links = query.order_by(PublicLink.created_at.desc()).all()
+    
+    return render_template('index.html', public_links=public_links, search_query=search_query)
