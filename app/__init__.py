@@ -65,7 +65,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import auth, main, tenants, clients, workspaces, reports, usuarios_pbi, configs, public, analytics, private, admin_clientes_privados
+    from app.routes import auth, main, tenants, clients, workspaces, reports, usuarios_pbi, configs, public, analytics, private, admin_clientes_privados, empresas, futuras_empresas
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -77,7 +77,9 @@ def create_app():
     app.register_blueprint(public.bp)
     app.register_blueprint(analytics.bp)
     app.register_blueprint(private.bp)
-    app.register_blueprint(admin_clientes_privados.bp)
+    app.register_blueprint(admin_clientes_privados.bp)  # Keep for backward compatibility
+    app.register_blueprint(empresas.bp)
+    app.register_blueprint(futuras_empresas.bp)
     
     from app.models import User
     
