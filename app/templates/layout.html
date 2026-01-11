@@ -98,6 +98,8 @@
       border: none;
       padding: 0.5rem;
       margin-top: 0.5rem;
+      z-index: 1050;
+      position: absolute;
     }
     
     .dropdown-item {
@@ -127,11 +129,14 @@
       transition: var(--transition);
       background: white;
       overflow: hidden;
+      position: relative;
+      z-index: 1;
     }
     
     .card:hover {
       box-shadow: var(--card-shadow-hover);
       transform: translateY(-4px);
+      z-index: 2;
     }
     
     .card-header {
