@@ -129,7 +129,7 @@
         <div class="col-md-6 text-md-end">
           <small class="text-muted update-time">
             <i class="bi bi-clock me-1"></i>
-            Actualizado: {{ now().strftime('%H:%M') }}
+            <span class="current-time"></span>
           </small>
         </div>
       </div>
@@ -189,17 +189,23 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
   
-  // Update time every minute
-  setInterval(() => {
+  // Update time display
+  function updateTime() {
     const now = new Date();
     const timeString = now.toLocaleTimeString('es-ES', { 
       hour: '2-digit', 
       minute: '2-digit' 
     });
-    document.querySelectorAll('.update-time').forEach(el => {
-      el.innerHTML = `<i class="bi bi-clock me-1"></i>Actualizado: ${timeString}`;
+    document.querySelectorAll('.current-time').forEach(el => {
+      el.textContent = `Actualizado: ${timeString}`;
     });
-  }, 60000);
+  }
+  
+  // Set initial time
+  updateTime();
+  
+  // Update every minute
+  setInterval(updateTime, 60000);
 });
 </script>
 {% endblock %}
