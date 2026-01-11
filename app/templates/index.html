@@ -363,16 +363,3 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 {% endblock %}
-  const tableRows = document.querySelectorAll('.table tbody tr');
-  tableRows.forEach(row => {
-    row.addEventListener('mouseenter', function() {
-      this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-    });
-    
-    row.addEventListener('mouseleave', function() {
-      this.style.boxShadow = 'none';
-    });
-  });
-});
-</script>
-{% endblock %}
