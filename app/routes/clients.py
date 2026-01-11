@@ -32,7 +32,8 @@ def list():
         has_actions=True,
         detail_endpoint='clients.detail',
         edit_endpoint='clients.edit',
-        delete_endpoint='clients.delete'
+        delete_endpoint='clients.delete',
+        id_param='client_id'
     )
 
 

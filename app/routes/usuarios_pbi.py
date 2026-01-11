@@ -32,7 +32,8 @@ def list():
         has_actions=True,
         detail_endpoint='usuarios_pbi.detail',
         edit_endpoint='usuarios_pbi.edit',
-        delete_endpoint='usuarios_pbi.delete'
+        delete_endpoint='usuarios_pbi.delete',
+        id_param='usuario_pbi_id'
     )
 
 

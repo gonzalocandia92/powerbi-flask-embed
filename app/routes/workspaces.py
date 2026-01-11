@@ -32,7 +32,8 @@ def list():
         has_actions=True,
         detail_endpoint='workspaces.detail',
         edit_endpoint='workspaces.edit',
-        delete_endpoint='workspaces.delete'
+        delete_endpoint='workspaces.delete',
+        id_param='workspace_id'
     )
 
 

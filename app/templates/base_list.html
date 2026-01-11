@@ -85,14 +85,14 @@
               <td class="text-center">
                 <div class="btn-group" role="group">
                   {% if detail_endpoint %}
-                  <a href="{{ url_for(detail_endpoint, **{model_name_plural.rstrip('s') + '_id': item.id}) }}" 
+                  <a href="{{ url_for(detail_endpoint, **{id_param: item.id}) }}" 
                      class="btn btn-sm btn-outline-info" 
                      title="Ver detalle">
                     <i class="bi bi-info-circle"></i>
                   </a>
                   {% endif %}
                   {% if edit_endpoint %}
-                  <a href="{{ url_for(edit_endpoint, **{model_name_plural.rstrip('s') + '_id': item.id}) }}" 
+                  <a href="{{ url_for(edit_endpoint, **{id_param: item.id}) }}" 
                      class="btn btn-sm btn-outline-secondary" 
                      title="Editar">
                     <i class="bi bi-pencil"></i>
@@ -101,7 +101,7 @@
                   {% if delete_endpoint %}
                   <button type="button" 
                           class="btn btn-sm btn-outline-danger delete-btn" 
-                          data-action="{{ url_for(delete_endpoint, **{model_name_plural.rstrip('s') + '_id': item.id}) }}"
+                          data-action="{{ url_for(delete_endpoint, **{id_param: item.id}) }}"
                           data-item="{{ model_name|lower }}"
                           title="Eliminar">
                     <i class="bi bi-trash"></i>
