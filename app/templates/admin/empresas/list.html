@@ -64,21 +64,20 @@
                     </button>
                   </form>
                   
-                  <form method="POST" action="{{ url_for('empresas.regenerate_credentials', empresa_id=empresa.id) }}" style="display:inline;">
-                    <button type="submit" class="btn btn-sm btn-outline-secondary" 
-                            title="Regenerar Credenciales"
-                            onclick="return confirm('¿Está seguro de regenerar las credenciales? Las antiguas dejarán de funcionar.');">
-                      <i class="bi bi-arrow-clockwise"></i>
-                    </button>
-                  </form>
+                  <button type="button" 
+                          class="btn btn-sm btn-outline-secondary regenerate-btn" 
+                          data-action="{{ url_for('empresas.regenerate_credentials', empresa_id=empresa.id) }}"
+                          title="Regenerar Credenciales">
+                    <i class="bi bi-arrow-clockwise"></i>
+                  </button>
                   
-                  <form method="POST" action="{{ url_for('empresas.delete', empresa_id=empresa.id) }}" style="display:inline;">
-                    <button type="submit" class="btn btn-sm btn-outline-danger" 
-                            title="Eliminar"
-                            onclick="return confirm('¿Está seguro de eliminar esta empresa?');">
-                      <i class="bi bi-trash"></i>
-                    </button>
-                  </form>
+                  <button type="button"
+                          class="btn btn-sm btn-outline-danger delete-empresa-btn" 
+                          data-action="{{ url_for('empresas.delete', empresa_id=empresa.id) }}"
+                          data-nombre="{{ empresa.nombre }}"
+                          title="Eliminar">
+                    <i class="bi bi-trash"></i>
+                  </button>
                 </div>
               </td>
             </tr>
@@ -96,4 +95,67 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Regenerate credentials confirmation
+  document.querySelectorAll('.regenerate-btn').forEach(button => {
+    button.addEventListener('click', function() {
+      const action = this.dataset.action;
+      
+      Swal.fire({
+        title: '¿Regenerar credenciales?',
+        text: 'Las credenciales antiguas dejarán de funcionar inmediatamente.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#f39c12',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, regenerar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  });
+  
+  // Delete empresa confirmation
+  document.querySelectorAll('.delete-empresa-btn').forEach(button => {
+    button.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const nombre = this.dataset.nombre;
+      
+      Swal.fire({
+        title: '¿Está seguro?',
+        html: `¿Desea eliminar la empresa <strong>"${nombre}"</strong>?<br><small class="text-muted">Esta acción no se puede deshacer.</small>`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  });
+});
+</script>
 {% endblock %}

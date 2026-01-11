@@ -218,15 +218,14 @@
                         title="Ver Analytics">
                         <i class="bi bi-graph-up"></i>
                       </a>
-                      <form 
-                        method="POST" 
-                        action="{{ url_for('configs.delete_link', config_id=link.report_config_id, link_id=link.id) }}" 
-                        style="display:inline;"
-                        onsubmit="return confirm('¿Está seguro de eliminar este link público? Esta acción no se puede deshacer.');">
-                        <button type="submit" class="btn btn-sm btn-outline-danger" title="Eliminar">
-                          <i class="bi bi-trash"></i>
-                        </button>
-                      </form>
+                      <button 
+                        type="button"
+                        class="btn btn-sm btn-outline-danger delete-link-btn" 
+                        data-action="{{ url_for('configs.delete_link', config_id=link.report_config_id, link_id=link.id) }}"
+                        data-slug="{{ link.custom_slug }}"
+                        title="Eliminar">
+                        <i class="bi bi-trash"></i>
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -288,58 +287,61 @@
 
 {% block scripts %}
 <script>
-function copyToClipboard(elementId, button) {
-  const copyText = document.getElementById(elementId);
-  copyText.select();
-  copyText.setSelectionRange(0, 99999);
-  
-  const copyToClipboardFallback = (text) => {
-    if (navigator.clipboard && window.isSecureContext) {
-      return navigator.clipboard.writeText(text);
-    }
-    
-    const textArea = document.createElement('textarea');
-    textArea.value = text;
-    textArea.style.position = 'fixed';
-    textArea.style.left = '-999999px';
-    textArea.style.top = '-999999px';
-    document.body.appendChild(textArea);
-    textArea.focus();
-    textArea.select();
-    
-    try {
-      const successful = document.execCommand('copy');
-      document.body.removeChild(textArea);
-      if (successful) {
-        return Promise.resolve();
-      } else {
-        return Promise.reject(new Error('Fallback copy failed'));
-      }
-    } catch (err) {
-      document.body.removeChild(textArea);
-      return Promise.reject(err);
-    }
-  };
-  
-  copyToClipboardFallback(copyText.value).then(function() {
-    const originalHTML = button.innerHTML;
-    button.innerHTML = '<i class="bi bi-check-lg"></i>';
-    button.classList.remove('btn-outline-primary');
-    button.classList.add('btn-success');
-    
-    setTimeout(() => {
-      button.innerHTML = originalHTML;
-      button.classList.remove('btn-success');
-      button.classList.add('btn-outline-primary');
-    }, 2000);
-  }).catch(function(err) {
-    console.error('Error al copiar: ', err);
-    copyText.focus();
-    copyText.select();
-  });
-}
-
 document.addEventListener('DOMContentLoaded', function() {
+  // Delete confirmation with SweetAlert2
+  document.querySelectorAll('.delete-link-btn').forEach(button => {
+    button.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const slug = this.dataset.slug;
+      
+      Swal.fire({
+        title: '¿Está seguro?',
+        html: `¿Desea eliminar el link público <code class="text-danger">${slug}</code>?<br><small class="text-muted">Esta acción no se puede deshacer.</small>`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          // Create and submit form
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  });
+
+  // Copy to clipboard with SweetAlert notification
+  window.copyToClipboard = function(elementId, button) {
+    const copyText = document.getElementById(elementId);
+    copyText.select();
+    
+    navigator.clipboard.writeText(copyText.value).then(() => {
+      showSuccess('URL copiada al portapapeles');
+      const originalHTML = button.innerHTML;
+      button.innerHTML = '<i class="bi bi-check-lg"></i>';
+      button.classList.remove('btn-outline-primary');
+      button.classList.add('btn-success');
+      
+      setTimeout(() => {
+        button.innerHTML = originalHTML;
+        button.classList.remove('btn-success');
+        button.classList.add('btn-outline-primary');
+      }, 2000);
+    }).catch(() => {
+      showError('Error al copiar la URL');
+      copyText.focus();
+      copyText.select();
+    });
+  };
+
   // Auto-select text on click
   const linkInputs = document.querySelectorAll('input[readonly]');
   linkInputs.forEach(input => {
@@ -348,7 +350,19 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   });
 
-  // Row hover effects
+  // Row hover effects (keep existing functionality)
+  const tableRows = document.querySelectorAll('.table tbody tr');
+  tableRows.forEach(row => {
+    row.addEventListener('mouseenter', function() {
+      this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
+    });
+    row.addEventListener('mouseleave', function() {
+      this.style.boxShadow = 'none';
+    });
+  });
+});
+</script>
+{% endblock %}
   const tableRows = document.querySelectorAll('.table tbody tr');
   tableRows.forEach(row => {
     row.addEventListener('mouseenter', function() {

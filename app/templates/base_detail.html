@@ -1,0 +1,158 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ entity_name }}: {{ entity_display_name }} - PowerBI Embed{% endblock %}
+
+{% block body %}
+<div class="container-fluid py-4">
+  <div class="row">
+    <!-- Main Content -->
+    <div class="col-md-8">
+      <!-- Entity Information Card -->
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">
+            <i class="bi {{ entity_icon }} me-2"></i>{{ entity_name }}: {{ entity_display_name }}
+          </h5>
+        </div>
+        <div class="card-body">
+          <dl class="row">
+            {% block entity_fields %}{% endblock %}
+          </dl>
+        </div>
+      </div>
+
+      <!-- Associated Configurations Card -->
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">
+            <i class="bi bi-gear me-2"></i>Configuraciones Asociadas
+          </h5>
+        </div>
+        <div class="card-body">
+          {% if configs %}
+          <div class="table-responsive">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nombre</th>
+                  <th>Workspace</th>
+                  <th>Reporte</th>
+                  <th class="text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for config in configs %}
+                <tr>
+                  <td><code>{{ config.id }}</code></td>
+                  <td>{{ config.name }}</td>
+                  <td>{{ config.workspace.name if config.workspace else 'N/A' }}</td>
+                  <td>{{ config.report.name if config.report else 'N/A' }}</td>
+                  <td class="text-center">
+                    <a href="{{ url_for('configs.detail', config_id=config.id) }}" 
+                       class="btn btn-sm btn-outline-info">
+                      <i class="bi bi-info-circle"></i>
+                    </a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="alert alert-info mb-0">
+            <i class="bi bi-info-circle me-2"></i>
+            No hay configuraciones asociadas.
+          </div>
+          {% endif %}
+        </div>
+        {% if configs %}
+        <div class="card-footer">
+          <small class="text-muted">
+            <i class="bi bi-database me-1"></i>
+            Total: <strong>{{ configs|length }}</strong> configuración(es)
+          </small>
+        </div>
+        {% endif %}
+      </div>
+
+      {% block additional_content %}{% endblock %}
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">
+            <i class="bi bi-lightning me-2"></i>Acciones Rápidas
+          </h6>
+        </div>
+        <div class="card-body">
+          <div class="d-grid gap-2">
+            {% block quick_actions %}
+            <a href="{{ edit_url }}" class="btn btn-outline-secondary">
+              <i class="bi bi-pencil me-2"></i>Editar {{ entity_name }}
+            </a>
+            <a href="{{ list_url }}" class="btn btn-outline-primary">
+              <i class="bi bi-arrow-left me-2"></i>Volver al Listado
+            </a>
+            <hr>
+            <button type="button" 
+                    class="btn btn-outline-danger w-100 delete-entity-btn"
+                    data-action="{{ delete_url }}"
+                    data-entity="{{ entity_name }}">
+              <i class="bi bi-trash me-2"></i>Eliminar {{ entity_name }}
+            </button>
+            {% endblock %}
+          </div>
+        </div>
+        <div class="card-footer">
+          <small class="text-muted">
+            <i class="bi bi-info-circle me-1"></i>
+            {{ configs|length }} configuración(es) asociada(s)
+          </small>
+        </div>
+      </div>
+
+      {% block sidebar_additional %}{% endblock %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Delete confirmation with SweetAlert2
+  const deleteBtn = document.querySelector('.delete-entity-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const entityName = this.dataset.entity;
+      
+      Swal.fire({
+        title: '¿Está seguro?',
+        text: `¿Desea eliminar este ${entityName}? Esta acción no se puede deshacer.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          // Create and submit form
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  }
+});
+</script>
+{% endblock %}

@@ -161,19 +161,18 @@
             
             <hr>
             
-            <form method="POST" action="{{ url_for('empresas.regenerate_credentials', empresa_id=empresa.id) }}" 
-                  onsubmit="return confirm('¿Está seguro de regenerar las credenciales? Las antiguas dejarán de funcionar.');">
-              <button type="submit" class="btn btn-outline-info w-100">
-                <i class="bi bi-arrow-clockwise me-2"></i>Regenerar Credenciales
-              </button>
-            </form>
+            <button type="button"
+                    class="btn btn-outline-info w-100 regenerate-btn"
+                    data-action="{{ url_for('empresas.regenerate_credentials', empresa_id=empresa.id) }}">
+              <i class="bi bi-arrow-clockwise me-2"></i>Regenerar Credenciales
+            </button>
             
-            <form method="POST" action="{{ url_for('empresas.delete', empresa_id=empresa.id) }}" 
-                  onsubmit="return confirm('¿Está seguro de eliminar esta empresa? Esta acción no se puede deshacer.');">
-              <button type="submit" class="btn btn-outline-danger w-100">
-                <i class="bi bi-trash me-2"></i>Eliminar Empresa
-              </button>
-            </form>
+            <button type="button"
+                    class="btn btn-outline-danger w-100 delete-empresa-btn"
+                    data-action="{{ url_for('empresas.delete', empresa_id=empresa.id) }}"
+                    data-nombre="{{ empresa.nombre }}">
+              <i class="bi bi-trash me-2"></i>Eliminar Empresa
+            </button>
           </div>
         </div>
       </div>
@@ -201,13 +200,79 @@
   </div>
 </div>
 
+{% endblock %}
+
+{% block scripts %}
 <script>
+// Copy to clipboard with SweetAlert notification
 function copyToClipboard(text) {
   navigator.clipboard.writeText(text).then(function() {
-    alert('Client ID copiado al portapapeles');
+    showSuccess('Client ID copiado al portapapeles');
   }, function(err) {
+    showError('Error al copiar el Client ID');
     console.error('Error al copiar: ', err);
   });
 }
+
+document.addEventListener('DOMContentLoaded', function() {
+  // Regenerate credentials confirmation
+  const regenerateBtn = document.querySelector('.regenerate-btn');
+  if (regenerateBtn) {
+    regenerateBtn.addEventListener('click', function() {
+      const action = this.dataset.action;
+      
+      Swal.fire({
+        title: '¿Regenerar credenciales?',
+        text: 'Las credenciales antiguas dejarán de funcionar inmediatamente.',
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#f39c12',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, regenerar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  }
+  
+  // Delete empresa confirmation
+  const deleteBtn = document.querySelector('.delete-empresa-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const nombre = this.dataset.nombre;
+      
+      Swal.fire({
+        title: '¿Está seguro?',
+        html: `¿Desea eliminar la empresa <strong>"${nombre}"</strong>?<br><small class="text-muted">Esta acción no se puede deshacer.</small>`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  }
+});
 </script>
 {% endblock %}
