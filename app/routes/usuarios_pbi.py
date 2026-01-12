@@ -33,7 +33,7 @@ def list():
         detail_endpoint='usuarios_pbi.detail',
         edit_endpoint='usuarios_pbi.edit',
         delete_endpoint='usuarios_pbi.delete',
-        id_param='usuario_pbi_id'
+        id_param='usuario_id'
     )
 
 
