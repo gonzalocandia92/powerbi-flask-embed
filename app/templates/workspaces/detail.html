@@ -1,0 +1,19 @@
+{% extends "base_detail.html" %}
+
+{% set entity_name = "Workspace" %}
+{% set entity_display_name = workspace.name %}
+{% set entity_icon = "bi-columns-gap" %}
+{% set edit_url = url_for('workspaces.edit', workspace_id=workspace.id) %}
+{% set list_url = url_for('workspaces.list') %}
+{% set delete_url = url_for('workspaces.delete', workspace_id=workspace.id) %}
+
+{% block entity_fields %}
+<dt class="col-sm-3">ID</dt>
+<dd class="col-sm-9"><code>{{ workspace.id }}</code></dd>
+
+<dt class="col-sm-3">Nombre</dt>
+<dd class="col-sm-9"><strong>{{ workspace.name }}</strong></dd>
+
+<dt class="col-sm-3">Workspace ID</dt>
+<dd class="col-sm-9"><code>{{ workspace.workspace_id }}</code></dd>
+{% endblock %}

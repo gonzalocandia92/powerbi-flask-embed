@@ -1,0 +1,20 @@
+{% extends "base_detail.html" %}
+
+{% set entity_name = "Tenant" %}
+{% set entity_display_name = tenant.name %}
+{% set entity_icon = "bi-buildings" %}
+{% set edit_url = url_for('tenants.edit', tenant_id=tenant.id) %}
+{% set list_url = url_for('tenants.list') %}
+{% set delete_url = url_for('tenants.delete', tenant_id=tenant.id) %}
+
+{% block entity_fields %}
+<dt class="col-sm-3">ID</dt>
+<dd class="col-sm-9"><code>{{ tenant.id }}</code></dd>
+
+<dt class="col-sm-3">Nombre</dt>
+<dd class="col-sm-9"><strong>{{ tenant.name }}</strong></dd>
+
+<dt class="col-sm-3">Tenant ID</dt>
+<dd class="col-sm-9"><code>{{ tenant.tenant_id }}</code></dd>
+{% endblock %}
+

@@ -2,7 +2,7 @@
 WTForms for the Power BI Flask Embed application.
 """
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, BooleanField, SubmitField, SelectField
+from wtforms import StringField, PasswordField, BooleanField, SubmitField, SelectField, TextAreaField, SelectMultipleField
 from wtforms.validators import DataRequired, Length
 
 
@@ -67,8 +67,17 @@ class ReportConfigForm(FlaskForm):
     workspace = SelectField("Workspace", coerce=int, validators=[DataRequired()])
     report = SelectField("Report", coerce=int, validators=[DataRequired()])
     usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])
-    tipo_privacidad = SelectField("Tipo de Privacidad", choices=[('publico', 'Público'), ('privado', 'Privado')], validators=[DataRequired()])
-    cliente_privado = SelectField("Cliente Privado", coerce=int, validators=[])
+    es_publico = BooleanField("Es Público (accesible sin autenticación)")
+    es_privado = BooleanField("Es Privado (requiere autenticación de empresa)")
+    empresas = SelectField("Empresas Asociadas", coerce=int, validators=[])
+    submit = SubmitField("Guardar")
+
+
+class EmpresaForm(FlaskForm):
+    """Form for creating/editing empresas (formerly private clients)."""
+    
+    nombre = StringField("Nombre de la Empresa", validators=[DataRequired(), Length(max=200)])
+    cuit = StringField("CUIT", validators=[Length(max=20)])
     submit = SubmitField("Guardar")
 
 
@@ -82,8 +91,15 @@ class PublicLinkForm(FlaskForm):
     submit = SubmitField("Crear Link")
 
 
+class FuturaEmpresaForm(FlaskForm):
+    """Form for reviewing/processing future empresas."""
+    
+    notas = TextAreaField("Notas", validators=[Length(max=500)])
+    submit = SubmitField("Guardar")
+
+
 class ClientePrivadoForm(FlaskForm):
-    """Form for creating/editing private clients."""
+    """Form for creating/editing private clients (deprecated - use EmpresaForm)."""
     
     nombre = StringField("Nombre del Cliente", validators=[DataRequired(), Length(max=200)])
     submit = SubmitField("Guardar")

@@ -1,0 +1,30 @@
+{% extends "base_detail.html" %}
+
+{% set entity_name = "Report" %}
+{% set entity_display_name = report.name %}
+{% set entity_icon = "bi-bar-chart-line" %}
+{% set edit_url = url_for('reports.edit', report_id=report.id) %}
+{% set list_url = url_for('reports.list') %}
+{% set delete_url = url_for('reports.delete', report_id=report.id) %}
+
+{% block entity_fields %}
+<dt class="col-sm-3">ID</dt>
+<dd class="col-sm-9"><code>{{ report.id }}</code></dd>
+
+<dt class="col-sm-3">Nombre</dt>
+<dd class="col-sm-9"><strong>{{ report.name }}</strong></dd>
+
+<dt class="col-sm-3">Report ID</dt>
+<dd class="col-sm-9"><code>{{ report.report_id }}</code></dd>
+
+<dt class="col-sm-3">Embed URL</dt>
+<dd class="col-sm-9">
+  {% if report.embed_url %}
+  <a href="{{ report.embed_url }}" target="_blank" class="text-primary">
+    <i class="bi bi-link-45deg me-1"></i>Ver URL
+  </a>
+  {% else %}
+  <span class="text-muted">No disponible</span>
+  {% endif %}
+</dd>
+{% endblock %}

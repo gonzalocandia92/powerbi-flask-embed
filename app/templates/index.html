@@ -1,344 +1,372 @@
 {% extends "layout.html" %}
 
-{% block body %}
-<div class="container-fluid py-4">
-    <!-- Header mejorado -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <h2 class="h3 fw-bold text-dark mb-1">
-                <i class="bi bi-speedometer2 me-2 text-primary"></i>Dashboard
-            </h2>
-            <p class="text-muted mb-0">
-                <i class="bi bi-info-circle me-1"></i>
-                Resumen y gestión de configuraciones Power BI
-            </p>
-        </div>
-        <a class="btn btn-success px-4" href="{{ url_for('configs.new') }}">
-            <i class="bi bi-plus-circle me-2"></i> Nueva Configuración
-        </a>
-    </div>
-
-    <!-- Tabla de configuraciones mejorada -->
-    {% if configs %}
-    <div class="card border-0 shadow-lg">
-        <div class="card-header bg-white border-0 py-3">
-            <div class="d-flex justify-content-between align-items-center">
-                <h5 class="mb-0 text-dark fw-semibold">
-                    <i class="bi bi-list-check me-2"></i>Configuraciones Disponibles
-                </h5>
-                <span class="badge bg-primary bg-opacity-10 text-primary fs-6">
-                    {{ configs|length }} registros
-                </span>
-            </div>
-        </div>
-        
-        <div class="card-body p-0">
-            <div class="table-responsive">
-                <table class="table table-hover align-middle mb-0">
-                    <thead class="table-dark">
-                        <tr>
-                            <th class="px-4 py-3 border-0 fw-semibold">Nombre</th>
-                            <th class="px-4 py-3 border-0 fw-semibold">Tenant</th>
-                            <th class="px-4 py-3 border-0 fw-semibold">Client</th>
-                            <th class="px-4 py-3 border-0 fw-semibold">Workspace</th>
-                            <th class="px-4 py-3 border-0 fw-semibold">Report</th>
-                            <th class="px-4 py-3 border-0 fw-semibold">Links Públicos</th>
-                            <th class="px-4 py-3 border-0 fw-semibold text-center">Acciones</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                    {% for c in configs %}
-                        <tr class="border-bottom">
-                            <td class="px-4 py-3">
-                                <div class="d-flex align-items-center">
-                                    <div class="bg-primary bg-opacity-10 rounded-circle p-2 me-3">
-                                        <i class="bi bi-gear text-primary"></i>
-                                    </div>
-                                    <div>
-                                        <strong class="text-dark d-block">{{ c.name }}</strong>
-                                        <small class="text-muted">Creado: {{ c.created_at.strftime('%d/%m/%Y') if c.created_at else 'N/A' }}</small>
-                                    </div>
-                                </div>
-                            </td>
-                            <td class="px-4 py-3">
-                                <span class="badge bg-light text-dark border">
-                                    <i class="bi bi-buildings me-1"></i>{{ c.tenant.name }}
-                                </span>
-                            </td>
-                            <td class="px-4 py-3">
-                                <span class="badge bg-light text-dark border">
-                                    <i class="bi bi-person-badge me-1"></i>{{ c.client.name }}
-                                </span>
-                            </td>
-                            <td class="px-4 py-3">
-                                <span class="badge bg-light text-dark border">
-                                    <i class="bi bi-columns-gap me-1"></i>{{ c.workspace.name }}
-                                </span>
-                            </td>
-                            <td class="px-4 py-3">
-                                <span class="badge bg-light text-dark border">
-                                    <i class="bi bi-bar-chart-line me-1"></i>{{ c.report.name }}
-                                </span>
-                            </td>
-                            <td class="px-4 py-3">
-                                {% set config_links = links_by_config.get(c.id, []) %}
-                                {% if config_links %}
-                                    <div class="d-flex flex-column gap-2">
-                                        {% for link in config_links %}
-                                            {% if link.is_active %}
-                                            <div class="d-flex align-items-center">
-                                                <div class="input-group input-group-sm" style="min-width: 280px;">
-                                                    <input type="text" 
-                                                        id="link-{{ link.id }}" 
-                                                        value="https://{{ request.host }}/p/{{ link.custom_slug }}" 
-                                                        readonly 
-                                                        class="form-control border-end-0">
-                                                    <button class="btn btn-outline-primary border-start-0" 
-                                                            onclick="copyToClipboard('link-{{ link.id }}', this)"
-                                                            title="Copiar link"
-                                                            data-bs-toggle="tooltip">
-                                                        <i class="bi bi-clipboard"></i>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                            {% endif %}
-                                        {% endfor %}
-                                    </div>
-                                {% else %}
-                                    <span class="text-muted small">
-                                        <i class="bi bi-link-45deg me-1"></i>No hay links
-                                    </span>
-                                {% endif %}
-                            </td>
-                            <td class="px-4 py-3 text-center">
-                                <div class="btn-group-vertical btn-group-sm">
-                                    <a href="{{ url_for('configs.new_link', config_id=c.id) }}" 
-                                    class="btn btn-outline-success mb-1" 
-                                    title="Crear nuevo link público"
-                                    data-bs-toggle="tooltip">
-                                        <i class="bi bi-plus-circle me-1"></i>Nuevo Link
-                                    </a>
-                                    <a href="{{ url_for('configs.view', config_id=c.id) }}" 
-                                       class="btn btn-outline-primary" 
-                                       title="Vista previa del reporte"
-                                       data-bs-toggle="tooltip">
-                                        <i class="bi bi-eye me-1"></i>Ver Reporte
-                                    </a>
-                                </div>
-                            </td>
-                        </tr>
-                    {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- Footer de la tabla -->
-        <div class="card-footer bg-light border-0 py-3">
-            <div class="row align-items-center">
-                <div class="col-md-6">
-                    <small class="text-muted">
-                        <i class="bi bi-database me-1"></i>
-                        Total: <strong>{{ configs|length }}</strong> configuraciones
-                    </small>
-                </div>
-                <div class="col-md-6 text-md-end">
-                    <small class="text-muted update-time">
-                        <i class="bi bi-clock me-1"></i>
-                        Actualizado recientemente
-                    </small>
-                </div>
-            </div>
-        </div>
-    </div>
-    {% else %}
-    <!-- Estado vacío mejorado -->
-    <div class="text-center py-5">
-        <div class="mb-4">
-            <div class="bg-primary bg-opacity-10 rounded-circle d-inline-flex p-5">
-                <i class="bi bi-inboxes-fill display-2 text-primary"></i>
-            </div>
-        </div>
-        <h3 class="text-dark mb-3">No hay configuraciones</h3>
-        <p class="text-muted mb-4 lead">
-            Comienza creando tu primera configuración para visualizar reportes Power BI.
-        </p>
-        <a href="{{ url_for('configs.new') }}" class="btn btn-primary btn-lg px-4">
-            <i class="bi bi-plus-circle me-2"></i> Crear Primera Configuración
-        </a>
-    </div>
-    {% endif %}
-</div>
-{% endblock %}
+{% block title %}Dashboard - PowerBI Embed{% endblock %}
 
 {% block styles %}
 <style>
-.card {
+  .analytics-card {
     border-radius: 12px;
-    overflow: hidden;
-}
-
-.table th {
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    transition: transform 0.2s;
+    border: none;
+    position: relative;
+    z-index: 1;
+  }
+  
+  .analytics-card:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  
+  .filter-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+    color: white !important;
+    border: none;
+    z-index: 1 !important;
+  }
+  
+  .filter-card .card-body {
+    background: transparent !important;
+  }
+  
+  .filter-card .form-label {
+    color: white !important;
     font-weight: 600;
-    font-size: 0.85rem;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    background: linear-gradient(135deg, #2c3e50, #3498db);
+  }
+  
+  .filter-card .form-control,
+  .filter-card .form-select {
+    background: rgba(255,255,255,0.2);
+    border: 1px solid rgba(255,255,255,0.3);
     color: white;
-}
-
-.table tbody tr {
+  }
+  
+  .filter-card .form-control::placeholder {
+    color: rgba(255,255,255,0.7);
+  }
+  
+  .filter-card .form-control:focus {
+    background: rgba(255,255,255,0.3);
+    border-color: rgba(255,255,255,0.5);
+    color: white;
+  }
+  
+  .filter-card .btn-light {
+    font-weight: 600;
+  }
+  
+  .table-hover tbody tr {
     transition: all 0.2s ease;
-    border-left: 3px solid transparent;
-}
-
-.table tbody tr:hover {
-    border-left-color: #3498db;
-    background-color: rgba(52, 152, 219, 0.03);
+  }
+  
+  .table-hover tbody tr:hover {
+    background-color: rgba(102, 126, 234, 0.05);
     transform: translateX(2px);
-}
-
-.badge {
-    font-weight: 500;
+  }
+  
+  .badge-custom {
     padding: 0.4em 0.8em;
     border-radius: 6px;
-}
-
-.input-group .form-control:focus {
-    box-shadow: none;
-    border-color: #dee2e6;
-}
-
-.btn-group-vertical .btn {
-    border-radius: 6px !important;
-    margin-bottom: 0.25rem;
-}
-
-.card-header {
-    border-bottom: 1px solid rgba(0,0,0,0.08);
-}
+    font-weight: 500;
+  }
 </style>
+{% endblock %}
+
+{% block body %}
+<div class="container-fluid py-4">
+  <!-- Header -->
+  <div class="row mb-4">
+    <div class="col">
+      <h1 class="display-5 fw-bold">
+        <i class="bi bi-speedometer2 text-primary"></i> Dashboard
+      </h1>
+      <p class="text-muted">Gestión de URLs Públicas de Reportes Power BI</p>
+    </div>
+  </div>
+
+  <!-- Filter Card -->
+  <div class="row mb-4">
+    <div class="col-12">
+      <div class="card analytics-card filter-card">
+        <div class="card-body">
+          <form method="GET" action="{{ url_for('main.index') }}">
+            <div class="row align-items-end">
+              <div class="col-md-9">
+                <label for="search" class="form-label">
+                  <i class="bi bi-search me-2"></i>Buscar por nombre de URL, configuración o reporte
+                </label>
+                <input 
+                  type="text" 
+                  class="form-control" 
+                  id="search" 
+                  name="search" 
+                  placeholder="Escribe para buscar..."
+                  value="{{ search_query or '' }}"
+                  autocomplete="off">
+              </div>
+              <div class="col-md-3">
+                <button type="submit" class="btn btn-light w-100">
+                  <i class="bi bi-funnel me-2"></i>Filtrar
+                </button>
+              </div>
+            </div>
+            {% if search_query %}
+            <div class="row mt-2">
+              <div class="col-12">
+                <a href="{{ url_for('main.index') }}" class="btn btn-sm btn-outline-light">
+                  <i class="bi bi-x-circle me-1"></i>Limpiar filtro
+                </a>
+              </div>
+            </div>
+            {% endif %}
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Public Links Table -->
+  <div class="row">
+    <div class="col-12">
+      <div class="card analytics-card">
+        <div class="card-header bg-white border-0 py-3">
+          <div class="d-flex justify-content-between align-items-center">
+            <h5 class="mb-0 text-dark fw-semibold">
+              <i class="bi bi-link-45deg me-2"></i>URLs Públicas
+            </h5>
+            <span class="badge bg-primary bg-opacity-10 text-primary fs-6">
+              {{ public_links|length }} {% if search_query %}resultados{% else %}URLs activas{% endif %}
+            </span>
+          </div>
+        </div>
+
+        <div class="card-body p-0">
+          {% if public_links %}
+          <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th class="px-4 py-3">Nombre URL</th>
+                  <th class="px-4 py-3">Configuración</th>
+                  <th class="px-4 py-3">Reporte</th>
+                  <th class="px-4 py-3">Workspace</th>
+                  <th class="px-4 py-3">URL Completo</th>
+                  <th class="px-4 py-3">Creado</th>
+                  <th class="px-4 py-3 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for link in public_links %}
+                <tr>
+                  <td class="px-4 py-3">
+                    <div class="d-flex align-items-center">
+                      <div class="bg-primary bg-opacity-10 rounded-circle p-2 me-3">
+                        <i class="bi bi-link-45deg text-primary"></i>
+                      </div>
+                      <div>
+                        <strong class="text-dark">{{ link.custom_slug }}</strong>
+                      </div>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class="badge badge-custom bg-light text-dark border">
+                      {{ link.report_config.name }}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class="badge badge-custom bg-info bg-opacity-10 text-info border border-info">
+                      <i class="bi bi-bar-chart-line me-1"></i>{{ link.report_config.report.name }}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <span class="badge badge-custom bg-secondary bg-opacity-10 text-secondary border border-secondary">
+                      <i class="bi bi-columns-gap me-1"></i>{{ link.report_config.workspace.name }}
+                    </span>
+                  </td>
+                  <td class="px-4 py-3">
+                    <div class="input-group input-group-sm" style="max-width: 350px;">
+                      <input 
+                        type="text" 
+                        id="link-{{ link.id }}" 
+                        value="https://{{ request.host }}/p/{{ link.custom_slug }}" 
+                        readonly 
+                        class="form-control border-end-0 bg-light">
+                      <button 
+                        class="btn btn-outline-primary border-start-0" 
+                        onclick="copyToClipboard('link-{{ link.id }}', this)"
+                        title="Copiar URL">
+                        <i class="bi bi-clipboard"></i>
+                      </button>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3">
+                    <small class="text-muted">
+                      {{ link.created_at.strftime('%d/%m/%Y') if link.created_at else 'N/A' }}
+                    </small>
+                  </td>
+                  <td class="px-4 py-3">
+                    <div class="btn-group" role="group">
+                      <a 
+                        href="{{ url_for('public.view', custom_slug=link.custom_slug) }}" 
+                        class="btn btn-sm btn-outline-primary" 
+                        title="Ver Reporte"
+                        target="_blank">
+                        <i class="bi bi-eye"></i>
+                      </a>
+                      <a 
+                        href="{{ url_for('configs.edit_link', config_id=link.report_config_id, link_id=link.id) }}" 
+                        class="btn btn-sm btn-outline-secondary" 
+                        title="Editar URL">
+                        <i class="bi bi-pencil"></i>
+                      </a>
+                      <a 
+                        href="{{ url_for('analytics.dashboard') }}?link_slug={{ link.custom_slug }}" 
+                        class="btn btn-sm btn-outline-info" 
+                        title="Ver Analytics">
+                        <i class="bi bi-graph-up"></i>
+                      </a>
+                      <button 
+                        type="button"
+                        class="btn btn-sm btn-outline-danger delete-link-btn" 
+                        data-action="{{ url_for('configs.delete_link', config_id=link.report_config_id, link_id=link.id) }}"
+                        data-slug="{{ link.custom_slug }}"
+                        title="Eliminar">
+                        <i class="bi bi-trash"></i>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <!-- Empty state -->
+          <div class="text-center py-5">
+            <div class="mb-4">
+              <div class="bg-primary bg-opacity-10 rounded-circle d-inline-flex p-5">
+                <i class="bi bi-link-45deg display-2 text-primary"></i>
+              </div>
+            </div>
+            {% if search_query %}
+            <h4 class="text-dark mb-3">No se encontraron resultados</h4>
+            <p class="text-muted mb-4">
+              No hay URLs que coincidan con "{{ search_query }}"
+            </p>
+            <a href="{{ url_for('main.index') }}" class="btn btn-outline-primary">
+              <i class="bi bi-arrow-left me-2"></i>Ver todas las URLs
+            </a>
+            {% else %}
+            <h4 class="text-dark mb-3">No hay URLs públicas</h4>
+            <p class="text-muted mb-4">
+              Crea una configuración y luego genera URLs públicas para compartir reportes.
+            </p>
+            <a href="{{ url_for('configs.new') }}" class="btn btn-primary px-4">
+              <i class="bi bi-plus-circle me-2"></i>Nueva Configuración
+            </a>
+            {% endif %}
+          </div>
+          {% endif %}
+        </div>
+
+        {% if public_links %}
+        <div class="card-footer bg-light border-0 py-3">
+          <div class="row align-items-center">
+            <div class="col-md-6">
+              <small class="text-muted">
+                <i class="bi bi-database me-1"></i>
+                Total: <strong>{{ public_links|length }}</strong> URLs
+              </small>
+            </div>
+            <div class="col-md-6 text-md-end">
+              <a href="{{ url_for('configs.list') }}" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-gear me-1"></i>Gestionar Configuraciones
+              </a>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script>
-function copyToClipboard(elementId, button) {
+document.addEventListener('DOMContentLoaded', function() {
+  // Delete confirmation with SweetAlert2
+  document.querySelectorAll('.delete-link-btn').forEach(button => {
+    button.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const slug = this.dataset.slug;
+      
+      Swal.fire({
+        title: '¿Está seguro?',
+        html: `¿Desea eliminar el link público <code class="text-danger">${slug}</code>?<br><small class="text-muted">Esta acción no se puede deshacer.</small>`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          // Create and submit form
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  });
+
+  // Copy to clipboard with SweetAlert notification
+  window.copyToClipboard = function(elementId, button) {
     const copyText = document.getElementById(elementId);
     copyText.select();
-    copyText.setSelectionRange(0, 99999);
     
-    // Fallback robusto para clipboard
-    const copyToClipboardFallback = (text) => {
-        // Método 1: navigator.clipboard (moderno)
-        if (navigator.clipboard && window.isSecureContext) {
-            return navigator.clipboard.writeText(text);
-        }
-        
-        // Método 2: execCommand (legacy)
-        const textArea = document.createElement('textarea');
-        textArea.value = text;
-        textArea.style.position = 'fixed';
-        textArea.style.left = '-999999px';
-        textArea.style.top = '-999999px';
-        document.body.appendChild(textArea);
-        textArea.focus();
-        textArea.select();
-        
-        try {
-            const successful = document.execCommand('copy');
-            document.body.removeChild(textArea);
-            if (successful) {
-                return Promise.resolve();
-            } else {
-                return Promise.reject(new Error('Fallback copy failed'));
-            }
-        } catch (err) {
-            document.body.removeChild(textArea);
-            return Promise.reject(err);
-        }
-    };
-    
-    copyToClipboardFallback(copyText.value).then(function() {
-        // Feedback visual temporal
-        const originalHTML = button.innerHTML;
-        button.innerHTML = '<i class="bi bi-check-lg"></i>';
-        button.classList.remove('btn-outline-primary');
-        button.classList.add('btn-success');
-        button.setAttribute('data-bs-original-title', '¡Copiado!');
-        
-        // Actualizar tooltip
-        const tooltip = bootstrap.Tooltip.getInstance(button);
-        if (tooltip) {
-            tooltip.setContent({ '.tooltip-inner': '¡Copiado!' });
-        }
-        
-        setTimeout(() => {
-            button.innerHTML = originalHTML;
-            button.classList.remove('btn-success');
-            button.classList.add('btn-outline-primary');
-            button.setAttribute('data-bs-original-title', 'Copiar link');
-            
-            if (tooltip) {
-                tooltip.setContent({ '.tooltip-inner': 'Copiar link' });
-            }
-        }, 2000);
-    }).catch(function(err) {
-        console.error('Error al copiar: ', err);
-        // Fallback: mostrar el texto para copiar manualmente
-        copyText.focus();
-        copyText.select();
-        alert('Presiona Ctrl+C para copiar el link: ' + copyText.value);
+    navigator.clipboard.writeText(copyText.value).then(() => {
+      showSuccess('URL copiada al portapapeles');
+      const originalHTML = button.innerHTML;
+      button.innerHTML = '<i class="bi bi-check-lg"></i>';
+      button.classList.remove('btn-outline-primary');
+      button.classList.add('btn-success');
+      
+      setTimeout(() => {
+        button.innerHTML = originalHTML;
+        button.classList.remove('btn-success');
+        button.classList.add('btn-outline-primary');
+      }, 2000);
+    }).catch(() => {
+      showError('Error al copiar la URL');
+      copyText.focus();
+      copyText.select();
     });
-}
+  };
 
-document.addEventListener('DOMContentLoaded', function() {
-    // Inicializar tooltips
-    var tooltipTriggerList = [].slice.call(document.querySelectorAll('[data-bs-toggle="tooltip"]'));
-    var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
-        return new bootstrap.Tooltip(tooltipTriggerEl);
+  // Auto-select text on click
+  const linkInputs = document.querySelectorAll('input[readonly]');
+  linkInputs.forEach(input => {
+    input.addEventListener('click', function() {
+      this.select();
     });
+  });
 
-    // Seleccionar texto al hacer clic en inputs
-    const linkInputs = document.querySelectorAll('input[readonly]');
-    linkInputs.forEach(input => {
-        input.addEventListener('click', function() {
-            this.select();
-        });
-        
-        // También agregar doble clic para selección completa
-        input.addEventListener('dblclick', function() {
-            this.select();
-        });
+  // Row hover effects (keep existing functionality)
+  const tableRows = document.querySelectorAll('.table tbody tr');
+  tableRows.forEach(row => {
+    row.addEventListener('mouseenter', function() {
+      this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
     });
-
-    // Efectos hover en filas
-    const tableRows = document.querySelectorAll('.table tbody tr');
-    tableRows.forEach(row => {
-        row.addEventListener('mouseenter', function() {
-            this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-        });
-        
-        row.addEventListener('mouseleave', function() {
-            this.style.boxShadow = 'none';
-        });
+    row.addEventListener('mouseleave', function() {
+      this.style.boxShadow = 'none';
     });
-
-    // Actualizar hora
-    function updateTime() {
-        const now = new Date();
-        const timeElements = document.querySelectorAll('.update-time');
-        const timeString = now.toLocaleTimeString('es-ES', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-        });
-        
-        timeElements.forEach(el => {
-            el.innerHTML = `<i class="bi bi-clock me-1"></i>Actualizado: ${timeString}`;
-        });
-    }
-    
-    updateTime();
-    setInterval(updateTime, 60000);
+  });
 });
 </script>
 {% endblock %}

@@ -1,0 +1,25 @@
+{% extends "base_detail.html" %}
+
+{% set entity_name = "Usuario PBI" %}
+{% set entity_display_name = usuario.nombre %}
+{% set entity_icon = "bi-person-circle" %}
+{% set edit_url = url_for('usuarios_pbi.edit', usuario_pbi_id=usuario.id) %}
+{% set list_url = url_for('usuarios_pbi.list') %}
+{% set delete_url = url_for('usuarios_pbi.delete', usuario_pbi_id=usuario.id) %}
+
+{% block entity_fields %}
+<dt class="col-sm-3">ID</dt>
+<dd class="col-sm-9"><code>{{ usuario.id }}</code></dd>
+
+<dt class="col-sm-3">Nombre</dt>
+<dd class="col-sm-9"><strong>{{ usuario.nombre }}</strong></dd>
+
+<dt class="col-sm-3">Password</dt>
+<dd class="col-sm-9">
+  {% if usuario._password %}
+  <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>Configurado (Cifrado)</span>
+  {% else %}
+  <span class="badge bg-warning"><i class="bi bi-shield-exclamation me-1"></i>No configurado</span>
+  {% endif %}
+</dd>
+{% endblock %}

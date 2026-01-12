@@ -4,7 +4,7 @@ Integration tests for private API endpoints.
 import unittest
 import json
 from app import create_app, db
-from app.models import ClientePrivado, ReportConfig, User, Tenant, Client, Workspace, Report, UsuarioPBI
+from app.models import Empresa, ReportConfig, User, Tenant, Client, Workspace, Report, UsuarioPBI
 from app.services.credentials_service import generate_client_id, generate_client_secret, hash_client_secret
 
 
@@ -25,18 +25,19 @@ class PrivateAPITestCase(unittest.TestCase):
             db.drop_all()
             db.create_all()
             
-            # Create test private client
+            # Create test empresa
             self.test_client_id = generate_client_id()
             self.test_client_secret = generate_client_secret()
             
-            self.cliente_privado = ClientePrivado(
+            self.empresa = Empresa(
                 id=1,  # Explicit ID for SQLite compatibility
-                nombre="Test Client",
+                nombre="Test Empresa",
+                cuit="20-12345678-9",
                 client_id=self.test_client_id,
                 client_secret_hash=hash_client_secret(self.test_client_secret),
                 estado_activo=True
             )
-            db.session.add(self.cliente_privado)
+            db.session.add(self.empresa)
             db.session.commit()
     
     def tearDown(self):
@@ -98,11 +99,11 @@ class PrivateAPITestCase(unittest.TestCase):
             self.assertIn('error', data)
     
     def test_login_inactive_client(self):
-        """Test login with inactive client."""
+        """Test login with inactive empresa."""
         with self.app.app_context():
-            # Deactivate the client
-            cliente = ClientePrivado.query.filter_by(client_id=self.test_client_id).first()
-            cliente.estado_activo = False
+            # Deactivate the empresa
+            empresa = Empresa.query.filter_by(client_id=self.test_client_id).first()
+            empresa.estado_activo = False
             db.session.commit()
             
             response = self.client.post(

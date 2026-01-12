@@ -1,0 +1,107 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-gear-fill me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('configs.new') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-1"></i> Nueva Configuración
+    </a>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      {% if configs %}
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Nombre</th>
+              <th>Tenant</th>
+              <th>Client</th>
+              <th>Workspace</th>
+              <th>Report</th>
+              <th>Usuario PBI</th>
+              <th>Tipo</th>
+              <th>Empresas</th>
+              <th>Links Públicos</th>
+              <th class="text-end">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for config in configs %}
+            <tr>
+              <td>{{ config.id }}</td>
+              <td><strong>{{ config.name }}</strong></td>
+              <td>{{ config.tenant.name }}</td>
+              <td>{{ config.client.name }}</td>
+              <td>{{ config.workspace.name }}</td>
+              <td>{{ config.report.name }}</td>
+              <td>{{ config.usuario_pbi.nombre }}</td>
+              <td>
+                {% if config.es_publico %}
+                <span class="badge bg-success">Público</span>
+                {% endif %}
+                {% if config.es_privado %}
+                <span class="badge bg-info">Privado</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if config.es_privado %}
+                  {% if config.empresas %}
+                  <span class="badge bg-secondary">{{ config.empresas|length }}</span>
+                  {% else %}
+                  <span class="badge bg-warning text-dark">0</span>
+                  {% endif %}
+                {% else %}
+                <span class="text-muted">-</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if config.id in links_by_config %}
+                <span class="badge bg-primary">{{ links_by_config[config.id]|length }}</span>
+                {% else %}
+                <span class="text-muted">0</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('configs.detail', config_id=config.id) }}" 
+                     class="btn btn-sm btn-outline-info" title="Ver Detalles">
+                    <i class="bi bi-info-circle"></i>
+                  </a>
+                  <a href="{{ url_for('configs.view', config_id=config.id) }}" 
+                     class="btn btn-sm btn-outline-primary" title="Ver Reporte">
+                    <i class="bi bi-eye"></i>
+                  </a>
+                  <a href="{{ url_for('configs.edit', config_id=config.id) }}" 
+                     class="btn btn-sm btn-outline-secondary" title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  {% if config.es_publico %}
+                  <a href="{{ url_for('configs.new_link', config_id=config.id) }}" 
+                     class="btn btn-sm btn-outline-success" title="Nuevo Link Público">
+                    <i class="bi bi-link-45deg"></i>
+                  </a>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle me-2"></i>
+        No hay configuraciones registradas. 
+        <a href="{{ url_for('configs.new') }}" class="alert-link">Crear la primera</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -112,21 +112,34 @@ class UsuarioPBI(db.Model):
             return None
 
 
-class ClientePrivado(db.Model):
-    """Private client configuration for API access."""
+class Empresa(db.Model):
+    """Company configuration for API access (formerly ClientePrivado)."""
     
-    __tablename__ = 'clientes_privados'
+    __tablename__ = 'clientes_privados'  # Keep table name for backward compatibility
     
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     nombre = db.Column(db.String(200), nullable=False, unique=True)
+    cuit = db.Column(db.String(20), nullable=True)  # Tax ID for companies
     client_id = db.Column(db.String(200), nullable=False, unique=True)
     client_secret_hash = db.Column(db.String(256), nullable=False)
     estado_activo = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
     
-    # Relationship to report configs
-    report_configs = db.relationship('ReportConfig', back_populates='cliente_privado')
+    # Relationship to report configs (many-to-many)
+    report_configs = db.relationship('ReportConfig', secondary='empresa_report_config', back_populates='empresas')
+
+
+# Keep ClientePrivado as an alias for backward compatibility
+ClientePrivado = Empresa
+
+
+# Association table for many-to-many relationship between Empresa and ReportConfig
+empresa_report_config = db.Table('empresa_report_config',
+    db.Column('empresa_id', db.BigInteger, db.ForeignKey('clientes_privados.id'), primary_key=True),
+    db.Column('report_config_id', db.BigInteger, db.ForeignKey('report_configs.id'), primary_key=True),
+    db.Column('created_at', db.DateTime, default=datetime.utcnow)
+)
 
 
 class ReportConfig(db.Model):
@@ -143,8 +156,12 @@ class ReportConfig(db.Model):
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=False)
     usuario_pbi_id = db.Column(db.BigInteger, db.ForeignKey('usuarios_pbi.id'), nullable=False)
     
-    # Privacy fields
-    tipo_privacidad = db.Column(db.String(20), default='publico', nullable=True)  # 'publico' or 'privado'
+    # Privacy fields - reports can now be both public AND private
+    es_publico = db.Column(db.Boolean, default=True, nullable=False)  # Can be accessed publicly
+    es_privado = db.Column(db.Boolean, default=False, nullable=False)  # Can be accessed via API by empresas
+    
+    # Legacy field for backward compatibility (deprecated)
+    tipo_privacidad = db.Column(db.String(20), default='publico', nullable=True)
     cliente_privado_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id'), nullable=True)
     
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
@@ -154,7 +171,12 @@ class ReportConfig(db.Model):
     workspace = db.relationship('Workspace')
     report = db.relationship('Report')
     usuario_pbi = db.relationship('UsuarioPBI')
-    cliente_privado = db.relationship('ClientePrivado', back_populates='report_configs')
+    
+    # Many-to-many relationship with empresas
+    empresas = db.relationship('Empresa', secondary='empresa_report_config', back_populates='report_configs')
+    
+    # Backward compatibility
+    cliente_privado = db.relationship('Empresa', foreign_keys=[cliente_privado_id])
 
 
 class PublicLink(db.Model):
@@ -193,3 +215,27 @@ class Visit(db.Model):
     country = db.Column(db.String(2), nullable=True)  # ISO country code
     is_bot = db.Column(db.Boolean, default=False, nullable=False)
     session_duration = db.Column(db.Integer, nullable=True)  # seconds, for bounce rate calculation
+
+
+class FuturaEmpresa(db.Model):
+    """Pending company approval from external system."""
+    
+    __tablename__ = 'futuras_empresas'
+    
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    external_id = db.Column(db.String(200), nullable=False, unique=True)  # ID from external system
+    nombre = db.Column(db.String(200), nullable=False)
+    cuit = db.Column(db.String(20), nullable=True)
+    email = db.Column(db.String(200), nullable=True)
+    telefono = db.Column(db.String(50), nullable=True)
+    direccion = db.Column(db.String(500), nullable=True)
+    datos_adicionales = db.Column(db.Text, nullable=True)  # JSON string for additional data
+    estado = db.Column(db.String(20), default='pendiente', nullable=False)  # 'pendiente', 'confirmada', 'rechazada'
+    fecha_recepcion = db.Column(db.DateTime, default=datetime.utcnow, nullable=False)
+    fecha_procesamiento = db.Column(db.DateTime, nullable=True)
+    procesado_por_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id'), nullable=True)
+    empresa_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id'), nullable=True)  # Reference to created Empresa
+    notas = db.Column(db.Text, nullable=True)
+    
+    procesado_por = db.relationship('User', foreign_keys=[procesado_por_user_id])
+    empresa = db.relationship('Empresa', foreign_keys=[empresa_id])

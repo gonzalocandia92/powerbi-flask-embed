@@ -1,0 +1,151 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-building-check me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('futuras_empresas.list') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-left me-1"></i> Volver
+    </a>
+  </div>
+
+  <div class="row">
+    <div class="col-md-8">
+      <div class="card shadow-sm mb-4">
+        <div class="card-header bg-info text-white">
+          <h5 class="mb-0"><i class="bi bi-info-circle me-2"></i>Información General</h5>
+        </div>
+        <div class="card-body">
+          <dl class="row">
+            <dt class="col-sm-3">ID Externo:</dt>
+            <dd class="col-sm-9"><code>{{ futura.external_id }}</code></dd>
+            
+            <dt class="col-sm-3">Nombre:</dt>
+            <dd class="col-sm-9"><strong>{{ futura.nombre }}</strong></dd>
+            
+            <dt class="col-sm-3">CUIT:</dt>
+            <dd class="col-sm-9">{{ futura.cuit or 'No especificado' }}</dd>
+            
+            <dt class="col-sm-3">Email:</dt>
+            <dd class="col-sm-9">{{ futura.email or 'No especificado' }}</dd>
+            
+            <dt class="col-sm-3">Teléfono:</dt>
+            <dd class="col-sm-9">{{ futura.telefono or 'No especificado' }}</dd>
+            
+            <dt class="col-sm-3">Dirección:</dt>
+            <dd class="col-sm-9">{{ futura.direccion or 'No especificada' }}</dd>
+            
+            <dt class="col-sm-3">Estado:</dt>
+            <dd class="col-sm-9">
+              {% if futura.estado == 'pendiente' %}
+              <span class="badge bg-warning text-dark">Pendiente</span>
+              {% elif futura.estado == 'confirmada' %}
+              <span class="badge bg-success">Confirmada</span>
+              {% else %}
+              <span class="badge bg-danger">Rechazada</span>
+              {% endif %}
+            </dd>
+            
+            <dt class="col-sm-3">Fecha Recepción:</dt>
+            <dd class="col-sm-9">{{ futura.fecha_recepcion.strftime('%Y-%m-%d %H:%M:%S') if futura.fecha_recepcion else 'N/A' }}</dd>
+          </dl>
+        </div>
+      </div>
+
+      {% if datos_adicionales %}
+      <div class="card shadow-sm mb-4">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-file-earmark-text me-2"></i>Datos Adicionales</h5>
+        </div>
+        <div class="card-body">
+          <dl class="row">
+            {% for key, value in datos_adicionales.items() %}
+            <dt class="col-sm-4">{{ key }}:</dt>
+            <dd class="col-sm-8">{{ value }}</dd>
+            {% endfor %}
+          </dl>
+        </div>
+      </div>
+      {% endif %}
+
+      {% if futura.estado != 'pendiente' %}
+      <div class="card shadow-sm">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-clock-history me-2"></i>Información de Procesamiento</h5>
+        </div>
+        <div class="card-body">
+          <dl class="row">
+            <dt class="col-sm-3">Procesado Por:</dt>
+            <dd class="col-sm-9">{{ futura.procesado_por.username if futura.procesado_por else 'N/A' }}</dd>
+            
+            <dt class="col-sm-3">Fecha Procesamiento:</dt>
+            <dd class="col-sm-9">{{ futura.fecha_procesamiento.strftime('%Y-%m-%d %H:%M:%S') if futura.fecha_procesamiento else 'N/A' }}</dd>
+            
+            <dt class="col-sm-3">Notas:</dt>
+            <dd class="col-sm-9">{{ futura.notas or 'Sin notas' }}</dd>
+            
+            {% if futura.empresa %}
+            <dt class="col-sm-3">Empresa Creada:</dt>
+            <dd class="col-sm-9">
+              <a href="{{ url_for('empresas.edit', empresa_id=futura.empresa.id) }}" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-building me-1"></i>{{ futura.empresa.nombre }}
+              </a>
+            </dd>
+            {% endif %}
+          </dl>
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    <div class="col-md-4">
+      {% if futura.estado == 'pendiente' %}
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-success text-white">
+          <h6 class="mb-0"><i class="bi bi-check-circle me-2"></i>Confirmar Empresa</h6>
+        </div>
+        <div class="card-body">
+          <form method="POST" action="{{ url_for('futuras_empresas.confirm', futura_id=futura.id) }}">
+            <div class="mb-3">
+              <label for="notasConfirm" class="form-label">Notas (opcional)</label>
+              <textarea class="form-control" id="notasConfirm" name="notas" rows="3"></textarea>
+            </div>
+            <div class="alert alert-info small">
+              <i class="bi bi-info-circle me-1"></i>
+              Al confirmar, se creará una empresa en el sistema y se generarán credenciales automáticamente.
+            </div>
+            <button type="submit" class="btn btn-success w-100">
+              <i class="bi bi-check-circle me-1"></i>Confirmar Empresa
+            </button>
+          </form>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-header bg-danger text-white">
+          <h6 class="mb-0"><i class="bi bi-x-circle me-2"></i>Rechazar Empresa</h6>
+        </div>
+        <div class="card-body">
+          <form method="POST" action="{{ url_for('futuras_empresas.reject', futura_id=futura.id) }}">
+            <div class="mb-3">
+              <label for="notasReject" class="form-label">Motivo del rechazo (opcional)</label>
+              <textarea class="form-control" id="notasReject" name="notas" rows="3"></textarea>
+            </div>
+            <button type="submit" class="btn btn-danger w-100">
+              <i class="bi bi-x-circle me-1"></i>Rechazar Empresa
+            </button>
+          </form>
+        </div>
+      </div>
+      {% else %}
+      <div class="alert alert-{{ 'success' if futura.estado == 'confirmada' else 'danger' }}">
+        <i class="bi bi-info-circle me-2"></i>
+        Esta empresa ya fue procesada y está en estado <strong>{{ futura.estado }}</strong>.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

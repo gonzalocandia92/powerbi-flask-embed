@@ -1,0 +1,28 @@
+{% extends "base_detail.html" %}
+
+{% set entity_name = "Client" %}
+{% set entity_display_name = client.name %}
+{% set entity_icon = "bi-person-badge" %}
+{% set edit_url = url_for('clients.edit', client_id=client.id) %}
+{% set list_url = url_for('clients.list') %}
+{% set delete_url = url_for('clients.delete', client_id=client.id) %}
+
+{% block entity_fields %}
+<dt class="col-sm-3">ID</dt>
+<dd class="col-sm-9"><code>{{ client.id }}</code></dd>
+
+<dt class="col-sm-3">Nombre</dt>
+<dd class="col-sm-9"><strong>{{ client.name }}</strong></dd>
+
+<dt class="col-sm-3">Client ID</dt>
+<dd class="col-sm-9"><code>{{ client.client_id }}</code></dd>
+
+<dt class="col-sm-3">Client Secret</dt>
+<dd class="col-sm-9">
+  {% if client._client_secret %}
+  <span class="badge bg-success"><i class="bi bi-shield-check me-1"></i>Configurado (Cifrado)</span>
+  {% else %}
+  <span class="badge bg-warning"><i class="bi bi-shield-exclamation me-1"></i>No configurado</span>
+  {% endif %}
+</dd>
+{% endblock %}

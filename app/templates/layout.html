@@ -6,57 +6,525 @@
   <title>{% block title %}PowerBI Embed Admin{% endblock %}</title>
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
   <style>
-    body {
-      background-color: #f8f9fa;
+    /* Professional Theme - Enhanced Design System */
+    :root {
+      --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      --dark-gradient: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
+      --light-bg: #f4f6fb;
+      --card-shadow: 0 2px 12px rgba(0,0,0,0.08);
+      --card-shadow-hover: 0 8px 24px rgba(0,0,0,0.12);
+      --border-radius: 16px;
+      --transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
     }
     
+    body {
+      background: var(--light-bg);
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+      color: #2d3748;
+      line-height: 1.6;
+    }
+    
+    /* Enhanced Navbar */
     .navbar {
-      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-      background: linear-gradient(135deg, #2c3e50, #3498db) !important;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.12);
+      background: var(--dark-gradient) !important;
+      backdrop-filter: blur(10px);
+      padding: 0.75rem 0;
+      border-bottom: 2px solid rgba(255,255,255,0.1);
+      position: relative;
+      z-index: 1030;
     }
     
     .navbar-brand {
-      font-weight: 700;
-      font-size: 1.3rem;
+      font-weight: 800;
+      font-size: 1.4rem;
       letter-spacing: -0.5px;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      transition: var(--transition);
+    }
+    
+    .navbar-brand:hover {
+      transform: scale(1.05);
+      text-shadow: 0 4px 8px rgba(0,0,0,0.2);
+    }
+    
+    .navbar-brand i {
+      margin-right: 0.5rem;
+      font-size: 1.5rem;
+      vertical-align: middle;
     }
     
     .nav-link {
-      font-weight: 500;
-      transition: all 0.3s ease;
-      border-radius: 6px;
+      font-weight: 600;
+      transition: var(--transition);
+      border-radius: 10px;
       margin: 0 4px;
-      padding: 8px 12px !important;
+      padding: 10px 16px !important;
+      font-size: 0.95rem;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .nav-link::before {
+      content: '';
+      position: absolute;
+      top: 0;
+      left: -100%;
+      width: 100%;
+      height: 100%;
+      background: rgba(255,255,255,0.1);
+      transition: var(--transition);
+      z-index: -1;
+    }
+    
+    .nav-link:hover::before {
+      left: 0;
     }
     
     .nav-link:hover {
-      background: rgba(255,255,255,0.1);
+      background: rgba(255,255,255,0.15);
       transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     
     .nav-link.active {
       background: rgba(255,255,255,0.2);
+      box-shadow: inset 0 2px 8px rgba(0,0,0,0.1);
     }
     
-    .main-content {
-      margin-top: 20px;
+    .dropdown-menu {
+      border-radius: 12px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.15);
+      border: none;
+      padding: 0.5rem;
+      margin-top: 0.5rem;
+      z-index: 1050;
+      position: absolute;
     }
     
-    .table-responsive {
+    .dropdown-item {
       border-radius: 8px;
+      padding: 0.6rem 1rem;
+      transition: var(--transition);
+      font-weight: 500;
     }
     
+    .dropdown-item:hover {
+      background: var(--primary-gradient);
+      color: white;
+      transform: translateX(4px);
+    }
+    
+    .dropdown-divider {
+      margin: 0.5rem 0;
+      opacity: 0.2;
+    }
+    
+    /* Premium Card Styling */
+    .card {
+      border-radius: var(--border-radius);
+      box-shadow: var(--card-shadow);
+      border: none;
+      margin-bottom: 2rem;
+      transition: var(--transition);
+      background: white;
+      overflow: hidden;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .card:hover {
+      box-shadow: var(--card-shadow-hover);
+      transform: translateY(-4px);
+      z-index: 2;
+    }
+    
+    .card-header {
+      background: var(--primary-gradient);
+      color: white;
+      border: none;
+      padding: 1.25rem 1.75rem;
+      border-radius: var(--border-radius) var(--border-radius) 0 0 !important;
+      font-weight: 700;
+      position: relative;
+      overflow: hidden;
+    }
+    
+    .card-header::before {
+      content: '';
+      position: absolute;
+      top: -50%;
+      right: -50%;
+      width: 200%;
+      height: 200%;
+      background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
+      animation: shimmer 3s infinite;
+    }
+    
+    @keyframes shimmer {
+      0%, 100% { transform: translate(0, 0); }
+      50% { transform: translate(-20%, -20%); }
+    }
+    
+    .card-header h4,
+    .card-header h5,
+    .card-header h6 {
+      color: white;
+      margin: 0;
+      font-weight: 700;
+      position: relative;
+      z-index: 1;
+    }
+    
+    .card-header i {
+      margin-right: 0.5rem;
+      font-size: 1.2em;
+    }
+    
+    .card-body {
+      padding: 2rem;
+      background: white;
+    }
+    
+    .card-footer {
+      background: linear-gradient(to bottom, #fafbfc, #f4f6fb);
+      border-top: 1px solid rgba(0,0,0,0.05);
+      padding: 1.25rem 1.75rem;
+      border-radius: 0 0 var(--border-radius) var(--border-radius);
+    }
+    
+    /* Premium Table Styling */
+    .table {
+      margin-bottom: 0;
+    }
+    
+    .table thead th {
+      background: var(--dark-gradient);
+      color: white;
+      border: none;
+      font-weight: 700;
+      text-transform: uppercase;
+      font-size: 0.8rem;
+      letter-spacing: 1px;
+      padding: 1.2rem 1rem;
+      position: relative;
+    }
+    
+    .table thead th::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+    }
+    
+    .table tbody tr {
+      transition: var(--transition);
+      border-left: 4px solid transparent;
+      background: white;
+    }
+    
+    .table tbody tr:hover {
+      background: linear-gradient(90deg, rgba(102, 126, 234, 0.03), white);
+      border-left-color: #667eea;
+      transform: translateX(4px);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    
+    .table tbody td {
+      padding: 1.2rem 1rem;
+      vertical-align: middle;
+      border-bottom: 1px solid rgba(0,0,0,0.04);
+    }
+    
+    /* Enhanced Button Styling */
+    .btn {
+      border-radius: 10px;
+      font-weight: 600;
+      padding: 0.6rem 1.4rem;
+      transition: var(--transition);
+      border: none;
+      position: relative;
+      overflow: hidden;
+      text-transform: capitalize;
+    }
+    
+    .btn::before {
+      content: '';
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: 0;
+      height: 0;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.3);
+      transform: translate(-50%, -50%);
+      transition: width 0.6s, height 0.6s;
+    }
+    
+    .btn:hover::before {
+      width: 300px;
+      height: 300px;
+    }
+    
+    .btn:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 6px 20px rgba(0,0,0,0.2);
+    }
+    
+    .btn:active {
+      transform: translateY(-1px);
+    }
+    
+    .btn-primary {
+      background: var(--primary-gradient);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+    }
+    
+    .btn-primary:hover {
+      background: linear-gradient(135deg, #5568d3 0%, #66398b 100%);
+      box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    }
+    
+    .btn-success {
+      background: linear-gradient(135deg, #56ab2f 0%, #a8e063 100%);
+      box-shadow: 0 4px 12px rgba(86, 171, 47, 0.3);
+    }
+    
+    .btn-danger {
+      background: linear-gradient(135deg, #eb3349 0%, #f45c43 100%);
+      box-shadow: 0 4px 12px rgba(235, 51, 73, 0.3);
+    }
+    
+    .btn-warning {
+      background: linear-gradient(135deg, #f2994a 0%, #f2c94c 100%);
+      box-shadow: 0 4px 12px rgba(242, 153, 74, 0.3);
+      color: #2d3748;
+    }
+    
+    .btn-info {
+      background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+      box-shadow: 0 4px 12px rgba(79, 172, 254, 0.3);
+    }
+    
+    .btn-outline-primary {
+      border: 2px solid #667eea;
+      color: #667eea;
+      background: transparent;
+    }
+    
+    .btn-outline-primary:hover {
+      background: var(--primary-gradient);
+      color: white;
+      border-color: transparent;
+    }
+    
+    /* Premium Badge Styling */
+    .badge {
+      padding: 0.5em 1em;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 0.85rem;
+      letter-spacing: 0.3px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+    }
+    
+    /* Enhanced Code Styling */
+    code {
+      background: linear-gradient(135deg, rgba(102, 126, 234, 0.1), rgba(118, 75, 162, 0.1));
+      border: 1px solid rgba(102, 126, 234, 0.3);
+      border-radius: 6px;
+      padding: 0.3em 0.6em;
+      font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace;
+      font-size: 0.875em;
+      color: #667eea;
+      font-weight: 600;
+    }
+    
+    /* Premium Alert Styling */
+    .alert {
+      border-radius: 12px;
+      border: none;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.1);
+      padding: 1.2rem 1.5rem;
+      border-left: 4px solid;
+    }
+    
+    .alert-success {
+      background: linear-gradient(135deg, rgba(86, 171, 47, 0.1), rgba(168, 224, 99, 0.1));
+      border-left-color: #56ab2f;
+      color: #2d5016;
+    }
+    
+    .alert-danger {
+      background: linear-gradient(135deg, rgba(235, 51, 73, 0.1), rgba(244, 92, 67, 0.1));
+      border-left-color: #eb3349;
+      color: #5c1319;
+    }
+    
+    .alert-warning {
+      background: linear-gradient(135deg, rgba(242, 153, 74, 0.1), rgba(242, 201, 76, 0.1));
+      border-left-color: #f2994a;
+      color: #5c3d1a;
+    }
+    
+    .alert-info {
+      background: linear-gradient(135deg, rgba(79, 172, 254, 0.1), rgba(0, 242, 254, 0.1));
+      border-left-color: #4facfe;
+      color: #1a3d5c;
+    }
+    
+    /* Page Header Enhancement */
+    .page-header {
+      margin-bottom: 2.5rem;
+      padding-bottom: 1.5rem;
+      border-bottom: 3px solid rgba(102, 126, 234, 0.2);
+      position: relative;
+    }
+    
+    .page-header::after {
+      content: '';
+      position: absolute;
+      bottom: -3px;
+      left: 0;
+      width: 100px;
+      height: 3px;
+      background: var(--primary-gradient);
+      box-shadow: 0 0 20px rgba(102, 126, 234, 0.5);
+    }
+    
+    .page-header h1,
+    .page-header h2 {
+      color: #1a202c;
+      font-weight: 800;
+      margin-bottom: 0.5rem;
+    }
+    
+    /* Enhanced Empty State */
+    .empty-state {
+      text-align: center;
+      padding: 5rem 2rem;
+    }
+    
+    .empty-state .icon-wrapper {
+      background: var(--primary-gradient);
+      border-radius: 50%;
+      width: 140px;
+      height: 140px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-bottom: 2rem;
+      box-shadow: 0 8px 32px rgba(102, 126, 234, 0.3);
+      animation: pulse 2s infinite;
+    }
+    
+    @keyframes pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.05); }
+    }
+    
+    .empty-state .icon-wrapper i {
+      font-size: 3.5rem;
+      color: white;
+    }
+    
+    .empty-state h4 {
+      color: #1a202c;
+      font-weight: 700;
+      margin-bottom: 1rem;
+    }
+    
+    /* Form Enhancements */
+    .form-control,
+    .form-select {
+      border-radius: 10px;
+      border: 2px solid #e2e8f0;
+      padding: 0.75rem 1rem;
+      transition: var(--transition);
+      font-weight: 500;
+    }
+    
+    .form-control:focus,
+    .form-select:focus {
+      border-color: #667eea;
+      box-shadow: 0 0 0 4px rgba(102, 126, 234, 0.1);
+    }
+    
+    .form-label {
+      font-weight: 600;
+      color: #2d3748;
+      margin-bottom: 0.5rem;
+    }
+    
+    /* Input Group Enhancement */
+    .input-group-text {
+      border-radius: 10px;
+      border: 2px solid #e2e8f0;
+      background: linear-gradient(135deg, #f7fafc, #edf2f7);
+      font-weight: 600;
+    }
+    
+    /* Scrollbar Styling */
+    ::-webkit-scrollbar {
+      width: 12px;
+      height: 12px;
+    }
+    
+    ::-webkit-scrollbar-track {
+      background: #f1f1f1;
+      border-radius: 10px;
+    }
+    
+    ::-webkit-scrollbar-thumb {
+      background: var(--primary-gradient);
+      border-radius: 10px;
+    }
+    
+    ::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(135deg, #5568d3 0%, #66398b 100%);
+    }
+    
+    /* Loading Spinner */
+    .spinner-border {
+      border-width: 3px;
+    }
+    
+    /* Responsive Design */
     @media (max-width: 991px) {
       .navbar-collapse {
-        background: rgba(0,0,0,0.1);
-        margin-top: 10px;
-        padding: 15px;
-        border-radius: 8px;
+        background: rgba(0,0,0,0.15);
+        margin-top: 15px;
+        padding: 20px;
+        border-radius: 12px;
+        backdrop-filter: blur(10px);
       }
       
       .nav-link {
-        margin: 4px 0;
+        margin: 6px 0;
+      }
+      
+      .card-body {
+        padding: 1.5rem;
+      }
+    }
+    
+    @media (max-width: 576px) {
+      .card-header {
+        padding: 1rem 1.25rem;
+      }
+      
+      .card-body {
+        padding: 1.25rem;
+      }
+      
+      .btn {
+        padding: 0.5rem 1rem;
+        font-size: 0.9rem;
       }
     }
   </style>
@@ -66,7 +534,7 @@
 <nav class="navbar navbar-expand-lg navbar-dark">
   <div class="container-fluid">
     <a class="navbar-brand" href="{{ url_for('main.index') }}">
-      <i class="bi bi-graph-up me-2"></i>Power BI Admin
+      <i class="bi bi-graph-up-arrow me-2"></i>Power BI Admin
     </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
       <span class="navbar-toggler-icon"></span>
@@ -96,11 +564,33 @@
             <li><a class="dropdown-item" href="{{ url_for('usuarios_pbi.list') }}"><i class="bi bi-person-circle me-2"></i>Usuarios PBI</a></li>
             <li><a class="dropdown-item" href="{{ url_for('configs.list') }}"><i class="bi bi-gear-fill me-2"></i>Configuraciones</a></li>
             <li><hr class="dropdown-divider"></li>
-            <li><a class="dropdown-item" href="{{ url_for('admin_clientes_privados.list') }}"><i class="bi bi-shield-lock me-2"></i>Clientes Privados</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('empresas.list') }}"><i class="bi bi-building me-2"></i>Empresas</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('admin_clientes_privados.list') }}"><i class="bi bi-shield-lock me-2"></i>Clientes Privados (Legacy)</a></li>
+          </ul>
+        </li>
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="navbarFuturas" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-building-check me-1"></i>Futuras Empresas
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="navbarFuturas">
+            <li><a class="dropdown-item" href="{{ url_for('futuras_empresas.list') }}"><i class="bi bi-list-check me-2"></i>Listado</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li>
+              <form method="POST" action="{{ url_for('futuras_empresas.simulate_fetch') }}" style="display:inline;">
+                <button type="submit" class="dropdown-item">
+                  <i class="bi bi-cloud-download me-2"></i>Simular Consulta Externa
+                </button>
+              </form>
+            </li>
           </ul>
         </li>
       </ul>
       <ul class="navbar-nav">
+        <li class="nav-item">
+          <a class="nav-link" href="/docs" target="_blank">
+            <i class="bi bi-file-earmark-text me-1"></i>API Docs
+          </a>
+        </li>
         {% if current_user.is_authenticated %}
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown" aria-expanded="false">
@@ -142,6 +632,61 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+<script>
+// Global SweetAlert2 configuration
+const Toast = Swal.mixin({
+  toast: true,
+  position: 'top-end',
+  showConfirmButton: false,
+  timer: 3000,
+  timerProgressBar: true,
+  didOpen: (toast) => {
+    toast.addEventListener('mouseenter', Swal.stopTimer)
+    toast.addEventListener('mouseleave', Swal.resumeTimer)
+  }
+});
+
+// Confirmation dialog helper
+function confirmDelete(message, title = '¿Está seguro?', confirmText = 'Sí, eliminar') {
+  return Swal.fire({
+    title: title,
+    text: message,
+    icon: 'warning',
+    showCancelButton: true,
+    confirmButtonColor: '#d33',
+    cancelButtonColor: '#3085d6',
+    confirmButtonText: confirmText,
+    cancelButtonText: 'Cancelar',
+    reverseButtons: true,
+    focusCancel: true
+  });
+}
+
+// Success notification
+function showSuccess(message) {
+  Toast.fire({
+    icon: 'success',
+    title: message
+  });
+}
+
+// Error notification
+function showError(message) {
+  Toast.fire({
+    icon: 'error',
+    title: message
+  });
+}
+
+// Info notification
+function showInfo(message) {
+  Toast.fire({
+    icon: 'info',
+    title: message
+  });
+}
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>
