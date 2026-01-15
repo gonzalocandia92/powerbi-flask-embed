@@ -9,11 +9,23 @@
     box-shadow: 0 2px 4px rgba(0,0,0,0.1);
     transition: transform 0.2s;
     border: none;
+    background: #ffffff;
+    color: #2d3748;
   }
   
   .analytics-card:hover {
     transform: translateY(-4px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  
+  .analytics-card .card-body {
+    background: transparent;
+    color: inherit;
+  }
+  
+  .analytics-card.text-white .card-body,
+  .analytics-card[class*="bg-"] .card-body {
+    color: inherit;
   }
   
   .stat-number {
@@ -28,6 +40,11 @@
     text-transform: uppercase;
     font-weight: 600;
     letter-spacing: 1px;
+  }
+
+  .analytics-card.text-white .stat-label,
+  .analytics-card[class*="bg-"] .stat-label {
+    color: rgba(255,255,255,0.85);
   }
   
   .chart-container {
