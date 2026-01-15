@@ -13,6 +13,7 @@
       --primary-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
       --dark-gradient: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%);
       --light-bg: #f4f6fb;
+      --card-header-text-dark: #2d3748;
       --card-shadow: 0 2px 12px rgba(0,0,0,0.08);
       --card-shadow-hover: 0 8px 24px rgba(0,0,0,0.12);
       --border-radius: 16px;
@@ -180,17 +181,12 @@
     
     .card-header.bg-white,
     .card-header.bg-light {
-      background: white;
-      color: #2d3748;
+      color: var(--card-header-text-dark);
     }
     
-    .card-header.bg-white h4,
-    .card-header.bg-white h5,
-    .card-header.bg-white h6,
-    .card-header.bg-light h4,
-    .card-header.bg-light h5,
-    .card-header.bg-light h6 {
-      color: #2d3748;
+    .card-header.bg-white :is(h4, h5, h6, i),
+    .card-header.bg-light :is(h4, h5, h6, i) {
+      color: var(--card-header-text-dark);
     }
     
     .card-header i {
