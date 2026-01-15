@@ -11,6 +11,7 @@
     border: none;
     background: #ffffff;
     color: #2d3748;
+    --analytics-stat-color: #7f8c8d;
   }
   
   .analytics-card:hover {
@@ -23,15 +24,8 @@
     color: inherit;
   }
   
-  .analytics-card.text-white .card-body,
-  .analytics-card.bg-primary .card-body,
-  .analytics-card.bg-success .card-body,
-  .analytics-card.bg-info .card-body,
-  .analytics-card.bg-warning .card-body,
-  .analytics-card.bg-danger .card-body,
-  .analytics-card.bg-secondary .card-body,
-  .analytics-card.bg-dark .card-body {
-    color: inherit;
+  .analytics-card:is(.text-white, .bg-primary, .bg-success, .bg-info, .bg-warning, .bg-danger, .bg-secondary, .bg-dark) {
+    --analytics-stat-color: rgba(255,255,255,0.85);
   }
   
   .stat-number {
@@ -42,21 +36,10 @@
   
   .stat-label {
     font-size: 0.9rem;
-    color: #7f8c8d;
+    color: var(--analytics-stat-color);
     text-transform: uppercase;
     font-weight: 600;
     letter-spacing: 1px;
-  }
-
-  .analytics-card.text-white .stat-label,
-  .analytics-card.bg-primary .stat-label,
-  .analytics-card.bg-success .stat-label,
-  .analytics-card.bg-info .stat-label,
-  .analytics-card.bg-warning .stat-label,
-  .analytics-card.bg-danger .stat-label,
-  .analytics-card.bg-secondary .stat-label,
-  .analytics-card.bg-dark .stat-label {
-    color: rgba(255,255,255,0.85);
   }
   
   .chart-container {
