@@ -69,7 +69,7 @@ class ReportConfigForm(FlaskForm):
     usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])
     es_publico = BooleanField("Es Público (accesible sin autenticación)")
     es_privado = BooleanField("Es Privado (requiere autenticación de empresa)")
-    empresas = SelectField("Empresas Asociadas", coerce=int, validators=[])
+    empresas = SelectMultipleField("Empresas Asociadas", coerce=int, validators=[])
     submit = SubmitField("Guardar")
 
 

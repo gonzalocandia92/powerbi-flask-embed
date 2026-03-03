@@ -86,7 +86,7 @@ def new():
             es_privado=es_privado
         )
         db.session.add(config)
-        db.session.flush()  # Get config ID
+        db.session.commit()
         
         flash("Configuración creada", "success")
         return redirect(url_for('configs.edit', config_id=config.id))
