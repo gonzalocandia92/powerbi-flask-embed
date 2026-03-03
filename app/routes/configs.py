@@ -57,6 +57,10 @@ def new():
     form.workspace.choices = [(w.id, w.name) for w in Workspace.query.order_by(Workspace.name).all()]
     form.report.choices = [(r.id, r.name) for r in Report.query.order_by(Report.name).all()]
     form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]
+    form.empresas.choices = [
+        (e.id, e.nombre)
+        for e in Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
+    ]
     
     if form.validate_on_submit():
         es_publico = form.es_publico.data
