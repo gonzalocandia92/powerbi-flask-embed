@@ -25,11 +25,11 @@
       <div class="card">
         <div class="card-header">
           <h5 class="mb-0">
-            <i class="bi bi-gear me-2"></i>Configuraciones Asociadas
+            <i class="bi bi-bar-chart-line me-2"></i>Reportes Asociados
           </h5>
         </div>
         <div class="card-body">
-          {% if configs %}
+          {% if reports %}
           <div class="table-responsive">
             <table class="table table-hover mb-0">
               <thead>
@@ -37,19 +37,17 @@
                   <th>ID</th>
                   <th>Nombre</th>
                   <th>Workspace</th>
-                  <th>Reporte</th>
                   <th class="text-center">Acciones</th>
                 </tr>
               </thead>
               <tbody>
-                {% for config in configs %}
+                {% for report in reports %}
                 <tr>
-                  <td><code>{{ config.id }}</code></td>
-                  <td>{{ config.name }}</td>
-                  <td>{{ config.workspace.name if config.workspace else 'N/A' }}</td>
-                  <td>{{ config.report.name if config.report else 'N/A' }}</td>
+                  <td><code>{{ report.id }}</code></td>
+                  <td>{{ report.name }}</td>
+                  <td>{{ report.workspace.name if report.workspace else 'N/A' }}</td>
                   <td class="text-center">
-                    <a href="{{ url_for('configs.detail', config_id=config.id) }}" 
+                    <a href="{{ url_for('reports.detail', report_id=report.id) }}" 
                        class="btn btn-sm btn-outline-info">
                       <i class="bi bi-info-circle"></i>
                     </a>
@@ -62,15 +60,15 @@
           {% else %}
           <div class="alert alert-info mb-0">
             <i class="bi bi-info-circle me-2"></i>
-            No hay configuraciones asociadas.
+            No hay reportes asociados.
           </div>
           {% endif %}
         </div>
-        {% if configs %}
+        {% if reports %}
         <div class="card-footer">
           <small class="text-muted">
             <i class="bi bi-database me-1"></i>
-            Total: <strong>{{ configs|length }}</strong> configuración(es)
+            Total: <strong>{{ reports|length }}</strong> reporte(s)
           </small>
         </div>
         {% endif %}
@@ -109,7 +107,7 @@
         <div class="card-footer">
           <small class="text-muted">
             <i class="bi bi-info-circle me-1"></i>
-            {{ configs|length }} configuración(es) asociada(s)
+            {{ reports|length }} reporte(s) asociado(s)
           </small>
         </div>
       </div>

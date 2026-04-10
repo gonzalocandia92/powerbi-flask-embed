@@ -93,7 +93,7 @@
             <div class="row align-items-end">
               <div class="col-md-9">
                 <label for="search" class="form-label">
-                  <i class="bi bi-search me-2"></i>Buscar por nombre de URL, configuración o reporte
+                  <i class="bi bi-search me-2"></i>Buscar por nombre de URL o reporte
                 </label>
                 <input 
                   type="text" 
@@ -147,7 +147,6 @@
               <thead class="table-light">
                 <tr>
                   <th class="px-4 py-3">Nombre URL</th>
-                  <th class="px-4 py-3">Configuración</th>
                   <th class="px-4 py-3">Reporte</th>
                   <th class="px-4 py-3">Workspace</th>
                   <th class="px-4 py-3">URL Completo</th>
@@ -169,18 +168,13 @@
                     </div>
                   </td>
                   <td class="px-4 py-3">
-                    <span class="badge badge-custom bg-light text-dark border">
-                      {{ link.report_config.name }}
-                    </span>
-                  </td>
-                  <td class="px-4 py-3">
                     <span class="badge badge-custom bg-info bg-opacity-10 text-info border border-info">
-                      <i class="bi bi-bar-chart-line me-1"></i>{{ link.report_config.report.name }}
+                      <i class="bi bi-bar-chart-line me-1"></i>{{ link.report.name }}
                     </span>
                   </td>
                   <td class="px-4 py-3">
                     <span class="badge badge-custom bg-secondary bg-opacity-10 text-secondary border border-secondary">
-                      <i class="bi bi-columns-gap me-1"></i>{{ link.report_config.workspace.name }}
+                      <i class="bi bi-columns-gap me-1"></i>{{ link.report.workspace.name }}
                     </span>
                   </td>
                   <td class="px-4 py-3">
@@ -214,7 +208,7 @@
                         <i class="bi bi-eye"></i>
                       </a>
                       <a 
-                        href="{{ url_for('configs.edit_link', config_id=link.report_config_id, link_id=link.id) }}" 
+                        href="{{ url_for('reports.edit_link', report_id=link.report_id_fk, link_id=link.id) }}" 
                         class="btn btn-sm btn-outline-secondary" 
                         title="Editar URL">
                         <i class="bi bi-pencil"></i>
@@ -228,7 +222,7 @@
                       <button 
                         type="button"
                         class="btn btn-sm btn-outline-danger delete-link-btn" 
-                        data-action="{{ url_for('configs.delete_link', config_id=link.report_config_id, link_id=link.id) }}"
+                        data-action="{{ url_for('reports.delete_link', report_id=link.report_id_fk, link_id=link.id) }}"
                         data-slug="{{ link.custom_slug }}"
                         title="Eliminar">
                         <i class="bi bi-trash"></i>
@@ -261,8 +255,8 @@
             <p class="text-muted mb-4">
               Crea una configuración y luego genera URLs públicas para compartir reportes.
             </p>
-            <a href="{{ url_for('configs.new') }}" class="btn btn-primary px-4">
-              <i class="bi bi-plus-circle me-2"></i>Nueva Configuración
+            <a href="{{ url_for('reports.new') }}" class="btn btn-primary px-4">
+              <i class="bi bi-plus-circle me-2"></i>Nuevo Reporte
             </a>
             {% endif %}
           </div>
@@ -279,8 +273,8 @@
               </small>
             </div>
             <div class="col-md-6 text-md-end">
-              <a href="{{ url_for('configs.list') }}" class="btn btn-sm btn-outline-primary">
-                <i class="bi bi-gear me-1"></i>Gestionar Configuraciones
+              <a href="{{ url_for('reports.list') }}" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-bar-chart-line me-1"></i>Gestionar Reportes
               </a>
             </div>
           </div>

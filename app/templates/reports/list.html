@@ -5,25 +5,28 @@
 {% block body %}
 <div class="container-fluid">
   <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="bi bi-gear-fill me-2"></i>{{ title }}</h2>
-    <a href="{{ url_for('configs.new') }}" class="btn btn-primary">
-      <i class="bi bi-plus-circle me-1"></i> Nueva Configuración
-    </a>
+    <h2><i class="bi bi-bar-chart-line me-2"></i>{{ title }}</h2>
+    <div>
+      <a href="{{ url_for('reports.from_url') }}" class="btn btn-outline-info me-2">
+        <i class="bi bi-link me-1"></i> Desde URL
+      </a>
+      <a href="{{ url_for('reports.new') }}" class="btn btn-primary">
+        <i class="bi bi-plus-circle me-1"></i> Nuevo Reporte
+      </a>
+    </div>
   </div>
 
   <div class="card shadow-sm">
     <div class="card-body">
-      {% if configs %}
+      {% if reports %}
       <div class="table-responsive">
         <table class="table table-hover">
           <thead class="table-light">
             <tr>
               <th>#</th>
               <th>Nombre</th>
-              <th>Tenant</th>
-              <th>Client</th>
               <th>Workspace</th>
-              <th>Report</th>
+              <th>Tenant</th>
               <th>Usuario PBI</th>
               <th>Tipo</th>
               <th>Empresas</th>
@@ -32,27 +35,25 @@
             </tr>
           </thead>
           <tbody>
-            {% for config in configs %}
+            {% for report in reports %}
             <tr>
-              <td>{{ config.id }}</td>
-              <td><strong>{{ config.name }}</strong></td>
-              <td>{{ config.tenant.name }}</td>
-              <td>{{ config.client.name }}</td>
-              <td>{{ config.workspace.name }}</td>
-              <td>{{ config.report.name }}</td>
-              <td>{{ config.usuario_pbi.nombre }}</td>
+              <td>{{ report.id }}</td>
+              <td><strong>{{ report.name }}</strong></td>
+              <td>{{ report.workspace.name if report.workspace else '-' }}</td>
+              <td>{{ report.workspace.tenant.name if report.workspace and report.workspace.tenant else '-' }}</td>
+              <td>{{ report.usuario_pbi.nombre if report.usuario_pbi else '-' }}</td>
               <td>
-                {% if config.es_publico %}
+                {% if report.es_publico %}
                 <span class="badge bg-success">Público</span>
                 {% endif %}
-                {% if config.es_privado %}
+                {% if report.es_privado %}
                 <span class="badge bg-info">Privado</span>
                 {% endif %}
               </td>
               <td>
-                {% if config.es_privado %}
-                  {% if config.empresas %}
-                  <span class="badge bg-secondary">{{ config.empresas|length }}</span>
+                {% if report.es_privado %}
+                  {% if report.empresas %}
+                  <span class="badge bg-secondary">{{ report.empresas|length }}</span>
                   {% else %}
                   <span class="badge bg-warning text-dark">0</span>
                   {% endif %}
@@ -61,28 +62,28 @@
                 {% endif %}
               </td>
               <td>
-                {% if config.id in links_by_config %}
-                <span class="badge bg-primary">{{ links_by_config[config.id]|length }}</span>
+                {% if report.id in links_by_report %}
+                <span class="badge bg-primary">{{ links_by_report[report.id]|length }}</span>
                 {% else %}
                 <span class="text-muted">0</span>
                 {% endif %}
               </td>
               <td class="text-end">
                 <div class="btn-group" role="group">
-                  <a href="{{ url_for('configs.detail', config_id=config.id) }}" 
+                  <a href="{{ url_for('reports.detail', report_id=report.id) }}"
                      class="btn btn-sm btn-outline-info" title="Ver Detalles">
                     <i class="bi bi-info-circle"></i>
                   </a>
-                  <a href="{{ url_for('configs.view', config_id=config.id) }}" 
+                  <a href="{{ url_for('reports.view_report', report_id=report.id) }}"
                      class="btn btn-sm btn-outline-primary" title="Ver Reporte">
                     <i class="bi bi-eye"></i>
                   </a>
-                  <a href="{{ url_for('configs.edit', config_id=config.id) }}" 
+                  <a href="{{ url_for('reports.edit', report_id=report.id) }}"
                      class="btn btn-sm btn-outline-secondary" title="Editar">
                     <i class="bi bi-pencil"></i>
                   </a>
-                  {% if config.es_publico %}
-                  <a href="{{ url_for('configs.new_link', config_id=config.id) }}" 
+                  {% if report.es_publico %}
+                  <a href="{{ url_for('reports.new_link', report_id=report.id) }}"
                      class="btn btn-sm btn-outline-success" title="Nuevo Link Público">
                     <i class="bi bi-link-45deg"></i>
                   </a>
@@ -97,8 +98,8 @@
       {% else %}
       <div class="alert alert-info">
         <i class="bi bi-info-circle me-2"></i>
-        No hay configuraciones registradas. 
-        <a href="{{ url_for('configs.new') }}" class="alert-link">Crear la primera</a>
+        No hay reportes registrados.
+        <a href="{{ url_for('reports.new') }}" class="alert-link">Crear el primero</a>
       </div>
       {% endif %}
     </div>

@@ -1,0 +1,97 @@
+{% extends "layout.html" %}
+
+{% block title %}Crear Reporte - Asistente URL - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-bar-chart-line me-2"></i>Crear Reporte</h2>
+    <a href="{{ url_for('reports.from_url') }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-left me-1"></i> Volver
+    </a>
+  </div>
+
+  <div class="row justify-content-center">
+    <div class="col-md-8 col-lg-6">
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle me-2"></i>
+        <strong>Asistente de URL - Paso 2:</strong> Complete los datos del reporte.
+      </div>
+
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-light">
+          <h6 class="mb-0 text-dark"><i class="bi bi-columns-gap me-2"></i>Workspace</h6>
+        </div>
+        <div class="card-body py-2">
+          <span class="fw-semibold">{{ workspace.name }}</span>
+          <code class="ms-2 small">{{ workspace.workspace_id }}</code>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-bar-chart-line me-2"></i>Nuevo Reporte</h5>
+        </div>
+        <div class="card-body">
+          <div class="mb-3">
+            <label class="form-label text-muted">Report GUID (extraído de la URL):</label>
+            <div><code class="fs-6">{{ report_guid }}</code></div>
+          </div>
+
+          <hr>
+
+          <form method="POST" novalidate>
+            {{ form.hidden_tag() }}
+
+            <div class="mb-3">
+              {{ form.name.label(class="form-label") }}
+              {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="Nombre del reporte") }}
+              {% if form.name.errors %}
+                <div class="invalid-feedback">
+                  {% for error in form.name.errors %}{{ error }}{% endfor %}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="mb-3">
+              {{ form.usuario_pbi.label(class="form-label") }}
+              {{ form.usuario_pbi(class="form-select" + (" is-invalid" if form.usuario_pbi.errors else "")) }}
+              {% if form.usuario_pbi.errors %}
+                <div class="invalid-feedback">
+                  {% for error in form.usuario_pbi.errors %}{{ error }}{% endfor %}
+                </div>
+              {% endif %}
+            </div>
+
+            <div class="card mb-3">
+              <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-shield-check me-2"></i>Configuración de Privacidad</h6>
+              </div>
+              <div class="card-body">
+                <div class="form-check mb-2">
+                  {{ form.es_publico(class="form-check-input") }}
+                  {{ form.es_publico.label(class="form-check-label") }}
+                  <div class="form-text">El reporte puede ser accedido mediante links públicos</div>
+                </div>
+
+                <div class="form-check">
+                  {{ form.es_privado(class="form-check-input") }}
+                  {{ form.es_privado.label(class="form-check-label") }}
+                  <div class="form-text">El reporte puede ser accedido por empresas vía API</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+              <a href="{{ url_for('reports.from_url') }}" class="btn btn-outline-secondary">
+                Cancelar
+              </a>
+              {{ form.submit(class="btn btn-primary") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,20 +1,167 @@
-{% extends "base_detail.html" %}
+{% extends "layout.html" %}
 
-{% set entity_name = "Tenant" %}
-{% set entity_display_name = tenant.name %}
-{% set entity_icon = "bi-buildings" %}
-{% set edit_url = url_for('tenants.edit', tenant_id=tenant.id) %}
-{% set list_url = url_for('tenants.list') %}
-{% set delete_url = url_for('tenants.delete', tenant_id=tenant.id) %}
+{% block title %}Tenant: {{ tenant.name }} - PowerBI Embed{% endblock %}
 
-{% block entity_fields %}
-<dt class="col-sm-3">ID</dt>
-<dd class="col-sm-9"><code>{{ tenant.id }}</code></dd>
+{% block body %}
+<div class="container-fluid py-4">
+  <div class="row">
+    <!-- Main Content -->
+    <div class="col-md-8">
+      <!-- Entity Information Card -->
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">
+            <i class="bi bi-buildings me-2"></i>Tenant: {{ tenant.name }}
+          </h5>
+        </div>
+        <div class="card-body">
+          <dl class="row">
+            <dt class="col-sm-3">ID</dt>
+            <dd class="col-sm-9"><code>{{ tenant.id }}</code></dd>
 
-<dt class="col-sm-3">Nombre</dt>
-<dd class="col-sm-9"><strong>{{ tenant.name }}</strong></dd>
+            <dt class="col-sm-3">Nombre</dt>
+            <dd class="col-sm-9"><strong>{{ tenant.name }}</strong></dd>
 
-<dt class="col-sm-3">Tenant ID</dt>
-<dd class="col-sm-9"><code>{{ tenant.tenant_id }}</code></dd>
+            <dt class="col-sm-3">Tenant ID</dt>
+            <dd class="col-sm-9"><code>{{ tenant.tenant_id }}</code></dd>
+
+            <dt class="col-sm-3">Client</dt>
+            <dd class="col-sm-9">
+              {% if tenant.client %}
+              <a href="{{ url_for('clients.detail', client_id=tenant.client.id) }}">{{ tenant.client.name }}</a>
+              {% else %}
+              <span class="text-muted">No asignado</span>
+              {% endif %}
+            </dd>
+          </dl>
+        </div>
+      </div>
+
+      <!-- Associated Workspaces Card -->
+      <div class="card">
+        <div class="card-header">
+          <h5 class="mb-0">
+            <i class="bi bi-columns-gap me-2"></i>Workspaces Asociados
+          </h5>
+        </div>
+        <div class="card-body">
+          {% if workspaces %}
+          <div class="table-responsive">
+            <table class="table table-hover mb-0">
+              <thead>
+                <tr>
+                  <th>ID</th>
+                  <th>Nombre</th>
+                  <th>Workspace ID</th>
+                  <th class="text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for ws in workspaces %}
+                <tr>
+                  <td><code>{{ ws.id }}</code></td>
+                  <td>{{ ws.name }}</td>
+                  <td><code class="small">{{ ws.workspace_id }}</code></td>
+                  <td class="text-center">
+                    <a href="{{ url_for('workspaces.detail', workspace_id=ws.id) }}"
+                       class="btn btn-sm btn-outline-info">
+                      <i class="bi bi-info-circle"></i>
+                    </a>
+                  </td>
+                </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          </div>
+          {% else %}
+          <div class="alert alert-info mb-0">
+            <i class="bi bi-info-circle me-2"></i>
+            No hay workspaces asociados.
+          </div>
+          {% endif %}
+        </div>
+        {% if workspaces %}
+        <div class="card-footer">
+          <small class="text-muted">
+            <i class="bi bi-database me-1"></i>
+            Total: <strong>{{ workspaces|length }}</strong> workspace(s)
+          </small>
+        </div>
+        {% endif %}
+      </div>
+
+      {% block additional_content %}{% endblock %}
+    </div>
+
+    <!-- Sidebar -->
+    <div class="col-md-4">
+      <div class="card">
+        <div class="card-header">
+          <h6 class="mb-0">
+            <i class="bi bi-lightning me-2"></i>Acciones Rápidas
+          </h6>
+        </div>
+        <div class="card-body">
+          <div class="d-grid gap-2">
+            <a href="{{ url_for('tenants.edit', tenant_id=tenant.id) }}" class="btn btn-outline-secondary">
+              <i class="bi bi-pencil me-2"></i>Editar Tenant
+            </a>
+            <a href="{{ url_for('tenants.list') }}" class="btn btn-outline-primary">
+              <i class="bi bi-arrow-left me-2"></i>Volver al Listado
+            </a>
+            <hr>
+            <button type="button"
+                    class="btn btn-outline-danger w-100 delete-entity-btn"
+                    data-action="{{ url_for('tenants.delete', tenant_id=tenant.id) }}"
+                    data-entity="Tenant">
+              <i class="bi bi-trash me-2"></i>Eliminar Tenant
+            </button>
+          </div>
+        </div>
+        <div class="card-footer">
+          <small class="text-muted">
+            <i class="bi bi-info-circle me-1"></i>
+            {{ workspaces|length }} workspace(s) asociado(s)
+          </small>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const deleteBtn = document.querySelector('.delete-entity-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const entityName = this.dataset.entity;
+
+      Swal.fire({
+        title: '¿Está seguro?',
+        text: `¿Desea eliminar este ${entityName}? Esta acción no se puede deshacer.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  }
+});
+</script>
 {% endblock %}
 

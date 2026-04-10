@@ -44,7 +44,7 @@
               </td>
               <td>{{ empresa.created_at.strftime('%Y-%m-%d') if empresa.created_at else 'N/A' }}</td>
               <td>
-                <span class="badge bg-info">{{ empresa.report_configs|length }}</span>
+                <span class="badge bg-info">{{ empresa.reports|length }}</span>
               </td>
               <td class="text-end">
                 <div class="btn-group" role="group">

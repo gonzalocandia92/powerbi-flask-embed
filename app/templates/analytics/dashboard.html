@@ -111,7 +111,7 @@
                        autocomplete="off">
                 <datalist id="link_suggestions">
                   {% for link in available_links %}
-                  <option value="{{ link.custom_slug }}">{{ link.report_config.name if link.report_config else link.custom_slug }}</option>
+                  <option value="{{ link.custom_slug }}">{{ link.report.name if link.report else link.custom_slug }}</option>
                   {% endfor %}
                 </datalist>
               </div>
