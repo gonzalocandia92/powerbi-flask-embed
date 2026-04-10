@@ -115,7 +115,7 @@
                 const errorMsg = event.detail?.message || JSON.stringify(event.detail);
                 console.error("Power BI Error:", errorMsg);
                 {% if not is_public %}
-                errorDisplay.innerHTML = "Error al renderizar Power BI: " + errorMsg;
+                errorDisplay.textContent = "Error al renderizar Power BI: " + errorMsg;
                 errorDisplay.style.display = 'block';
                 {% endif %}
             });
@@ -124,7 +124,7 @@
             if (loading) loading.style.display = 'none';
             console.error("Embed exception:", e.message);
             {% if not is_public %}
-            errorDisplay.innerHTML = "Excepción en el embed: " + e.message;
+            errorDisplay.textContent = "Excepción en el embed: " + e.message;
             errorDisplay.style.display = 'block';
             {% endif %}
         }
