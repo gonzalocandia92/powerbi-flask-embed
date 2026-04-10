@@ -19,7 +19,7 @@
     </a>
   </div>
 
-  {% if items %}
+  {% if workspaces %}
   <div class="card">
     <div class="card-header">
       <div class="d-flex justify-content-between align-items-center">
@@ -27,7 +27,7 @@
           <i class="bi bi-list-check me-2"></i>Lista de Workspaces
         </h6>
         <span class="badge bg-light text-dark">
-          {{ items|length }} registros
+          {{ workspaces|length }} registros
         </span>
       </div>
     </div>
@@ -45,7 +45,7 @@
             </tr>
           </thead>
           <tbody>
-            {% for item in items %}
+            {% for item in workspaces %}
             <tr>
               <td><code>{{ item.id }}</code></td>
               <td><strong>{{ item.name }}</strong></td>
@@ -86,7 +86,7 @@
     <div class="card-footer">
       <small class="text-muted">
         <i class="bi bi-database me-1"></i>
-        Total: <strong>{{ items|length }}</strong> workspaces
+        Total: <strong>{{ workspaces|length }}</strong> workspaces
       </small>
     </div>
   </div>
