@@ -91,10 +91,10 @@
             settings: {
                 panes: { 
                     filters: { visible: {% if is_public %}false{% else %}true{% endif %} }, 
-                    pageNavigation: { visible: true }
+                    pageNavigation: { visible: {% if is_public %}false{% else %}true{% endif %} }
                 },
-                bars: { statusBar: { visible: true }},
-                hideErrors: false
+                bars: { statusBar: { visible: {% if is_public %}false{% else %}true{% endif %} }},
+                hideErrors: {% if is_public %}true{% else %}false{% endif %}
             }
         };
 
@@ -113,14 +113,20 @@
             report.on("error", function (event) {
                 if (loading) loading.style.display = 'none';
                 const errorMsg = event.detail?.message || JSON.stringify(event.detail);
+                console.error("Power BI Error:", errorMsg);
+                {% if not is_public %}
                 errorDisplay.innerHTML = "Error al renderizar Power BI: " + errorMsg;
                 errorDisplay.style.display = 'block';
+                {% endif %}
             });
             
         } catch (e) {
             if (loading) loading.style.display = 'none';
+            console.error("Embed exception:", e.message);
+            {% if not is_public %}
             errorDisplay.innerHTML = "Excepción en el embed: " + e.message;
             errorDisplay.style.display = 'block';
+            {% endif %}
         }
     </script>
 </body>
