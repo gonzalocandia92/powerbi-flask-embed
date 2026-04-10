@@ -155,7 +155,7 @@ class Report(db.Model):
     # Relationships
     workspace = db.relationship('Workspace', back_populates='reports')
     usuario_pbi = db.relationship('UsuarioPBI')
-    public_links = db.relationship('PublicLink', back_populates='report', lazy='dynamic')
+    public_links = db.relationship('PublicLink', back_populates='report', lazy='dynamic', cascade='all, delete-orphan')
     empresas = db.relationship('Empresa', secondary='empresa_report', back_populates='reports')
 
 

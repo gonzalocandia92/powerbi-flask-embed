@@ -122,6 +122,7 @@ class AnalyticsIntegrationTestCase(unittest.TestCase):
         with self.app.app_context():
             for i in range(5):
                 visit = Visit(
+                    id=_id(),
                     link_slug='test-link',
                     timestamp=datetime.utcnow() - timedelta(days=i),
                     visitor_id=generate_visitor_id(),
