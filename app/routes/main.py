@@ -5,7 +5,7 @@ from flask import Blueprint, render_template, request
 from flask_login import login_required
 
 from app import db
-from app.models import ReportConfig, PublicLink, Report
+from app.models import PublicLink, Report, Workspace
 from app.utils.decorators import retry_on_db_error
 
 bp = Blueprint('main', __name__)
@@ -16,25 +16,16 @@ bp = Blueprint('main', __name__)
 @retry_on_db_error(max_retries=3, delay=1)
 def index():
     """Display the main dashboard with all public links."""
-    # Get filter parameters
     search_query = request.args.get('search', '').strip()
     
-    # Query all active public links with their related configs
     query = PublicLink.query.filter_by(is_active=True).options(
-        db.joinedload(PublicLink.report_config)
-            .joinedload(ReportConfig.report),
-        db.joinedload(PublicLink.report_config)
-            .joinedload(ReportConfig.workspace),
-        db.joinedload(PublicLink.report_config)
-            .joinedload(ReportConfig.tenant)
+        db.joinedload(PublicLink.report).joinedload(Report.workspace).joinedload(Workspace.tenant)
     )
     
-    # Apply search filter if provided
     if search_query:
-        query = query.join(PublicLink.report_config).join(ReportConfig.report).filter(
+        query = query.join(PublicLink.report).filter(
             db.or_(
                 PublicLink.custom_slug.ilike(f'%{search_query}%'),
-                ReportConfig.name.ilike(f'%{search_query}%'),
                 Report.name.ilike(f'%{search_query}%')
             )
         )

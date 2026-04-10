@@ -144,7 +144,7 @@ def openapi_spec():
             "/private/report-config": {
                 "get": {
                     "summary": "Obtener configuración de embed de reporte",
-                    "description": "Obtiene la configuración necesaria para embeber un reporte específico",
+                    "description": "Obtiene la configuración necesaria para embeber un reporte específico. Acepta report_id o config_id (backward compatibility) como parámetro.",
                     "security": [
                         {
                             "BearerAuth": []
@@ -152,13 +152,13 @@ def openapi_spec():
                     ],
                     "parameters": [
                         {
-                            "name": "config_id",
+                            "name": "report_id",
                             "in": "query",
                             "required": True,
                             "schema": {
                                 "type": "integer"
                             },
-                            "description": "ID de la configuración del reporte"
+                            "description": "ID del reporte"
                         }
                     ],
                     "responses": {
@@ -191,16 +191,16 @@ def openapi_spec():
                             }
                         },
                         "400": {
-                            "description": "config_id no proporcionado"
+                            "description": "report_id no proporcionado"
                         },
                         "401": {
                             "description": "Token inválido o expirado"
                         },
                         "403": {
-                            "description": "La empresa no tiene acceso a esta configuración"
+                            "description": "La empresa no tiene acceso a este reporte"
                         },
                         "404": {
-                            "description": "Configuración no encontrada"
+                            "description": "Reporte no encontrado"
                         }
                     }
                 }

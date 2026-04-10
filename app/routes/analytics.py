@@ -102,34 +102,31 @@ def search_links():
     Returns:
         JSON array of matching links (max 10)
     """
-    from app.models import PublicLink, ReportConfig
+    from app.models import PublicLink, Report
     from sqlalchemy import or_
     
     query = request.args.get('q', '').strip()
     
     try:
-        # Build query to search by custom_slug or report config name
         links_query = PublicLink.query.filter(
             PublicLink.is_active == True
-        ).join(PublicLink.report_config)
+        ).join(PublicLink.report)
         
         if query:
-            # Search in custom_slug or related report config name
             links_query = links_query.filter(
                 or_(
                     PublicLink.custom_slug.ilike(f'%{query}%'),
-                    ReportConfig.name.ilike(f'%{query}%')
+                    Report.name.ilike(f'%{query}%')
                 )
             )
         
-        # Limit to 10 results and order by custom_slug
         links = links_query.order_by(PublicLink.custom_slug).limit(10).all()
         
         results = []
         for link in links:
             results.append({
                 'slug': link.custom_slug,
-                'report_name': link.report_config.name if link.report_config else 'Unknown'
+                'report_name': link.report.name if link.report else 'Unknown'
             })
         
         return jsonify({

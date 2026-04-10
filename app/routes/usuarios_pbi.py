@@ -6,7 +6,7 @@ from flask import Blueprint, render_template, redirect, url_for, flash
 from flask_login import login_required
 
 from app import db
-from app.models import UsuarioPBI, ReportConfig
+from app.models import UsuarioPBI, Report
 from app.forms import UsuarioPBIForm
 from app.utils.decorators import retry_on_db_error
 
@@ -69,12 +69,12 @@ def new():
 def detail(usuario_id):
     """Display usuario PBI details."""
     usuario = UsuarioPBI.query.get_or_404(usuario_id)
-    configs = ReportConfig.query.filter_by(usuario_pbi_id=usuario_id).all()
+    reports = Report.query.filter_by(usuario_pbi_id=usuario_id).all()
     
     return render_template(
         'usuarios_pbi/detail.html',
         usuario=usuario,
-        configs=configs
+        reports=reports
     )
 
 
@@ -113,9 +113,9 @@ def delete(usuario_id):
     usuario = UsuarioPBI.query.get_or_404(usuario_id)
     
     # Check if usuario is in use
-    config_count = ReportConfig.query.filter_by(usuario_pbi_id=usuario_id).count()
-    if config_count > 0:
-        flash(f"No se puede eliminar el usuario porque está asociado a {config_count} configuraciones", "danger")
+    report_count = Report.query.filter_by(usuario_pbi_id=usuario_id).count()
+    if report_count > 0:
+        flash(f"No se puede eliminar el usuario porque está asociado a {report_count} reportes", "danger")
         return redirect(url_for('usuarios_pbi.detail', usuario_id=usuario_id))
     
     name = usuario.nombre
