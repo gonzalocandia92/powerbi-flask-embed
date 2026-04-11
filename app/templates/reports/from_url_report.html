@@ -44,11 +44,11 @@
             {{ form.hidden_tag() }}
 
             <div class="mb-3">
-              {{ form.name.label(class="form-label") }}
-              {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="Nombre del reporte") }}
-              {% if form.name.errors %}
+              {{ form.report_name.label(class="form-label") }}
+              {{ form.report_name(class="form-control" + (" is-invalid" if form.report_name.errors else ""), placeholder="Nombre del reporte") }}
+              {% if form.report_name.errors %}
                 <div class="invalid-feedback">
-                  {% for error in form.name.errors %}{{ error }}{% endfor %}
+                  {% for error in form.report_name.errors %}{{ error }}{% endfor %}
                 </div>
               {% endif %}
             </div>
