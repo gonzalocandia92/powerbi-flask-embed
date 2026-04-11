@@ -14,7 +14,6 @@
   }
   
   .analytics-card:hover {
-    transform: translateY(-4px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
   }
   
@@ -61,7 +60,6 @@
   
   .table-hover tbody tr:hover {
     background-color: rgba(102, 126, 234, 0.05);
-    transform: translateX(2px);
   }
   
   .badge-custom {
@@ -77,10 +75,17 @@
   <!-- Header -->
   <div class="row mb-4">
     <div class="col">
-      <h1 class="display-5 fw-bold">
-        <i class="bi bi-speedometer2 text-primary"></i> Dashboard
-      </h1>
-      <p class="text-muted">Gestión de URLs Públicas de Reportes Power BI</p>
+      <div class="d-flex justify-content-between align-items-center">
+        <div>
+          <h1 class="display-5 fw-bold">
+            <i class="bi bi-speedometer2 text-primary"></i> Dashboard
+          </h1>
+          <p class="text-muted">Gestión de URLs Públicas de Reportes Power BI</p>
+        </div>
+        <a href="{{ url_for('reports.from_url') }}" class="btn btn-outline-info">
+          <i class="bi bi-link me-1"></i> Agregar desde URL
+        </a>
+      </div>
     </div>
   </div>
 
@@ -348,17 +353,6 @@ document.addEventListener('DOMContentLoaded', function() {
   linkInputs.forEach(input => {
     input.addEventListener('click', function() {
       this.select();
-    });
-  });
-
-  // Row hover effects (keep existing functionality)
-  const tableRows = document.querySelectorAll('.table tbody tr');
-  tableRows.forEach(row => {
-    row.addEventListener('mouseenter', function() {
-      this.style.boxShadow = '0 4px 12px rgba(0,0,0,0.1)';
-    });
-    row.addEventListener('mouseleave', function() {
-      this.style.boxShadow = 'none';
     });
   });
 });
