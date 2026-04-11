@@ -328,9 +328,7 @@
                             </div>
                             <div>
                                 Powered by 
-                                <strong>Microsoft Power BI</strong>
-                                <img src="https://app.powerbi.com/13.0.40.338/Images/pbi_logo_transparent.png" 
-                                     alt="Power BI" class="powerbi-logo">
+                                <strong>Sudata</strong>
                             </div>
                         </div>
                     </div>
@@ -372,16 +370,16 @@
                             visible: false 
                         }, 
                         pageNavigation: { 
-                            visible: true 
+                            visible: {% if is_public %}false{% else %}true{% endif %}
                         }
                     },
                     bars: { 
                         statusBar: { 
-                            visible: true 
+                            visible: {% if is_public %}false{% else %}true{% endif %}
                         } 
                     },
-                    background: models.BackgroundType.Transparent,
-                    hideErrors: false
+                    background: models.BackgroundType.Default,
+                    hideErrors: {% if is_public %}true{% else %}false{% endif %}
                 }
             };
 
@@ -445,12 +443,14 @@
                     console.error("Power BI Error:", event);
                     loadingOverlay.style.display = 'none';
                     
+                    {% if not is_public %}
                     const errorMsg = event.detail?.message || 
                                    event.detail?.detailedMessage || 
                                    JSON.stringify(event.detail);
                     
                     errorMessage.textContent = errorMsg;
                     errorDisplay.style.display = 'block';
+                    {% endif %}
                 });
                 
                 report.on("rendered", function() {
@@ -469,8 +469,10 @@
             } catch (e) {
                 console.error("Embed exception:", e);
                 loadingOverlay.style.display = 'none';
+                {% if not is_public %}
                 errorMessage.textContent = e.message;
                 errorDisplay.style.display = 'block';
+                {% endif %}
             }
         });
     </script>
