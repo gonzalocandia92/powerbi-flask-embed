@@ -39,7 +39,6 @@
 
   <div class="card shadow-sm">
     <div class="card-body">
-      {% if reports %}
       <div class="table-responsive">
         <table class="table table-hover">
           <thead class="table-light">
@@ -116,15 +115,15 @@
           </tbody>
         </table>
       </div>
-      {% else %}
-      <div class="alert alert-info">
-        <i class="bi bi-info-circle me-2"></i>
-        No hay reportes registrados.
-        <a href="{{ url_for('reports.new') }}" class="alert-link">Crear el primero</a>
-      </div>
-      {% endif %}
     </div>
   </div>
+  {% else %}
+  <div class="alert alert-info">
+    <i class="bi bi-info-circle me-2"></i>
+    No hay reportes registrados.
+    <a href="{{ url_for('reports.new') }}" class="alert-link">Crear el primero</a>
+  </div>
+  {% endif %}
 </div>
 {% endblock %}
 
