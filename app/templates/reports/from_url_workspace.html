@@ -34,11 +34,11 @@
             {{ form.hidden_tag() }}
 
             <div class="mb-3">
-              {{ form.name.label(class="form-label") }}
-              {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else ""), placeholder="Nombre del workspace") }}
-              {% if form.name.errors %}
+              {{ form.workspace_name.label(class="form-label") }}
+              {{ form.workspace_name(class="form-control" + (" is-invalid" if form.workspace_name.errors else ""), placeholder="Nombre del workspace") }}
+              {% if form.workspace_name.errors %}
                 <div class="invalid-feedback">
-                  {% for error in form.name.errors %}{{ error }}{% endfor %}
+                  {% for error in form.workspace_name.errors %}{{ error }}{% endfor %}
                 </div>
               {% endif %}
             </div>
