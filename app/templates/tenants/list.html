@@ -1,0 +1,184 @@
+{% extends "layout.html" %}
+
+{% block title %}Tenants - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4 page-header">
+    <div>
+      <h2 class="fw-bold text-dark mb-2">
+        <i class="bi bi-buildings me-2 text-primary"></i>Tenants
+      </h2>
+      <p class="text-muted mb-0">
+        <i class="bi bi-info-circle me-1"></i>
+        Gestión de tenants del sistema
+      </p>
+    </div>
+    <a href="{{ url_for('tenants.new') }}" class="btn btn-primary px-4">
+      <i class="bi bi-plus-circle me-2"></i>Nuevo Tenant
+    </a>
+  </div>
+
+  {% if tenants %}
+  <!-- Search Filter -->
+  <div class="card mb-3">
+    <div class="card-body py-2 px-3">
+      <div class="row align-items-center">
+        <div class="col">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-transparent border-end-0">
+              <i class="bi bi-search text-muted"></i>
+            </span>
+            <input type="text" class="form-control border-start-0" id="tableSearch"
+                   placeholder="Buscar en tenants..." autocomplete="off">
+          </div>
+        </div>
+        <div class="col-auto">
+          <small class="text-muted" id="searchResultCount">{{ tenants|length }} registros</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="d-flex justify-content-between align-items-center">
+        <h6 class="mb-0">
+          <i class="bi bi-list-check me-2"></i>Lista de Tenants
+        </h6>
+        <span class="badge bg-light text-dark">
+          {{ tenants|length }} registros
+        </span>
+      </div>
+    </div>
+
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th>ID</th>
+              <th>Nombre</th>
+              <th>Tenant ID</th>
+              <th>Client</th>
+              <th class="text-center">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for item in tenants %}
+            <tr>
+              <td><code>{{ item.id }}</code></td>
+              <td><strong>{{ item.name }}</strong></td>
+              <td><code class="small">{{ item.tenant_id }}</code></td>
+              <td>
+                {% if item.client %}
+                <a href="{{ url_for('clients.detail', client_id=item.client.id) }}">{{ item.client.name }}</a>
+                {% else %}
+                <span class="text-muted">No asignado</span>
+                {% endif %}
+              </td>
+              <td class="text-center">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('tenants.detail', tenant_id=item.id) }}"
+                     class="btn btn-sm btn-outline-info" title="Ver detalle">
+                    <i class="bi bi-info-circle"></i>
+                  </a>
+                  <a href="{{ url_for('tenants.edit', tenant_id=item.id) }}"
+                     class="btn btn-sm btn-outline-secondary" title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  <button type="button"
+                          class="btn btn-sm btn-outline-danger delete-btn"
+                          data-action="{{ url_for('tenants.delete', tenant_id=item.id) }}"
+                          data-item="tenant"
+                          title="Eliminar">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <small class="text-muted">
+        <i class="bi bi-database me-1"></i>
+        Total: <strong>{{ tenants|length }}</strong> tenants
+      </small>
+    </div>
+  </div>
+  {% else %}
+  <div class="empty-state">
+    <div class="icon-wrapper">
+      <i class="bi bi-inbox"></i>
+    </div>
+    <h3 class="text-dark mb-3">No hay tenants</h3>
+    <p class="text-muted mb-4">
+      No se han encontrado tenants registrados en el sistema.
+    </p>
+    <a href="{{ url_for('tenants.new') }}" class="btn btn-primary btn-lg px-4">
+      <i class="bi bi-plus-circle me-2"></i>Crear primer Tenant
+    </a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Client-side table search
+  const searchInput = document.getElementById('tableSearch');
+  const searchCount = document.getElementById('searchResultCount');
+  if (searchInput) {
+    searchInput.addEventListener('input', function() {
+      const query = this.value.toLowerCase();
+      const rows = document.querySelectorAll('.table tbody tr');
+      let visible = 0;
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const match = text.includes(query);
+        row.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+      if (searchCount) {
+        searchCount.textContent = query ? visible + ' resultado' + (visible !== 1 ? 's' : '') : '{{ tenants|length }} registros';
+      }
+    });
+  }
+
+  // Delete confirmation
+  document.querySelectorAll('.delete-btn').forEach(button => {
+    button.addEventListener('click', function(e) {
+      e.preventDefault();
+      const action = this.dataset.action;
+      const itemName = this.dataset.item;
+
+      Swal.fire({
+        title: '¿Está seguro?',
+        text: `¿Desea eliminar este ${itemName}? Esta acción no se puede deshacer.`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  });
+});
+</script>
+{% endblock %}

@@ -1,0 +1,153 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-bar-chart-line me-2"></i>{{ title }}</h2>
+    <div>
+      <a href="{{ url_for('reports.from_url') }}" class="btn btn-outline-info me-2">
+        <i class="bi bi-link me-1"></i> Desde URL
+      </a>
+      <a href="{{ url_for('reports.new') }}" class="btn btn-primary">
+        <i class="bi bi-plus-circle me-1"></i> Nuevo Reporte
+      </a>
+    </div>
+  </div>
+
+  {% if reports %}
+  <!-- Search Filter -->
+  <div class="card mb-3">
+    <div class="card-body py-2 px-3">
+      <div class="row align-items-center">
+        <div class="col">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-transparent border-end-0">
+              <i class="bi bi-search text-muted"></i>
+            </span>
+            <input type="text" class="form-control border-start-0" id="tableSearch"
+                   placeholder="Buscar en reportes..." autocomplete="off">
+          </div>
+        </div>
+        <div class="col-auto">
+          <small class="text-muted" id="searchResultCount">{{ reports|length }} registros</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Nombre</th>
+              <th>Workspace</th>
+              <th>Tenant</th>
+              <th>Usuario PBI</th>
+              <th>Tipo</th>
+              <th>Empresas</th>
+              <th>Links Públicos</th>
+              <th class="text-end">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for report in reports %}
+            <tr>
+              <td>{{ report.id }}</td>
+              <td><strong>{{ report.name }}</strong></td>
+              <td>{{ report.workspace.name if report.workspace else '-' }}</td>
+              <td>{{ report.workspace.tenant.name if report.workspace and report.workspace.tenant else '-' }}</td>
+              <td>{{ report.usuario_pbi.nombre if report.usuario_pbi else '-' }}</td>
+              <td>
+                {% if report.es_publico %}
+                <span class="badge bg-success">Público</span>
+                {% endif %}
+                {% if report.es_privado %}
+                <span class="badge bg-info">Privado</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if report.es_privado %}
+                  {% if report.empresas %}
+                  <span class="badge bg-secondary">{{ report.empresas|length }}</span>
+                  {% else %}
+                  <span class="badge bg-warning text-dark">0</span>
+                  {% endif %}
+                {% else %}
+                <span class="text-muted">-</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if report.id in links_by_report %}
+                <span class="badge bg-primary">{{ links_by_report[report.id]|length }}</span>
+                {% else %}
+                <span class="text-muted">0</span>
+                {% endif %}
+              </td>
+              <td class="text-end">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('reports.detail', report_id=report.id) }}"
+                     class="btn btn-sm btn-outline-info" title="Ver Detalles">
+                    <i class="bi bi-info-circle"></i>
+                  </a>
+                  <a href="{{ url_for('reports.view_report', report_id=report.id) }}"
+                     class="btn btn-sm btn-outline-primary" title="Ver Reporte">
+                    <i class="bi bi-eye"></i>
+                  </a>
+                  <a href="{{ url_for('reports.edit', report_id=report.id) }}"
+                     class="btn btn-sm btn-outline-secondary" title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  {% if report.es_publico %}
+                  <a href="{{ url_for('reports.new_link', report_id=report.id) }}"
+                     class="btn btn-sm btn-outline-success" title="Nuevo Link Público">
+                    <i class="bi bi-link-45deg"></i>
+                  </a>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="alert alert-info">
+    <i class="bi bi-info-circle me-2"></i>
+    No hay reportes registrados.
+    <a href="{{ url_for('reports.new') }}" class="alert-link">Crear el primero</a>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const searchInput = document.getElementById('tableSearch');
+  const searchCount = document.getElementById('searchResultCount');
+  if (searchInput) {
+    searchInput.addEventListener('input', function() {
+      const query = this.value.toLowerCase();
+      const rows = document.querySelectorAll('.table tbody tr');
+      let visible = 0;
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const match = text.includes(query);
+        row.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+      if (searchCount) {
+        searchCount.textContent = query ? visible + ' resultado' + (visible !== 1 ? 's' : '') : '{{ reports|length }} registros';
+      }
+    });
+  }
+});
+</script>
+{% endblock %}

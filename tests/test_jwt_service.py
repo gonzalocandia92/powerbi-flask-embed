@@ -49,7 +49,7 @@ class JWTServiceTestCase(unittest.TestCase):
         payload = verify_token(token)
         
         # Check payload contents
-        self.assertEqual(payload['sub'], cliente_id)
+        self.assertEqual(payload['sub'], str(cliente_id))
         self.assertEqual(payload['client_id'], client_id)
         self.assertIn('iat', payload)
         self.assertIn('exp', payload)

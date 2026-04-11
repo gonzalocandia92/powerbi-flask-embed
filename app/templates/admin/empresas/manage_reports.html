@@ -17,18 +17,18 @@
         <div class="card-header bg-primary text-white">
           <h5 class="mb-0">
             <i class="bi bi-check2-square me-2"></i>
-            Seleccionar Configuraciones de Reportes
+            Seleccionar Reportes
           </h5>
         </div>
         <div class="card-body">
           <form method="POST">
             <p class="text-muted">
-              Seleccione las configuraciones de reportes que desea asociar a 
-              <strong>{{ empresa.nombre }}</strong>. 
-              Solo se muestran configuraciones con acceso privado habilitado.
+              Seleccione los reportes que desea asociar a
+              <strong>{{ empresa.nombre }}</strong>.
+              Solo se muestran reportes con acceso privado habilitado.
             </p>
 
-            {% if all_configs %}
+            {% if all_reports %}
             <div class="table-responsive">
               <table class="table table-hover">
                 <thead class="table-light">
@@ -38,26 +38,24 @@
                     </th>
                     <th>ID</th>
                     <th>Nombre</th>
-                    <th>Report</th>
                     <th>Workspace</th>
                     <th>Tenant</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {% for config in all_configs %}
+                  {% for report in all_reports %}
                   <tr>
                     <td>
-                      <input type="checkbox" 
-                             name="configs" 
-                             value="{{ config.id }}" 
-                             class="form-check-input config-checkbox"
-                             {% if config.id in current_config_ids %}checked{% endif %}>
+                      <input type="checkbox"
+                             name="reports"
+                             value="{{ report.id }}"
+                             class="form-check-input report-checkbox"
+                             {% if report.id in current_report_ids %}checked{% endif %}>
                     </td>
-                    <td>{{ config.id }}</td>
-                    <td><strong>{{ config.name }}</strong></td>
-                    <td>{{ config.report.name }}</td>
-                    <td>{{ config.workspace.name }}</td>
-                    <td class="small">{{ config.tenant.name }}</td>
+                    <td>{{ report.id }}</td>
+                    <td><strong>{{ report.name }}</strong></td>
+                    <td>{{ report.workspace.name if report.workspace else '-' }}</td>
+                    <td class="small">{{ report.workspace.tenant.name if report.workspace and report.workspace.tenant else '-' }}</td>
                   </tr>
                   {% endfor %}
                 </tbody>
@@ -66,12 +64,12 @@
 
             <div class="alert alert-info mt-3">
               <i class="bi bi-info-circle me-2"></i>
-              <strong>Nota:</strong> Las configuraciones seleccionadas reemplazarán 
+              <strong>Nota:</strong> Los reportes seleccionados reemplazarán
               completamente las asociaciones actuales.
             </div>
 
             <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
-              <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" 
+              <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}"
                  class="btn btn-outline-secondary">
                 Cancelar
               </a>
@@ -82,13 +80,13 @@
             {% else %}
             <div class="alert alert-warning">
               <i class="bi bi-exclamation-triangle me-2"></i>
-              No hay configuraciones privadas disponibles. 
-              <a href="{{ url_for('configs.new') }}">Crear una configuración</a> 
-              y marcarla como privada para poder asociarla a empresas.
+              No hay reportes privados disponibles.
+              <a href="{{ url_for('reports.new') }}">Crear un reporte</a>
+              y marcarlo como privado para poder asociarlo a empresas.
             </div>
-            
+
             <div class="d-grid">
-              <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" 
+              <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}"
                  class="btn btn-outline-secondary">
                 Volver
               </a>
@@ -108,12 +106,12 @@
           <dl class="mb-0">
             <dt>Nombre:</dt>
             <dd>{{ empresa.nombre }}</dd>
-            
+
             {% if empresa.cuit %}
             <dt>CUIT:</dt>
             <dd>{{ empresa.cuit }}</dd>
             {% endif %}
-            
+
             <dt>Estado:</dt>
             <dd>
               {% if empresa.estado_activo %}
@@ -122,9 +120,9 @@
               <span class="badge bg-secondary">Inactiva</span>
               {% endif %}
             </dd>
-            
+
             <dt>Reportes actuales:</dt>
-            <dd><span class="badge bg-info">{{ current_config_ids|length }}</span></dd>
+            <dd><span class="badge bg-info">{{ current_report_ids|length }}</span></dd>
           </dl>
         </div>
       </div>
@@ -138,8 +136,8 @@
             <strong>¿Cómo funciona?</strong>
           </p>
           <ul class="small mb-0">
-            <li>Marque las configuraciones que desea asociar</li>
-            <li>Solo aparecen configuraciones privadas</li>
+            <li>Marque los reportes que desea asociar</li>
+            <li>Solo aparecen reportes privados</li>
             <li>Las selecciones actuales se mantienen al cargar</li>
             <li>Use el checkbox superior para seleccionar/deseleccionar todo</li>
           </ul>
@@ -152,19 +150,19 @@
 <script>
 // Select/Deselect all functionality
 document.getElementById('selectAll').addEventListener('change', function() {
-  const checkboxes = document.querySelectorAll('.config-checkbox');
+  const checkboxes = document.querySelectorAll('.report-checkbox');
   checkboxes.forEach(checkbox => {
     checkbox.checked = this.checked;
   });
 });
 
 // Update select all checkbox based on individual checkboxes
-document.querySelectorAll('.config-checkbox').forEach(checkbox => {
+document.querySelectorAll('.report-checkbox').forEach(checkbox => {
   checkbox.addEventListener('change', function() {
-    const allCheckboxes = document.querySelectorAll('.config-checkbox');
-    const checkedCheckboxes = document.querySelectorAll('.config-checkbox:checked');
+    const allCheckboxes = document.querySelectorAll('.report-checkbox');
+    const checkedCheckboxes = document.querySelectorAll('.report-checkbox:checked');
     const selectAllCheckbox = document.getElementById('selectAll');
-    
+
     if (checkedCheckboxes.length === allCheckboxes.length) {
       selectAllCheckbox.checked = true;
       selectAllCheckbox.indeterminate = false;
@@ -180,10 +178,10 @@ document.querySelectorAll('.config-checkbox').forEach(checkbox => {
 
 // Initialize select all state
 window.addEventListener('DOMContentLoaded', function() {
-  const allCheckboxes = document.querySelectorAll('.config-checkbox');
-  const checkedCheckboxes = document.querySelectorAll('.config-checkbox:checked');
+  const allCheckboxes = document.querySelectorAll('.report-checkbox');
+  const checkedCheckboxes = document.querySelectorAll('.report-checkbox:checked');
   const selectAllCheckbox = document.getElementById('selectAll');
-  
+
   if (allCheckboxes.length > 0) {
     if (checkedCheckboxes.length === allCheckboxes.length) {
       selectAllCheckbox.checked = true;

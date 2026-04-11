@@ -164,7 +164,7 @@
 
           <h6>Query Parameters</h6>
           <ul>
-            <li><code>config_id</code> (integer, required): ID de la configuración del reporte</li>
+            <li><code>report_id</code> (integer, required): ID del reporte</li>
           </ul>
 
           <h6>Respuestas</h6>
@@ -189,7 +189,7 @@
           </div>
 
           <h6 class="mt-3">Ejemplo cURL</h6>
-          <pre class="bg-dark text-light p-3 rounded"><code>curl -X GET "{{ request.url_root }}private/report-config?config_id=1" \
+          <pre class="bg-dark text-light p-3 rounded"><code>curl -X GET "{{ request.url_root }}private/report-config?report_id=1" \
   -H "Authorization: Bearer YOUR_ACCESS_TOKEN"</code></pre>
         </div>
       </div>

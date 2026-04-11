@@ -47,7 +47,6 @@
     }
     
     .navbar-brand:hover {
-      transform: scale(1.05);
       text-shadow: 0 4px 8px rgba(0,0,0,0.2);
     }
     
@@ -68,26 +67,8 @@
       overflow: hidden;
     }
     
-    .nav-link::before {
-      content: '';
-      position: absolute;
-      top: 0;
-      left: -100%;
-      width: 100%;
-      height: 100%;
-      background: rgba(255,255,255,0.1);
-      transition: var(--transition);
-      z-index: -1;
-    }
-    
-    .nav-link:hover::before {
-      left: 0;
-    }
-    
     .nav-link:hover {
       background: rgba(255,255,255,0.15);
-      transform: translateY(-2px);
-      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     
     .nav-link.active {
@@ -115,7 +96,6 @@
     .dropdown-item:hover {
       background: var(--primary-gradient);
       color: white;
-      transform: translateX(4px);
     }
     
     .dropdown-divider {
@@ -138,8 +118,6 @@
     
     .card:hover {
       box-shadow: var(--card-shadow-hover);
-      transform: translateY(-4px);
-      z-index: 2;
     }
     
     .card-header {
@@ -161,12 +139,6 @@
       width: 200%;
       height: 200%;
       background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-      animation: shimmer 3s infinite;
-    }
-    
-    @keyframes shimmer {
-      0%, 100% { transform: translate(0, 0); }
-      50% { transform: translate(-20%, -20%); }
     }
     
     .card-header h4,
@@ -240,10 +212,8 @@
     }
     
     .table tbody tr:hover {
-      background: linear-gradient(90deg, rgba(102, 126, 234, 0.03), white);
+      background: rgba(102, 126, 234, 0.04);
       border-left-color: #667eea;
-      transform: translateX(4px);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
     }
     
     .table tbody td {
@@ -264,31 +234,8 @@
       text-transform: capitalize;
     }
     
-    .btn::before {
-      content: '';
-      position: absolute;
-      top: 50%;
-      left: 50%;
-      width: 0;
-      height: 0;
-      border-radius: 50%;
-      background: rgba(255,255,255,0.3);
-      transform: translate(-50%, -50%);
-      transition: width 0.6s, height 0.6s;
-    }
-    
-    .btn:hover::before {
-      width: 300px;
-      height: 300px;
-    }
-    
     .btn:hover {
-      transform: translateY(-3px);
-      box-shadow: 0 6px 20px rgba(0,0,0,0.2);
-    }
-    
-    .btn:active {
-      transform: translateY(-1px);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
     }
     
     .btn-primary {
@@ -431,12 +378,6 @@
       justify-content: center;
       margin-bottom: 2rem;
       box-shadow: 0 8px 32px rgba(102, 126, 234, 0.3);
-      animation: pulse 2s infinite;
-    }
-    
-    @keyframes pulse {
-      0%, 100% { transform: scale(1); }
-      50% { transform: scale(1.05); }
     }
     
     .empty-state .icon-wrapper i {
@@ -554,7 +495,7 @@
       <ul class="navbar-nav me-auto">
         <li class="nav-item">
           <a class="nav-link" href="{{ url_for('main.index') }}">
-            <i class="bi bi-speedometer2 me-1"></i>Dashboard
+            <i class="bi bi-link-45deg me-1"></i>Links Públicos
           </a>
         </li>
         <li class="nav-item">
@@ -573,10 +514,9 @@
             <li><a class="dropdown-item" href="{{ url_for('reports.list') }}"><i class="bi bi-bar-chart-line me-2"></i>Reports</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="{{ url_for('usuarios_pbi.list') }}"><i class="bi bi-person-circle me-2"></i>Usuarios PBI</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('configs.list') }}"><i class="bi bi-gear-fill me-2"></i>Configuraciones</a></li>
             <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="{{ url_for('reports.from_url') }}"><i class="bi bi-link me-2"></i>Agregar desde URL</a></li>
             <li><a class="dropdown-item" href="{{ url_for('empresas.list') }}"><i class="bi bi-building me-2"></i>Empresas</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('admin_clientes_privados.list') }}"><i class="bi bi-shield-lock me-2"></i>Clientes Privados (Legacy)</a></li>
           </ul>
         </li>
         <li class="nav-item dropdown">

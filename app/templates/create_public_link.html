@@ -1,5 +1,5 @@
 {% extends "layout.html" %}
-{% block title %}Configuraciones - Crear link público{% endblock %}
+{% block title %}Reportes - Crear link público{% endblock %}
 
 {% block body %}
 <div class="container mt-4">
@@ -7,7 +7,7 @@
         <div class="col-md-6">
             <div class="card">
                 <div class="card-header">
-                    <h5>Crear Link Público para: {{ config.name }}</h5>
+                    <h5>Crear Link Público para: {{ report.name }}</h5>
                 </div>
                 <div class="card-body">
                     <form method="POST">
@@ -43,7 +43,7 @@
                             <button type="submit" class="btn btn-primary">
                                 <i class="fas fa-link"></i> Crear Link Público
                             </button>
-                            <a href="{{ url_for('configs.list') }}" class="btn btn-secondary">Cancelar</a>
+                            <a href="{{ url_for('reports.list') }}" class="btn btn-secondary">Cancelar</a>
                         </div>
                     </form>
                 </div>
@@ -56,7 +56,7 @@
                     <ul class="small">
                         <li>El nombre debe ser único y contener solo letras, números y guiones</li>
                         <li>Una vez creado, el link estará disponible públicamente</li>
-                        <li>Puedes crear múltiples links para la misma configuración</li>
+                        <li>Puedes crear múltiples links para el mismo reporte</li>
                     </ul>
                 </div>
             </div>

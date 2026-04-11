@@ -5,8 +5,8 @@
 {% block body %}
 <div class="container-fluid">
   <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2><i class="bi bi-gear-fill me-2"></i>{{ title }}</h2>
-    <a href="{{ url_for('configs.list') }}" class="btn btn-outline-secondary">
+    <h2><i class="bi bi-bar-chart-line me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('reports.list') }}" class="btn btn-outline-secondary">
       <i class="bi bi-arrow-left me-1"></i> Volver
     </a>
   </div>
@@ -17,7 +17,7 @@
         <div class="card-body">
           <form method="POST" novalidate>
             {{ form.hidden_tag() }}
-            
+
             <div class="mb-3">
               {{ form.name.label(class="form-label") }}
               {{ form.name(class="form-control" + (" is-invalid" if form.name.errors else "")) }}
@@ -30,21 +30,21 @@
 
             <div class="row">
               <div class="col-md-6 mb-3">
-                {{ form.tenant.label(class="form-label") }}
-                {{ form.tenant(class="form-select" + (" is-invalid" if form.tenant.errors else "")) }}
-                {% if form.tenant.errors %}
+                {{ form.report_id.label(class="form-label") }}
+                {{ form.report_id(class="form-control" + (" is-invalid" if form.report_id.errors else "")) }}
+                {% if form.report_id.errors %}
                   <div class="invalid-feedback">
-                    {% for error in form.tenant.errors %}{{ error }}{% endfor %}
+                    {% for error in form.report_id.errors %}{{ error }}{% endfor %}
                   </div>
                 {% endif %}
               </div>
 
               <div class="col-md-6 mb-3">
-                {{ form.client.label(class="form-label") }}
-                {{ form.client(class="form-select" + (" is-invalid" if form.client.errors else "")) }}
-                {% if form.client.errors %}
+                {{ form.embed_url.label(class="form-label") }}
+                {{ form.embed_url(class="form-control" + (" is-invalid" if form.embed_url.errors else "")) }}
+                {% if form.embed_url.errors %}
                   <div class="invalid-feedback">
-                    {% for error in form.client.errors %}{{ error }}{% endfor %}
+                    {% for error in form.embed_url.errors %}{{ error }}{% endfor %}
                   </div>
                 {% endif %}
               </div>
@@ -62,24 +62,14 @@
               </div>
 
               <div class="col-md-6 mb-3">
-                {{ form.report.label(class="form-label") }}
-                {{ form.report(class="form-select" + (" is-invalid" if form.report.errors else "")) }}
-                {% if form.report.errors %}
+                {{ form.usuario_pbi.label(class="form-label") }}
+                {{ form.usuario_pbi(class="form-select" + (" is-invalid" if form.usuario_pbi.errors else "")) }}
+                {% if form.usuario_pbi.errors %}
                   <div class="invalid-feedback">
-                    {% for error in form.report.errors %}{{ error }}{% endfor %}
+                    {% for error in form.usuario_pbi.errors %}{{ error }}{% endfor %}
                   </div>
                 {% endif %}
               </div>
-            </div>
-
-            <div class="mb-3">
-              {{ form.usuario_pbi.label(class="form-label") }}
-              {{ form.usuario_pbi(class="form-select" + (" is-invalid" if form.usuario_pbi.errors else "")) }}
-              {% if form.usuario_pbi.errors %}
-                <div class="invalid-feedback">
-                  {% for error in form.usuario_pbi.errors %}{{ error }}{% endfor %}
-                </div>
-              {% endif %}
             </div>
 
             <div class="card mb-3">
@@ -88,20 +78,20 @@
               </div>
               <div class="card-body">
                 <div class="form-check mb-2">
-                  {{ form.es_publico(class="form-check-input", checked=config.es_publico if config else True) }}
+                  {{ form.es_publico(class="form-check-input") }}
                   {{ form.es_publico.label(class="form-check-label") }}
                   <div class="form-text">El reporte puede ser accedido mediante links públicos sin autenticación</div>
                 </div>
-                
+
                 <div class="form-check">
-                  {{ form.es_privado(class="form-check-input", checked=config.es_privado if config else False) }}
+                  {{ form.es_privado(class="form-check-input") }}
                   {{ form.es_privado.label(class="form-check-label") }}
                   <div class="form-text">El reporte puede ser accedido por empresas autenticadas vía API</div>
                 </div>
               </div>
             </div>
 
-            {% if config %}
+            {% if report %}
             <div class="card mb-3">
               <div class="card-header">
                 <h6 class="mb-0"><i class="bi bi-building me-2"></i>Empresas Asociadas</h6>
@@ -111,15 +101,15 @@
                   Seleccione las empresas que tendrán acceso a este reporte vía API privada.
                   Solo aplica si "Es Privado" está habilitado.
                 </p>
-                
+
                 {% if all_empresas %}
                 <div class="row">
                   {% for empresa in all_empresas %}
                   <div class="col-md-6 mb-2">
                     <div class="form-check">
-                      <input class="form-check-input" type="checkbox" name="empresas" 
+                      <input class="form-check-input" type="checkbox" name="empresas"
                              value="{{ empresa.id }}" id="empresa{{ empresa.id }}"
-                             {% if empresa in config.empresas %}checked{% endif %}>
+                             {% if empresa in report.empresas %}checked{% endif %}>
                       <label class="form-check-label" for="empresa{{ empresa.id }}">
                         {{ empresa.nombre }}
                         {% if empresa.cuit %}
@@ -133,7 +123,7 @@
                 {% else %}
                 <div class="alert alert-warning small mb-0">
                   <i class="bi bi-exclamation-triangle me-1"></i>
-                  No hay empresas registradas. 
+                  No hay empresas registradas.
                   <a href="{{ url_for('empresas.new') }}" class="alert-link">Crear una empresa</a>
                 </div>
                 {% endif %}
@@ -142,7 +132,7 @@
             {% endif %}
 
             <div class="d-grid gap-2 d-md-flex justify-content-md-end">
-              <a href="{{ url_for('configs.list') }}" class="btn btn-outline-secondary">
+              <a href="{{ url_for('reports.list') }}" class="btn btn-outline-secondary">
                 Cancelar
               </a>
               {{ form.submit(class="btn btn-primary") }}
@@ -164,9 +154,9 @@
             <li><strong>Privado:</strong> Acceso vía API con autenticación de empresas</li>
             <li><strong>Ambos:</strong> El reporte puede ser tanto público como privado</li>
           </ul>
-          
+
           <hr>
-          
+
           <h6>Empresas:</h6>
           <p class="small mb-0">
             Las empresas con acceso pueden consultar el reporte usando sus credenciales API.
