@@ -61,7 +61,7 @@
             <dt class="col-sm-3">Usuario PBI:</dt>
             <dd class="col-sm-9">
               {% if report.usuario_pbi %}
-              <a href="{{ url_for('usuarios_pbi.detail', usuario_pbi_id=report.usuario_pbi.id) }}">{{ report.usuario_pbi.nombre }}</a>
+              <a href="{{ url_for('usuarios_pbi.detail', usuario_id=report.usuario_pbi.id) }}">{{ report.usuario_pbi.nombre }}</a>
               {% else %}
               <span class="text-muted">No asignado</span>
               {% endif %}
