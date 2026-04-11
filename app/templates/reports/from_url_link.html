@@ -37,11 +37,11 @@
             {{ form.hidden_tag() }}
 
             <div class="mb-4">
-              {{ form.custom_slug.label(class="form-label") }}
-              {{ form.custom_slug(class="form-control" + (" is-invalid" if form.custom_slug.errors else ""), placeholder="ej: ventas-2024") }}
-              {% if form.custom_slug.errors %}
+              {{ form.link_name.label(class="form-label") }}
+              {{ form.link_name(class="form-control" + (" is-invalid" if form.link_name.errors else ""), placeholder="ej: ventas-2024") }}
+              {% if form.link_name.errors %}
                 <div class="invalid-feedback">
-                  {% for error in form.custom_slug.errors %}{{ error }}{% endfor %}
+                  {% for error in form.link_name.errors %}{{ error }}{% endfor %}
                 </div>
               {% endif %}
               <div class="form-text">
@@ -66,7 +66,7 @@
 {% block scripts %}
 <script>
 document.addEventListener('DOMContentLoaded', function() {
-  const slugInput = document.getElementById('custom_slug');
+  const slugInput = document.getElementById('link_name');
   const slugPreview = document.getElementById('slug-preview');
 
   if (slugInput && slugPreview) {
