@@ -479,10 +479,15 @@
                             btn.innerHTML = '<i class="fas fa-check"></i> ¡Actualización iniciada!';
                             btn.style.background = '#2ecc71';
                             setTimeout(() => {
+                                btn.innerHTML = '<i class="fas fa-clock"></i> Espere 30 min';
+                                btn.style.background = '#e67e22';
+                            }, 3000);
+                            // Re-enable after full 30 minute cooldown
+                            setTimeout(() => {
                                 btn.innerHTML = '<i class="fas fa-sync-alt"></i> Actualizar datos';
                                 btn.style.background = '#27ae60';
                                 btn.disabled = false;
-                            }, 30000);
+                            }, 1800000);
                         } else if (status === 429) {
                             const retryMsg = body.retry_after
                                 ? `Espere ${Math.ceil(body.retry_after / 60)} minutos`

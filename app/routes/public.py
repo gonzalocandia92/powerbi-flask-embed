@@ -3,6 +3,7 @@ Public report viewing routes (no authentication required).
 """
 import logging
 import time
+import requests as _requests_lib
 from flask import Blueprint, render_template, request, make_response, jsonify
 
 from app.models import PublicLink, Report, Workspace, Tenant
@@ -18,6 +19,14 @@ _refresh_timestamps = {}
 
 # Minimum seconds between refreshes per slug
 _REFRESH_COOLDOWN = 1800  # 30 minutes
+
+
+def _cleanup_refresh_timestamps():
+    """Remove entries older than the cooldown period to prevent unbounded growth."""
+    cutoff = time.time() - _REFRESH_COOLDOWN
+    stale = [slug for slug, ts in _refresh_timestamps.items() if ts < cutoff]
+    for slug in stale:
+        del _refresh_timestamps[slug]
 
 
 @bp.route('/<custom_slug>')
@@ -84,6 +93,7 @@ def refresh(custom_slug):
 
     # Rate limiting: enforce minimum cooldown between refreshes
     now = time.time()
+    _cleanup_refresh_timestamps()
     last_refresh = _refresh_timestamps.get(custom_slug)
     if last_refresh is not None:
         elapsed = now - last_refresh
@@ -113,8 +123,7 @@ def refresh(custom_slug):
             "dataset_id": result["dataset_id"]
         }), 202
     except Exception as e:
-        import requests as req_lib
-        if isinstance(e, req_lib.HTTPError):
+        if isinstance(e, _requests_lib.HTTPError):
             status_code = e.response.status_code if e.response is not None else 0
             if status_code == 429:
                 logging.error(f"Power BI refresh quota exceeded for slug '{custom_slug}': {e}")
@@ -122,4 +131,4 @@ def refresh(custom_slug):
             logging.error(f"Power BI API error during refresh for slug '{custom_slug}': {e}")
             return jsonify({"error": "Error al actualizar el modelo semántico"}), 500
         logging.error(f"Refresh error for slug '{custom_slug}': {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Error al actualizar el modelo semántico"}), 500

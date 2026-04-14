@@ -5,6 +5,7 @@ Handles CRUD for reports, public link management, and URL-based report creation.
 import re
 import uuid
 import logging
+import requests as _requests_lib
 from urllib.parse import urlparse, parse_qs
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_required
@@ -240,8 +241,7 @@ def refresh_report(report_id):
             "dataset_id": result["dataset_id"]
         }), 202
     except Exception as e:
-        import requests as req_lib
-        if isinstance(e, req_lib.HTTPError):
+        if isinstance(e, _requests_lib.HTTPError):
             status_code = e.response.status_code if e.response is not None else 0
             if status_code == 429:
                 logging.error(f"Power BI refresh quota exceeded for report {report_id}: {e}")
@@ -249,7 +249,7 @@ def refresh_report(report_id):
             logging.error(f"Power BI API error during refresh for report {report_id}: {e}")
             return jsonify({"error": "Error al actualizar el modelo semántico"}), 500
         logging.error(f"Refresh error for report {report_id}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "Error al actualizar el modelo semántico"}), 500
 
 
 # --- Public Link Management ---
