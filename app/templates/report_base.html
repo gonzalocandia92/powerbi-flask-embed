@@ -196,6 +196,32 @@
             font-size: 1rem;
         }
         
+        .refresh-btn {
+            background: #27ae60;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            padding: 8px 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+        }
+        
+        .refresh-btn:hover {
+            background: #219a52;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+        
+        .refresh-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+        
         .fullscreen-controls {
             position: fixed;
             top: 20px;
@@ -294,6 +320,12 @@
                                     <i class="fas fa-expand"></i>
                                     Pantalla completa
                                 </button>
+                                {% if allow_refresh %}
+                                <button id="refreshDatasetBtn" class="refresh-btn" title="Actualizar modelo de datos">
+                                    <i class="fas fa-sync-alt"></i>
+                                    Actualizar datos
+                                </button>
+                                {% endif %}
                             </div>
                         </div>
                     </div>
@@ -425,6 +457,65 @@
                     exitFullscreen();
                 }
             });
+
+            // Refresh dataset button
+            const refreshBtn = document.getElementById('refreshDatasetBtn');
+            if (refreshBtn) {
+                refreshBtn.addEventListener('click', function() {
+                    const btn = this;
+                    if (btn.disabled) return;
+
+                    btn.disabled = true;
+                    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Actualizando...';
+                    btn.style.background = '#f39c12';
+
+                    fetch(window.location.pathname + '/refresh', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' }
+                    })
+                    .then(response => response.json().then(data => ({status: response.status, body: data})))
+                    .then(({status, body}) => {
+                        if (status === 202) {
+                            btn.innerHTML = '<i class="fas fa-check"></i> ¡Actualización iniciada!';
+                            btn.style.background = '#2ecc71';
+                            setTimeout(() => {
+                                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Actualizar datos';
+                                btn.style.background = '#27ae60';
+                                btn.disabled = false;
+                            }, 30000);
+                        } else if (status === 429) {
+                            const retryMsg = body.retry_after
+                                ? `Espere ${Math.ceil(body.retry_after / 60)} minutos`
+                                : body.error || 'Límite alcanzado';
+                            btn.innerHTML = '<i class="fas fa-clock"></i> ' + retryMsg;
+                            btn.style.background = '#e67e22';
+                            setTimeout(() => {
+                                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Actualizar datos';
+                                btn.style.background = '#27ae60';
+                                btn.disabled = false;
+                            }, 10000);
+                        } else {
+                            btn.innerHTML = '<i class="fas fa-times"></i> Error';
+                            btn.style.background = '#e74c3c';
+                            setTimeout(() => {
+                                btn.innerHTML = '<i class="fas fa-sync-alt"></i> Actualizar datos';
+                                btn.style.background = '#27ae60';
+                                btn.disabled = false;
+                            }, 5000);
+                        }
+                    })
+                    .catch(err => {
+                        console.error('Refresh error:', err);
+                        btn.innerHTML = '<i class="fas fa-times"></i> Error de conexión';
+                        btn.style.background = '#e74c3c';
+                        setTimeout(() => {
+                            btn.innerHTML = '<i class="fas fa-sync-alt"></i> Actualizar datos';
+                            btn.style.background = '#27ae60';
+                            btn.disabled = false;
+                        }, 5000);
+                    });
+                });
+            }
             
             try {
                 // Show loading state

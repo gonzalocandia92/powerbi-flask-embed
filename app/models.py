@@ -191,6 +191,7 @@ class PublicLink(db.Model):
     custom_slug = db.Column(db.String(120), unique=True, nullable=True)
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
+    allow_refresh = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow)
 
     report = db.relationship('Report', back_populates='public_links')

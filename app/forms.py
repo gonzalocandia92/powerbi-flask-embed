@@ -80,6 +80,7 @@ class PublicLinkForm(FlaskForm):
         "Nombre personalizado para el link",
         validators=[DataRequired(), Length(max=120)]
     )
+    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
     submit = SubmitField("Crear Link")
 
 
@@ -118,6 +119,7 @@ class PublicUrlLinkForm(FlaskForm):
         "Nombre del Link Público",
         validators=[DataRequired(), Length(max=120)]
     )
+    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
     submit = SubmitField("Crear Link Público")
 
 

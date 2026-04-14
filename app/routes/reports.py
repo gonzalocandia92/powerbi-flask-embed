@@ -6,7 +6,7 @@ import re
 import uuid
 import logging
 from urllib.parse import urlparse, parse_qs
-from flask import Blueprint, render_template, redirect, url_for, flash, request
+from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_required
 
 from app import db
@@ -16,7 +16,7 @@ from app.forms import (
     PublicUrlForm, PublicUrlWorkspaceForm, PublicUrlReportForm, PublicUrlLinkForm
 )
 from app.utils.decorators import retry_on_db_error
-from app.utils.powerbi import get_embed_for_report
+from app.utils.powerbi import get_embed_for_report, refresh_dataset
 
 bp = Blueprint('reports', __name__, url_prefix='/reports')
 
@@ -197,7 +197,8 @@ def view_report(report_id):
         embed_url=embed_url,
         report_id=rid,
         config_name=report.name,
-        is_public=False
+        is_public=False,
+        allow_refresh=True
     )
 
 
@@ -219,6 +220,36 @@ def delete(report_id):
     logging.info(f"Report deleted: {name} (ID: {report_id})")
     flash(f"Report '{name}' eliminado", "success")
     return redirect(url_for('reports.list'))
+
+
+@bp.route('/<int:report_id>/refresh', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def refresh_report(report_id):
+    """Trigger dataset refresh for a report (admin only)."""
+    report = Report.query.options(
+        db.joinedload(Report.workspace).joinedload(Workspace.tenant).joinedload(Tenant.client),
+        db.joinedload(Report.usuario_pbi)
+    ).get_or_404(report_id)
+
+    try:
+        result = refresh_dataset(report)
+        return jsonify({
+            "status": "success",
+            "message": "Actualización del modelo semántico iniciada",
+            "dataset_id": result["dataset_id"]
+        }), 202
+    except Exception as e:
+        import requests as req_lib
+        if isinstance(e, req_lib.HTTPError):
+            status_code = e.response.status_code if e.response is not None else 0
+            if status_code == 429:
+                logging.error(f"Power BI refresh quota exceeded for report {report_id}: {e}")
+                return jsonify({"error": "Se alcanzó el límite diario de actualizaciones de Power BI"}), 429
+            logging.error(f"Power BI API error during refresh for report {report_id}: {e}")
+            return jsonify({"error": "Error al actualizar el modelo semántico"}), 500
+        logging.error(f"Refresh error for report {report_id}: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # --- Public Link Management ---
@@ -243,7 +274,8 @@ def new_link(report_id):
             token=token,
             custom_slug=custom_slug,
             report_id_fk=report.id,
-            is_active=True
+            is_active=True,
+            allow_refresh=form.allow_refresh.data
         )
         db.session.add(link)
         db.session.commit()
@@ -279,6 +311,7 @@ def edit_link(report_id, link_id):
             return render_template('edit_public_link.html', form=form, report=report, link=link)
         
         link.custom_slug = new_slug
+        link.allow_refresh = form.allow_refresh.data
         db.session.commit()
         logging.info(f"Public link edited: {link.custom_slug} (ID: {link.id})")
         flash(f"Link público actualizado: /p/{new_slug}", "success")
@@ -471,7 +504,8 @@ def from_url_link():
             token=token,
             custom_slug=link_name,
             report_id_fk=report.id,
-            is_active=True
+            is_active=True,
+            allow_refresh=form.allow_refresh.data
         )
         db.session.add(link)
         db.session.commit()
