@@ -122,6 +122,6 @@ def delete(usuario_id):
     db.session.delete(usuario)
     db.session.commit()
     
-    logging.info(f"Usuario PBI deleted: {name} (ID: {usuario_id})")
+    logging.debug(f"Usuario PBI deleted: {name} (ID: {usuario_id})")
     flash(f"Usuario PBI '{name}' eliminado", "success")
     return redirect(url_for('usuarios_pbi.list'))

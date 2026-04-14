@@ -114,7 +114,7 @@ def refresh(custom_slug):
         ]
     )
 
-    logging.info(
+    logging.debug(
         f"Starting dataset refresh — slug: '{custom_slug}', "
         f"report_id: {report.id}, report_name: '{report.name}', "
         f"workspace: {report.workspace.workspace_id}"

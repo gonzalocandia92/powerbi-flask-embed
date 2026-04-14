@@ -84,6 +84,6 @@ def delete(client_id):
     name = client.name
     db.session.delete(client)
     db.session.commit()
-    logging.info(f"Client deleted: {name} (ID: {client_id})")
+    logging.debug(f"Client deleted: {name} (ID: {client_id})")
     flash(f"Client '{name}' eliminado", "success")
     return redirect(url_for('clients.list'))

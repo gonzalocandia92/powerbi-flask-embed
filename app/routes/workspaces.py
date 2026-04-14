@@ -85,6 +85,6 @@ def delete(workspace_id):
     name = workspace.name
     db.session.delete(workspace)
     db.session.commit()
-    logging.info(f"Workspace deleted: {name} (ID: {workspace_id})")
+    logging.debug(f"Workspace deleted: {name} (ID: {workspace_id})")
     flash(f"Workspace '{name}' eliminado", "success")
     return redirect(url_for('workspaces.list'))

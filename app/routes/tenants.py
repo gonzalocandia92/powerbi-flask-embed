@@ -85,6 +85,6 @@ def delete(tenant_id):
     name = tenant.name
     db.session.delete(tenant)
     db.session.commit()
-    logging.info(f"Tenant deleted: {name} (ID: {tenant_id})")
+    logging.debug(f"Tenant deleted: {name} (ID: {tenant_id})")
     flash(f"Tenant '{name}' eliminado", "success")
     return redirect(url_for('tenants.list'))

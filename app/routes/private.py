@@ -35,7 +35,7 @@ def login():
         return jsonify({'error': 'Invalid credentials'}), 401
     
     token_data = generate_token(empresa.id, empresa.client_id)
-    logging.info(f"Empresa authenticated: {empresa.nombre} (ID: {empresa.id})")
+    logging.debug(f"Empresa authenticated: {empresa.nombre} (ID: {empresa.id})")
     return jsonify(token_data), 200
 
 

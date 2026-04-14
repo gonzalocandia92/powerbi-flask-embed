@@ -218,7 +218,7 @@ def delete(report_id):
     name = report.name
     db.session.delete(report)
     db.session.commit()
-    logging.info(f"Report deleted: {name} (ID: {report_id})")
+    logging.debug(f"Report deleted: {name} (ID: {report_id})")
     flash(f"Report '{name}' eliminado", "success")
     return redirect(url_for('reports.list'))
 
@@ -313,7 +313,7 @@ def edit_link(report_id, link_id):
         link.custom_slug = new_slug
         link.allow_refresh = form.allow_refresh.data
         db.session.commit()
-        logging.info(f"Public link edited: {link.custom_slug} (ID: {link.id})")
+        logging.debug(f"Public link edited: {link.custom_slug} (ID: {link.id})")
         flash(f"Link público actualizado: /p/{new_slug}", "success")
         return redirect(url_for('main.index'))
     
@@ -332,7 +332,7 @@ def toggle_link(report_id, link_id):
     link.is_active = not link.is_active
     db.session.commit()
     status = "activado" if link.is_active else "desactivado"
-    logging.info(f"Public link {status}: {link.custom_slug} (ID: {link.id})")
+    logging.debug(f"Public link {status}: {link.custom_slug} (ID: {link.id})")
     flash(f"Link público {status}: /p/{link.custom_slug}", "success")
     return redirect(url_for('main.index'))
 
@@ -349,7 +349,7 @@ def delete_link(report_id, link_id):
     slug = link.custom_slug
     db.session.delete(link)
     db.session.commit()
-    logging.info(f"Public link deleted: {slug} (ID: {link_id})")
+    logging.debug(f"Public link deleted: {slug} (ID: {link_id})")
     flash(f"Link público eliminado: /p/{slug}", "success")
     return redirect(url_for('main.index'))
 
