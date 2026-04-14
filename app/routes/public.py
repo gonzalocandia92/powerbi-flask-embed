@@ -114,6 +114,12 @@ def refresh(custom_slug):
         ]
     )
 
+    logging.info(
+        f"Starting dataset refresh — slug: '{custom_slug}', "
+        f"report_id: {report.id}, report_name: '{report.name}', "
+        f"workspace: {report.workspace.workspace_id}"
+    )
+
     try:
         result = refresh_dataset(report)
         _refresh_timestamps[custom_slug] = now
@@ -125,10 +131,17 @@ def refresh(custom_slug):
     except Exception as e:
         if isinstance(e, _requests_lib.HTTPError):
             status_code = e.response.status_code if e.response is not None else 0
+            response_body = e.response.text if e.response is not None else ""
             if status_code == 429:
-                logging.error(f"Power BI refresh quota exceeded for slug '{custom_slug}': {e}")
+                logging.error(
+                    f"Power BI refresh quota exceeded for slug '{custom_slug}': {e} — "
+                    f"response body: {response_body!r}"
+                )
                 return jsonify({"error": "Se alcanzó el límite diario de actualizaciones de Power BI"}), 429
-            logging.error(f"Power BI API error during refresh for slug '{custom_slug}': {e}")
+            logging.error(
+                f"Power BI API error during refresh for slug '{custom_slug}': {e} — "
+                f"HTTP {status_code}, response body: {response_body!r}"
+            )
             return jsonify({"error": "Error al actualizar el modelo semántico"}), 500
-        logging.error(f"Refresh error for slug '{custom_slug}': {e}")
+        logging.error(f"Refresh error for slug '{custom_slug}': {e}", exc_info=True)
         return jsonify({"error": "Error al actualizar el modelo semántico"}), 500

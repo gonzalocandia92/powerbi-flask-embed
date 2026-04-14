@@ -20,7 +20,10 @@ def _get_access_token(report):
     if not user_pbi or not pass_pbi:
         raise RuntimeError("Power BI username or password not available.")
 
-    logging.debug(f"Obtaining token for tenant: {tenant.tenant_id}, client: {client.client_id}, user: {user_pbi}")
+    logging.info(
+        f"Requesting Azure AD token — tenant: {tenant.tenant_id}, "
+        f"client_id: {client.client_id}, user: {user_pbi}"
+    )
 
     token_url = f"https://login.microsoftonline.com/{tenant.tenant_id}/oauth2/v2.0/token"
     data = {
@@ -33,9 +36,14 @@ def _get_access_token(report):
     }
 
     response = requests.post(token_url, data=data)
+    if not response.ok:
+        logging.error(
+            f"Azure AD token request failed — status: {response.status_code}, "
+            f"body: {response.text!r}"
+        )
     response.raise_for_status()
     access_token = response.json().get("access_token")
-    logging.debug("Access token received successfully")
+    logging.info("Azure AD access token obtained successfully")
     return access_token
 
 
@@ -98,15 +106,27 @@ def refresh_dataset(report):
 
     # Step 1: Get dataset_id from report info
     report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report.report_id}"
+    logging.info(f"Fetching report info for dataset_id — workspace: {workspace_id}, report: {report.report_id}")
     resp = requests.get(report_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Failed to fetch report info — status: {resp.status_code}, body: {resp.text!r}"
+        )
     resp.raise_for_status()
     dataset_id = resp.json()["datasetId"]
+    logging.info(f"Dataset ID resolved: {dataset_id}")
 
     # Step 2: Trigger refresh
     refresh_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshes"
+    logging.info(f"Triggering dataset refresh — workspace: {workspace_id}, dataset: {dataset_id}")
     resp = requests.post(refresh_url, headers=headers, json={"notifyOption": "NoNotification"})
+    if not resp.ok:
+        logging.error(
+            f"Dataset refresh request failed — status: {resp.status_code}, body: {resp.text!r}"
+        )
     resp.raise_for_status()  # 202 = accepted, 429 = quota exceeded
 
+    logging.info(f"Dataset refresh accepted — dataset: {dataset_id}, HTTP status: {resp.status_code}")
     return {"dataset_id": dataset_id, "status": "accepted"}
 
 
