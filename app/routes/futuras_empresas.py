@@ -98,7 +98,7 @@ def confirm(futura_id):
     
     db.session.commit()
     
-    logging.info(f"Futura empresa confirmed and created: {empresa.nombre} (ID: {empresa.id})")
+    logging.debug(f"Futura empresa confirmed and created: {empresa.nombre} (ID: {empresa.id})")
     
     # Simulate POST to external system
     _simulate_external_notification(futura, empresa, 'confirmada')
@@ -134,7 +134,7 @@ def reject(futura_id):
     
     db.session.commit()
     
-    logging.info(f"Futura empresa rejected: {futura.nombre} (ID: {futura.id})")
+    logging.debug(f"Futura empresa rejected: {futura.nombre} (ID: {futura.id})")
     
     # Simulate POST to external system
     _simulate_external_notification(futura, None, 'rechazada')
@@ -190,7 +190,7 @@ def simulate_fetch():
     
     db.session.commit()
     
-    logging.info(f"Simulated fetch from external system: {added} new empresas added")
+    logging.debug(f"Simulated fetch from external system: {added} new empresas added")
     flash(f"Simulación completada: {added} nuevas empresas obtenidas del sistema externo", "success")
     
     return redirect(url_for('futuras_empresas.list'))
@@ -217,4 +217,4 @@ def _simulate_external_notification(futura, empresa, estado):
     #     headers={'Authorization': 'Bearer YOUR_TOKEN'}
     # )
     
-    logging.info(f"Simulated POST to external system: {json.dumps(payload)}")
+    logging.debug(f"Simulated POST to external system: {json.dumps(payload)}")

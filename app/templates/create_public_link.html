@@ -27,6 +27,19 @@
                                 </div>
                             {% endif %}
                         </div>
+
+                        <div class="mb-3">
+                            <div class="form-check">
+                                {{ form.allow_refresh(class="form-check-input") }}
+                                <label class="form-check-label" for="allow_refresh">
+                                    <i class="fas fa-sync-alt me-1"></i>
+                                    Permitir que los usuarios actualicen el modelo de datos
+                                </label>
+                                <small class="form-text text-muted d-block mt-1">
+                                    ⚠️ Power BI Pro tiene un límite de 8 actualizaciones por día por dataset.
+                                </small>
+                            </div>
+                        </div>
                         
                         {% with messages = get_flashed_messages(with_categories=true) %}
                             {% if messages %}

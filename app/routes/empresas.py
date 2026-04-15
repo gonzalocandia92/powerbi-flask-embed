@@ -45,7 +45,7 @@ def new():
         db.session.add(empresa)
         db.session.commit()
         
-        logging.info(f"Empresa created: {empresa.nombre} (ID: {empresa.id})")
+        logging.debug(f"Empresa created: {empresa.nombre} (ID: {empresa.id})")
         flash("Empresa creada exitosamente. IMPORTANTE: Guarde estas credenciales.", "success")
         return render_template(
             'admin/empresas/credentials.html',
@@ -70,7 +70,7 @@ def edit(empresa_id):
         empresa.nombre = form.nombre.data
         empresa.cuit = form.cuit.data
         db.session.commit()
-        logging.info(f"Empresa updated: {empresa.nombre} (ID: {empresa.id})")
+        logging.debug(f"Empresa updated: {empresa.nombre} (ID: {empresa.id})")
         flash("Empresa actualizada", "success")
         return redirect(url_for('empresas.list'))
     return render_template('admin/empresas/form.html', form=form, title='Editar Empresa', empresa=empresa, is_new=False)
@@ -159,6 +159,6 @@ def delete(empresa_id):
     nombre = empresa.nombre
     db.session.delete(empresa)
     db.session.commit()
-    logging.info(f"Empresa deleted: {nombre} (ID: {empresa_id})")
+    logging.debug(f"Empresa deleted: {nombre} (ID: {empresa_id})")
     flash("Empresa eliminada", "success")
     return redirect(url_for('empresas.list'))

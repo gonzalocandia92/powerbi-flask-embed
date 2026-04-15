@@ -5,6 +5,48 @@ import logging
 import requests
 
 
+def _get_access_token(report):
+    """Obtain Azure AD access token using ROPC for a report's credentials."""
+    workspace = report.workspace
+    tenant = workspace.tenant
+    client = tenant.client
+
+    client_secret = client.get_secret()
+    user_pbi = report.usuario_pbi.username
+    pass_pbi = report.usuario_pbi.get_password()
+
+    if not client_secret:
+        raise RuntimeError("Client secret not available. Please save the secret in the client configuration.")
+    if not user_pbi or not pass_pbi:
+        raise RuntimeError("Power BI username or password not available.")
+
+    logging.debug(
+        f"Requesting Azure AD token — tenant: {tenant.tenant_id}, "
+        f"client_id: {client.client_id}, user: {user_pbi}"
+    )
+
+    token_url = f"https://login.microsoftonline.com/{tenant.tenant_id}/oauth2/v2.0/token"
+    data = {
+        "grant_type": "password",
+        "client_id": client.client_id,
+        "client_secret": client_secret,
+        "scope": "https://analysis.windows.net/powerbi/api/.default",
+        "username": user_pbi,
+        "password": pass_pbi
+    }
+
+    response = requests.post(token_url, data=data)
+    if not response.ok:
+        logging.error(
+            f"Azure AD token request failed — status: {response.status_code}, "
+            f"body: {response.text!r}"
+        )
+    response.raise_for_status()
+    access_token = response.json().get("access_token")
+    logging.debug("Azure AD access token obtained successfully")
+    return access_token
+
+
 def get_embed_for_report(report):
     """
     Obtain embed token and URL for a Power BI report using ROPC authentication.
@@ -21,42 +63,10 @@ def get_embed_for_report(report):
         RuntimeError: If required credentials are not available
         requests.HTTPError: If API requests fail
     """
-    workspace = report.workspace
-    tenant = workspace.tenant
-    client = tenant.client
+    access_token = _get_access_token(report)
 
-    tenant_id = tenant.tenant_id
-    client_id = client.client_id
-    client_secret = client.get_secret()
-
-    user_pbi = report.usuario_pbi.username
-    pass_pbi = report.usuario_pbi.get_password()
-
-    workspace_id = workspace.workspace_id
+    workspace_id = report.workspace.workspace_id
     report_id = report.report_id
-
-    if not client_secret:
-        raise RuntimeError("Client secret not available. Please save the secret in the client configuration.")
-
-    if not user_pbi or not pass_pbi:
-        raise RuntimeError("Power BI username or password not available.")
-
-    logging.debug(f"Obtaining token for tenant: {tenant_id}, client: {client_id}, user: {user_pbi}")
-
-    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-    data = {
-        "grant_type": "password",
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "scope": "https://analysis.windows.net/powerbi/api/.default",
-        "username": user_pbi,
-        "password": pass_pbi
-    }
-
-    response = requests.post(token_url, data=data)
-    response.raise_for_status()
-    access_token = response.json().get("access_token")
-    logging.debug("Access token received successfully")
 
     report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report_id}"
     headers = {"Authorization": f"Bearer {access_token}"}
@@ -69,6 +79,55 @@ def get_embed_for_report(report):
     embed_url = report_info["embedUrl"]
 
     return embed_token, embed_url, report_id
+
+
+def refresh_dataset(report):
+    """
+    Trigger a semantic model (dataset) refresh for a Power BI report.
+
+    Steps:
+    1. Obtain access token via ROPC
+    2. GET report info to extract datasetId
+    3. POST to /datasets/{datasetId}/refreshes
+
+    Args:
+        report: Report model instance with relationships loaded
+
+    Returns:
+        dict: {"dataset_id": str, "status": "accepted"}
+
+    Raises:
+        RuntimeError: If credentials are missing
+        requests.HTTPError: If any API call fails (includes 429 for quota exceeded)
+    """
+    access_token = _get_access_token(report)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    workspace_id = report.workspace.workspace_id
+
+    # Step 1: Get dataset_id from report info
+    report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report.report_id}"
+    logging.debug(f"Fetching report info for dataset_id — workspace: {workspace_id}, report: {report.report_id}")
+    resp = requests.get(report_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Failed to fetch report info — status: {resp.status_code}, body: {resp.text!r}"
+        )
+    resp.raise_for_status()
+    dataset_id = resp.json()["datasetId"]
+    logging.debug(f"Dataset ID resolved: {dataset_id}")
+
+    # Step 2: Trigger refresh
+    refresh_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshes"
+    logging.debug(f"Triggering dataset refresh — workspace: {workspace_id}, dataset: {dataset_id}")
+    resp = requests.post(refresh_url, headers=headers, json={"notifyOption": "NoNotification"})
+    if not resp.ok:
+        logging.error(
+            f"Dataset refresh request failed — status: {resp.status_code}, body: {resp.text!r}"
+        )
+    resp.raise_for_status()  # 202 = accepted, 429 = quota exceeded
+
+    logging.debug(f"Dataset refresh accepted — dataset: {dataset_id}, HTTP status: {resp.status_code}")
+    return {"dataset_id": dataset_id, "status": "accepted"}
 
 
 # Backward-compatible alias

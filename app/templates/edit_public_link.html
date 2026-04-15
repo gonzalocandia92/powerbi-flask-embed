@@ -38,6 +38,19 @@
               </div>
             </div>
 
+            <div class="mb-4">
+              <div class="form-check">
+                {{ form.allow_refresh(class="form-check-input") }}
+                <label class="form-check-label" for="allow_refresh">
+                  <i class="fas fa-sync-alt me-1"></i>
+                  Permitir que los usuarios actualicen el modelo de datos
+                </label>
+                <small class="form-text text-muted d-block mt-1">
+                  ⚠️ Power BI Pro tiene un límite de 8 actualizaciones por día por dataset.
+                </small>
+              </div>
+            </div>
+
             <div class="alert alert-warning">
               <i class="bi bi-exclamation-triangle me-2"></i>
               <strong>Nota:</strong> Cambiar el nombre afectará a todos los usuarios que tengan el link anterior.

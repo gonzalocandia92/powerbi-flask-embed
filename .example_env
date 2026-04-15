@@ -22,6 +22,10 @@ PASS=powerbi-password
 WORKSPACE_ID=your-workspace-id
 REPORT_ID=your-report-id
 
+# Logging Configuration
+# Supported levels: DEBUG, INFO, WARNING, ERROR, CRITICAL (default: WARNING)
+LOG_LEVEL=WARNING
+
 # Analytics Configuration (optional)
 ANALYTICS_ENABLED=true
 ANALYTICS_SALT=change-this-to-random-salt-in-production

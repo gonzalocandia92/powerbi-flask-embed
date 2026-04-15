@@ -197,7 +197,7 @@ def track_visit(
         db.session.add(visit)
         db.session.commit()
         
-        logger.info(f"Tracked visit to {link_slug} from visitor {visitor_id}")
+        logger.debug(f"Tracked visit to {link_slug} from visitor {visitor_id}")
         return visit
         
     except SQLAlchemyError as e:
