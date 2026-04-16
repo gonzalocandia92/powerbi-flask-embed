@@ -1,8 +1,36 @@
 """
 Power BI integration utilities for embedding reports.
 """
+import base64
+import json
 import logging
 import requests
+
+
+def _decode_token_claims(token):
+    """
+    Decode the payload of a JWT access token for diagnostic logging.
+    Returns a dict with selected non-sensitive claims, or an error dict
+    if decoding fails.  Never raises.
+    """
+    try:
+        # JWT = header.payload.signature — we only need the payload
+        parts = token.split(".")
+        if len(parts) < 2:
+            return {"_decode_error": "Token does not look like a JWT"}
+        payload_b64 = parts[1]
+        # Add padding if necessary
+        payload_b64 += "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(payload_b64))
+        # Return only non-sensitive diagnostic fields
+        keys_of_interest = [
+            "aud", "iss", "appid", "app_displayname", "tid",
+            "scp", "roles", "wids", "oid", "upn", "unique_name",
+            "exp", "iat", "nbf",
+        ]
+        return {k: payload[k] for k in keys_of_interest if k in payload}
+    except Exception as exc:
+        return {"_decode_error": str(exc)}
 
 
 def _get_access_token(report):
@@ -42,8 +70,22 @@ def _get_access_token(report):
             f"body: {response.text!r}"
         )
     response.raise_for_status()
-    access_token = response.json().get("access_token")
-    logging.debug("Azure AD access token obtained successfully")
+
+    token_data = response.json()
+    access_token = token_data.get("access_token")
+
+    # Log diagnostic token info (scopes granted + decoded claims)
+    granted_scope = token_data.get("scope", "(not present)")
+    token_type = token_data.get("token_type", "(not present)")
+    expires_in = token_data.get("expires_in", "(not present)")
+    logging.debug(
+        f"Azure AD access token obtained successfully — "
+        f"token_type: {token_type}, expires_in: {expires_in}s, "
+        f"scope: {granted_scope}"
+    )
+    claims = _decode_token_claims(access_token)
+    logging.debug(f"Access token claims (diagnostic): {json.dumps(claims, default=str)}")
+
     return access_token
 
 
@@ -70,7 +112,29 @@ def get_embed_for_report(report):
 
     report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report_id}"
     headers = {"Authorization": f"Bearer {access_token}"}
+
+    logging.debug(
+        f"Fetching report embed info — workspace: {workspace_id}, "
+        f"report: {report_id}, url: {report_url}"
+    )
+
     resp = requests.get(report_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Power BI report request failed — "
+            f"status: {resp.status_code}, "
+            f"url: {report_url}, "
+            f"response_headers: {dict(resp.headers)}, "
+            f"body: {resp.text!r}"
+        )
+        logging.error(
+            f"Request context — "
+            f"tenant: {report.workspace.tenant.tenant_id}, "
+            f"client_id: {report.workspace.tenant.client.client_id}, "
+            f"user: {report.usuario_pbi.username}, "
+            f"workspace_id: {workspace_id}, "
+            f"report_id: {report_id}"
+        )
     resp.raise_for_status()
     report_info = resp.json()
     logging.debug(f"Embed URL obtained: {report_info.get('embedUrl')}")
@@ -110,7 +174,8 @@ def refresh_dataset(report):
     resp = requests.get(report_url, headers=headers)
     if not resp.ok:
         logging.error(
-            f"Failed to fetch report info — status: {resp.status_code}, body: {resp.text!r}"
+            f"Failed to fetch report info — status: {resp.status_code}, "
+            f"response_headers: {dict(resp.headers)}, body: {resp.text!r}"
         )
     resp.raise_for_status()
     dataset_id = resp.json()["datasetId"]
@@ -122,12 +187,67 @@ def refresh_dataset(report):
     resp = requests.post(refresh_url, headers=headers, json={"notifyOption": "NoNotification"})
     if not resp.ok:
         logging.error(
-            f"Dataset refresh request failed — status: {resp.status_code}, body: {resp.text!r}"
+            f"Dataset refresh request failed — status: {resp.status_code}, "
+            f"response_headers: {dict(resp.headers)}, body: {resp.text!r}"
         )
     resp.raise_for_status()  # 202 = accepted, 429 = quota exceeded
 
     logging.debug(f"Dataset refresh accepted — dataset: {dataset_id}, HTTP status: {resp.status_code}")
     return {"dataset_id": dataset_id, "status": "accepted"}
+
+
+def get_refresh_history(report, top=1):
+    """
+    Retrieve the refresh history for the semantic model (dataset) of a Power BI report.
+
+    Args:
+        report: Report model instance with relationships loaded
+        top: Number of most-recent refresh entries to return (default: 1)
+
+    Returns:
+        list[dict]: Refresh history entries from Power BI API (newest first).
+                    Empty list if none found.
+
+    Raises:
+        RuntimeError: If credentials are missing
+        requests.HTTPError: If any API call fails
+    """
+    access_token = _get_access_token(report)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    workspace_id = report.workspace.workspace_id
+
+    # Resolve dataset_id from report info
+    report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report.report_id}"
+    logging.debug(f"Fetching report info for refresh history — workspace: {workspace_id}, report: {report.report_id}")
+    resp = requests.get(report_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Failed to fetch report info for refresh history — status: {resp.status_code}, "
+            f"response_headers: {dict(resp.headers)}, body: {resp.text!r}"
+        )
+    resp.raise_for_status()
+    dataset_id = resp.json()["datasetId"]
+    logging.debug(f"Dataset ID resolved for refresh history: {dataset_id}")
+
+    # Fetch refresh history
+    history_url = (
+        f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}"
+        f"/datasets/{dataset_id}/refreshes?$top={top}"
+    )
+    resp = requests.get(history_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Failed to fetch refresh history — status: {resp.status_code}, "
+            f"response_headers: {dict(resp.headers)}, body: {resp.text!r}"
+        )
+    resp.raise_for_status()
+
+    entries = resp.json().get("value", [])
+    # Attach the resolved dataset_id to each entry for convenience
+    for entry in entries:
+        entry.setdefault("datasetId", dataset_id)
+
+    return entries
 
 
 # Backward-compatible alias

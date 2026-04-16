@@ -5,6 +5,7 @@ This Flask application provides an interface for embedding Power BI reports
 using Azure AD authentication and the Power BI REST API.
 """
 import os
+import atexit
 import logging
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
@@ -65,7 +66,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs
+    from app.routes import auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -79,7 +80,34 @@ def create_app():
     app.register_blueprint(empresas.bp)
     app.register_blueprint(futuras_empresas.bp)
     app.register_blueprint(api_docs.bp)
-    
+    app.register_blueprint(monitor.bp)
+
+    # ── Background scheduler for dataset refresh monitoring ──────────────────
+    # Avoid double-start in Flask debug/reloader mode
+    if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+            from app.services.refresh_monitor import poll_all_reports
+
+            interval_hours = int(os.getenv('REFRESH_POLL_INTERVAL_HOURS', 12))
+            scheduler = BackgroundScheduler(daemon=True)
+            scheduler.add_job(
+                func=poll_all_reports,
+                args=[app],
+                trigger='interval',
+                hours=interval_hours,
+                id='refresh_monitor_poll',
+                replace_existing=True,
+            )
+            scheduler.start()
+            atexit.register(lambda: scheduler.shutdown(wait=False))
+            logging.info(
+                f"[RefreshMonitor] Scheduler started — poll interval: {interval_hours}h"
+            )
+        except Exception as _sched_err:
+            logging.error(f"[RefreshMonitor] Failed to start scheduler: {_sched_err}")
+    # ─────────────────────────────────────────────────────────────────────────
+
     from app.models import User
     
     @login_manager.user_loader

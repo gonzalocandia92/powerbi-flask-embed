@@ -3,7 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{% block title %}PowerBI Embed Admin{% endblock %}</title>
+  <title>{% block title %}Sudata PBI{% endblock %}</title>
+  <link rel="icon" type="image/png" href="{{ url_for('static', filename='img/favicon.png') }}">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
@@ -486,7 +487,7 @@
 <nav class="navbar navbar-expand-lg navbar-dark">
   <div class="container-fluid">
     <a class="navbar-brand" href="{{ url_for('main.index') }}">
-      <i class="bi bi-graph-up-arrow me-2"></i>Power BI Admin
+      <i class="bi bi-graph-up-arrow me-2"></i>Sudata PBI
     </a>
     <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
       <span class="navbar-toggler-icon"></span>
@@ -501,6 +502,11 @@
         <li class="nav-item">
           <a class="nav-link" href="{{ url_for('analytics.dashboard') }}">
             <i class="bi bi-bar-chart-line me-1"></i>Analytics
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="{{ url_for('monitor.index') }}">
+            <i class="bi bi-activity me-1"></i>Monitor
           </a>
         </li>
         <li class="nav-item dropdown">

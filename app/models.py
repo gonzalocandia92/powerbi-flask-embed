@@ -220,6 +220,30 @@ class Visit(db.Model):
     session_duration = db.Column(db.Integer, nullable=True)
 
 
+class DatasetRefreshLog(db.Model):
+    """Tracks the refresh status of Power BI semantic models for each report."""
+
+    __tablename__ = 'dataset_refresh_logs'
+
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False)
+    dataset_id = db.Column(db.String(200), nullable=True)
+    status = db.Column(db.String(50), nullable=False, default='Unknown')
+    start_time = db.Column(db.DateTime, nullable=True)
+    end_time = db.Column(db.DateTime, nullable=True)
+    error_json = db.Column(db.Text, nullable=True)
+    refresh_type = db.Column(db.String(50), nullable=True)
+    polled_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    retry_attempted = db.Column(db.Boolean, default=False, nullable=False)
+    retry_triggered_at = db.Column(db.DateTime, nullable=True)
+
+    report = db.relationship('Report', backref=db.backref('refresh_logs', lazy='dynamic', cascade='all, delete-orphan'))
+
+    __table_args__ = (
+        db.Index('ix_refresh_log_report_polled', 'report_id_fk', 'polled_at'),
+    )
+
+
 class FuturaEmpresa(db.Model):
     """Pending company approval from external system."""
 

@@ -31,3 +31,7 @@ ANALYTICS_ENABLED=true
 ANALYTICS_SALT=change-this-to-random-salt-in-production
 ANALYTICS_RESPECT_DNT=true
 
+# Refresh Monitor Configuration
+# Interval (in hours) for the automatic dataset refresh status polling
+REFRESH_POLL_INTERVAL_HOURS=12
+
