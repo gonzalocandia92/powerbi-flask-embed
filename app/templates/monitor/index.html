@@ -233,15 +233,15 @@
   <!-- Report Preview Modal -->
   <div class="modal fade" id="reportPreviewModal" tabindex="-1" aria-labelledby="reportPreviewModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-fullscreen">
-      <div class="modal-content">
-        <div class="modal-header bg-primary text-white py-2">
+      <div class="modal-content" style="height: 100vh;">
+        <div class="modal-header bg-primary text-white py-2" style="flex-shrink: 0;">
           <h5 class="modal-title" id="reportPreviewModalLabel">
             <i class="bi bi-bar-chart-line me-2"></i><span id="reportPreviewName">Reporte</span>
           </h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Cerrar"></button>
         </div>
-        <div class="modal-body p-0 position-relative">
-          <div id="reportPreviewLoading" class="d-flex flex-column justify-content-center align-items-center" style="height: 100%;">
+        <div class="modal-body p-0 position-relative" style="flex: 1 1 auto; overflow: hidden; min-height: 0;">
+          <div id="reportPreviewLoading" class="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column justify-content-center align-items-center" style="z-index: 10; background: #fff;">
             <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
               <span class="visually-hidden">Cargando...</span>
             </div>
@@ -364,14 +364,21 @@ document.addEventListener('DOMContentLoaded', function () {
             panes: {
               filters: { visible: false },
               pageNavigation: { visible: true }
-            }
+            },
+            background: models ? models.BackgroundType.Default : 1,
           }
         };
 
         currentEmbeddedReport = powerbi.embed(embedContainer, embedConfig);
+
+        currentEmbeddedReport.on('error', function (event) {
+          console.error('Power BI embed error:', event.detail);
+        });
       })
       .catch(err => {
-        document.getElementById('reportPreviewLoading').innerHTML =
+        const loadingEl = document.getElementById('reportPreviewLoading');
+        loadingEl.style.display = 'flex';
+        loadingEl.innerHTML =
           `<div class="text-center text-danger">
             <i class="bi bi-exclamation-triangle fs-1 mb-3 d-block"></i>
             <p>${err.message || 'Error al cargar el reporte'}</p>
