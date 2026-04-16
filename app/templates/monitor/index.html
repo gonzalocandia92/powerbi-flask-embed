@@ -91,6 +91,7 @@
           <thead class="table-light">
             <tr>
               <th>Reporte</th>
+              <th>Tenant</th>
               <th>Workspace</th>
               <th>Último Estado</th>
               <th>Inicio Refresh</th>
@@ -112,6 +113,7 @@
                 <strong>{{ report.name }}</strong>
                 <br><small class="text-muted">ID: {{ report.id }}</small>
               </td>
+              <td class="small">{{ report.workspace.tenant.name if report.workspace and report.workspace.tenant else '—' }}</td>
               <td>{{ report.workspace.name if report.workspace else '—' }}</td>
               <td class="status-cell">
                 {% if cls == 'completed' %}
@@ -155,14 +157,18 @@
                   <span class="text-muted">—</span>
                 {% endif %}
               </td>
-              <td class="small" style="max-width:180px;">
+              <td class="text-center error-cell">
                 {% if row.error_summary %}
-                  <span class="text-danger" data-bs-toggle="tooltip" data-bs-placement="top"
-                        title="{{ row.error_summary }}">
-                    <i class="bi bi-exclamation-circle me-1"></i>
-                    {{ row.error_summary[:60] }}{% if row.error_summary|length > 60 %}…{% endif %}
-                  </span>
-                {% else %}—{% endif %}
+                  <button type="button" class="btn btn-sm btn-outline-danger btn-show-error"
+                          data-error-summary="{{ row.error_summary }}"
+                          data-error-detail="{{ row.error_detail|e }}"
+                          data-report-name="{{ report.name }}"
+                          title="Ver detalle del error">
+                    <i class="bi bi-exclamation-circle"></i>
+                  </button>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
               </td>
               <td class="small polled-at-cell">
                 {% if log and log.polled_at %}
@@ -193,6 +199,31 @@
     </div>
   </div>
 
+  <!-- Error Detail Modal -->
+  <div class="modal fade" id="errorDetailModal" tabindex="-1" aria-labelledby="errorDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header bg-danger text-white">
+          <h5 class="modal-title" id="errorDetailModalLabel">
+            <i class="bi bi-exclamation-triangle me-2"></i>Detalle del Error
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body">
+          <p class="fw-semibold mb-1">Reporte:</p>
+          <p id="errorModalReportName" class="text-muted"></p>
+          <p class="fw-semibold mb-1">Resumen:</p>
+          <p id="errorModalSummary" class="text-danger"></p>
+          <p class="fw-semibold mb-1">Detalle completo:</p>
+          <pre id="errorModalDetail" class="bg-light p-3 rounded border" style="white-space:pre-wrap; max-height:400px; overflow-y:auto;"></pre>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   {% else %}
   <div class="alert alert-info">
     <i class="bi bi-info-circle me-2"></i>
@@ -215,6 +246,28 @@ document.addEventListener('DOMContentLoaded', function () {
   // ── Tooltip init ──────────────────────────────────────────────────────────
   document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
     new bootstrap.Tooltip(el, { trigger: 'hover' });
+  });
+
+  // ── Error detail modal ──────────────────────────────────────────────────
+  const errorModal = document.getElementById('errorDetailModal');
+  const errorModalInstance = errorModal ? new bootstrap.Modal(errorModal) : null;
+
+  function showErrorModal(reportName, summary, detail) {
+    if (!errorModal) return;
+    document.getElementById('errorModalReportName').textContent = reportName || '—';
+    document.getElementById('errorModalSummary').textContent = summary || '—';
+    document.getElementById('errorModalDetail').textContent = detail || summary || '—';
+    errorModalInstance.show();
+  }
+
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest('.btn-show-error');
+    if (!btn) return;
+    showErrorModal(
+      btn.dataset.reportName,
+      btn.dataset.errorSummary,
+      btn.dataset.errorDetail
+    );
   });
 
   // ── Table search ─────────────────────────────────────────────────────────
@@ -283,6 +336,12 @@ document.addEventListener('DOMContentLoaded', function () {
       typeCell.innerHTML = data.refresh_type
         ? `<span class="badge bg-light text-dark border">${data.refresh_type}</span>`
         : '—';
+    }
+
+    // Update error cell
+    const errorCell = row.querySelector('.error-cell');
+    if (errorCell) {
+      errorCell.innerHTML = errorCellHtml(data.error_summary, data.error_detail, row.querySelector('.btn-poll-status')?.dataset.reportName);
     }
 
     // Update polled_at
@@ -407,6 +466,20 @@ document.addEventListener('DOMContentLoaded', function () {
         statusCell.innerHTML = badgeHtml(entry.classification);
       }
 
+      // Update refresh type
+      const typeCell = row.querySelector('.refresh-type-cell');
+      if (typeCell) {
+        typeCell.innerHTML = entry.refresh_type
+          ? `<span class="badge bg-light text-dark border">${entry.refresh_type}</span>`
+          : '—';
+      }
+
+      // Update error cell
+      const errorCell = row.querySelector('.error-cell');
+      if (errorCell) {
+        errorCell.innerHTML = errorCellHtml(entry.error_summary, entry.error_detail, entry.report_name);
+      }
+
       // Update polled_at
       const polledCell = row.querySelector('.polled-at-cell');
       if (polledCell && entry.polled_at) {
@@ -439,6 +512,26 @@ document.addEventListener('DOMContentLoaded', function () {
       default:
         return '<span class="badge bg-secondary"><i class="bi bi-question-circle me-1"></i>Sin datos</span>';
     }
+  }
+
+  function errorCellHtml(summary, detail, reportName) {
+    if (!summary) return '<span class="text-muted">—</span>';
+    const eSummary = escapeAttr(summary);
+    const eDetail = escapeAttr(detail || summary);
+    const eName = escapeAttr(reportName || '');
+    return `<button type="button" class="btn btn-sm btn-outline-danger btn-show-error"
+              data-error-summary="${eSummary}"
+              data-error-detail="${eDetail}"
+              data-report-name="${eName}"
+              title="Ver detalle del error">
+              <i class="bi bi-exclamation-circle"></i>
+            </button>`;
+  }
+
+  function escapeAttr(str) {
+    const div = document.createElement('div');
+    div.appendChild(document.createTextNode(str));
+    return div.innerHTML;
   }
 
   function getCsrfToken() {

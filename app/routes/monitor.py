@@ -112,6 +112,15 @@ def index():
             'error_detail': error_detail,
         })
 
+    # Sort: errors first, then by tenant name, workspace name, report id
+    _cls_order = {'failed_with_retry': 0, 'failed_no_retry': 1, 'unknown': 2, 'completed': 3}
+    rows.sort(key=lambda r: (
+        _cls_order.get(r['classification'], 99),
+        (r['report'].workspace.tenant.name if r['report'].workspace and r['report'].workspace.tenant else ''),
+        (r['report'].workspace.name if r['report'].workspace else ''),
+        r['report'].id,
+    ))
+
     # Summary counters
     counts = {
         'total': len(rows),
@@ -153,12 +162,15 @@ def poll_report_status(report_id):
         classification = _classify(log)
 
         error_summary = None
+        error_detail = None
         if log and log.error_json:
             try:
                 err = json.loads(log.error_json)
                 error_summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
+                error_detail = json.dumps(err, indent=2, ensure_ascii=False)
             except (json.JSONDecodeError, AttributeError):
                 error_summary = str(log.error_json)[:120]
+                error_detail = str(log.error_json)
 
         return jsonify({
             'status': 'success',
@@ -171,6 +183,7 @@ def poll_report_status(report_id):
             'refresh_type': log.refresh_type if log else None,
             'retry_attempted': log.retry_attempted if log else False,
             'error_summary': error_summary,
+            'error_detail': error_detail,
         }), 200
     except Exception as exc:
         logging.error(f"[Monitor] Poll status failed for report {report_id}: {exc}")
@@ -237,6 +250,17 @@ def status():
         log = latest_logs.get(report.id)
         classification = _classify(log)
 
+        error_summary = None
+        error_detail = None
+        if log and log.error_json:
+            try:
+                err = json.loads(log.error_json)
+                error_summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
+                error_detail = json.dumps(err, indent=2, ensure_ascii=False)
+            except (json.JSONDecodeError, AttributeError):
+                error_summary = str(log.error_json)[:120]
+                error_detail = str(log.error_json)
+
         entry = {
             'report_id': report.id,
             'report_name': report.name,
@@ -248,6 +272,8 @@ def status():
             'end_time': log.end_time.isoformat() if log and log.end_time else None,
             'refresh_type': log.refresh_type if log else None,
             'retry_attempted': log.retry_attempted if log else False,
+            'error_summary': error_summary,
+            'error_detail': error_detail,
         }
         data.append(entry)
 
