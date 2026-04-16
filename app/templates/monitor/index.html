@@ -143,7 +143,7 @@
                   {{ log.end_time.strftime('%Y-%m-%d %H:%M') }}
                 {% else %}—{% endif %}
               </td>
-              <td class="small">
+              <td class="small refresh-type-cell">
                 {% if log and log.refresh_type %}
                   <span class="badge bg-light text-dark border">{{ log.refresh_type }}</span>
                 {% else %}—{% endif %}
@@ -276,6 +276,14 @@ document.addEventListener('DOMContentLoaded', function () {
     // Update status badge
     const statusCell = row.querySelector('.status-cell');
     if (statusCell) statusCell.innerHTML = badgeHtml(data.classification);
+
+    // Update refresh type
+    const typeCell = row.querySelector('.refresh-type-cell');
+    if (typeCell) {
+      typeCell.innerHTML = data.refresh_type
+        ? `<span class="badge bg-light text-dark border">${data.refresh_type}</span>`
+        : '—';
+    }
 
     // Update polled_at
     const polledCell = row.querySelector('.polled-at-cell');
