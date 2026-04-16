@@ -8,9 +8,11 @@ POST /monitor/poll-all   — Trigger an immediate poll of all reports
 """
 import json
 import logging
+import os
 from datetime import datetime, timezone
 
-from flask import Blueprint, render_template, jsonify, request
+import requests as _req
+from flask import Blueprint, render_template, jsonify, current_app
 from flask_login import login_required
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
@@ -115,10 +117,13 @@ def index():
         'unknown': sum(1 for r in rows if r['classification'] == 'unknown'),
     }
 
+    interval_hours = int(os.getenv('REFRESH_POLL_INTERVAL_HOURS', 12))
+
     return render_template(
         'monitor/index.html',
         rows=rows,
         counts=counts,
+        interval_hours=interval_hours,
         title='Monitor de Actualizaciones',
     )
 
@@ -159,12 +164,11 @@ def force_refresh(report_id):
         }), 202
 
     except Exception as exc:
-        import requests as _req
         if isinstance(exc, _req.HTTPError) and exc.response is not None:
             if exc.response.status_code == 429:
                 return jsonify({'status': 'error', 'message': 'Límite diario de actualizaciones de Power BI alcanzado'}), 429
         logging.error(f"[Monitor] Manual refresh failed for report {report_id}: {exc}")
-        return jsonify({'status': 'error', 'message': f'Error al iniciar refresh: {exc}'}), 500
+        return jsonify({'status': 'error', 'message': 'Error al iniciar el refresh del modelo semántico'}), 500
 
 
 @bp.route('/status')
@@ -206,10 +210,9 @@ def status():
 def poll_all():
     """Trigger an immediate poll of all reports (runs synchronously in this request)."""
     from app.services.refresh_monitor import poll_all_reports
-    from flask import current_app
     try:
         poll_all_reports(current_app._get_current_object())
         return jsonify({'status': 'success', 'message': 'Poll completado'}), 200
     except Exception as exc:
         logging.error(f"[Monitor] poll_all failed: {exc}")
-        return jsonify({'status': 'error', 'message': str(exc)}), 500
+        return jsonify({'status': 'error', 'message': 'Error durante el poll de actualizaciones'}), 500

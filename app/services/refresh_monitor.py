@@ -94,11 +94,15 @@ def poll_report(report):
                 else json.dumps(service_exception)
             )
 
+    # Check retry eligibility BEFORE adding the new log to the session so that
+    # _latest_retry_attempted only sees previously committed entries, avoiding
+    # any false negative from the unflushed current log.
+    should_retry = log.status == "Failed" and not _latest_retry_attempted(report.id)
+
     db.session.add(log)
-    db.session.flush()  # Obtain log.id before potential retry
 
     # Automatic retry: once, if status is Failed and no prior retry for this report
-    if log.status == "Failed" and not _latest_retry_attempted(report.id):
+    if should_retry:
         logging.info(f"[RefreshMonitor] Auto-retrying failed dataset for report id={report.id} ({report.name})")
         try:
             refresh_dataset(report)
