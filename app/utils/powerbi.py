@@ -130,5 +130,57 @@ def refresh_dataset(report):
     return {"dataset_id": dataset_id, "status": "accepted"}
 
 
+def get_refresh_history(report, top=1):
+    """
+    Retrieve the refresh history for the semantic model (dataset) of a Power BI report.
+
+    Args:
+        report: Report model instance with relationships loaded
+        top: Number of most-recent refresh entries to return (default: 1)
+
+    Returns:
+        list[dict]: Refresh history entries from Power BI API (newest first).
+                    Empty list if none found.
+
+    Raises:
+        RuntimeError: If credentials are missing
+        requests.HTTPError: If any API call fails
+    """
+    access_token = _get_access_token(report)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    workspace_id = report.workspace.workspace_id
+
+    # Resolve dataset_id from report info
+    report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report.report_id}"
+    logging.debug(f"Fetching report info for refresh history — workspace: {workspace_id}, report: {report.report_id}")
+    resp = requests.get(report_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Failed to fetch report info for refresh history — status: {resp.status_code}, body: {resp.text!r}"
+        )
+    resp.raise_for_status()
+    dataset_id = resp.json()["datasetId"]
+    logging.debug(f"Dataset ID resolved for refresh history: {dataset_id}")
+
+    # Fetch refresh history
+    history_url = (
+        f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}"
+        f"/datasets/{dataset_id}/refreshes?$top={top}"
+    )
+    resp = requests.get(history_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Failed to fetch refresh history — status: {resp.status_code}, body: {resp.text!r}"
+        )
+    resp.raise_for_status()
+
+    entries = resp.json().get("value", [])
+    # Attach the resolved dataset_id to each entry for convenience
+    for entry in entries:
+        entry.setdefault("datasetId", dataset_id)
+
+    return entries
+
+
 # Backward-compatible alias
 get_embed_for_config = get_embed_for_report

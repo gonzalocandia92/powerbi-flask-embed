@@ -1,0 +1,389 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - PowerBI Embed Admin{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+
+  <!-- Page Header -->
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+      <h2 class="mb-0"><i class="bi bi-activity me-2"></i>{{ title }}</h2>
+      <small class="text-muted">Polling automático cada 12 horas &mdash; última actualización: <span id="lastUpdated">—</span></small>
+    </div>
+    <div class="d-flex gap-2">
+      <button id="btnPollAll" class="btn btn-outline-primary">
+        <i class="bi bi-arrow-clockwise me-1"></i> Actualizar Ahora
+      </button>
+    </div>
+  </div>
+
+  <!-- Summary Cards -->
+  <div class="row g-3 mb-4" id="summaryCards">
+    <div class="col-6 col-md-2">
+      <div class="card text-center h-100">
+        <div class="card-body py-3">
+          <div class="fs-2 fw-bold text-secondary" id="cntTotal">{{ counts.total }}</div>
+          <div class="small text-muted">Total</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="card text-center h-100">
+        <div class="card-body py-3">
+          <div class="fs-2 fw-bold text-success" id="cntCompleted">{{ counts.completed }}</div>
+          <div class="small text-muted"><i class="bi bi-check-circle me-1 text-success"></i>Completados</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="card text-center h-100">
+        <div class="card-body py-3">
+          <div class="fs-2 fw-bold text-danger" id="cntFailedRetry">{{ counts.failed_with_retry }}</div>
+          <div class="small text-muted"><i class="bi bi-x-circle me-1 text-danger"></i>Fallido (con retry)</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="card text-center h-100">
+        <div class="card-body py-3">
+          <div class="fs-2 fw-bold text-warning" id="cntFailedNoRetry">{{ counts.failed_no_retry }}</div>
+          <div class="small text-muted"><i class="bi bi-exclamation-triangle me-1 text-warning"></i>Fallido (sin retry)</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-6 col-md-2">
+      <div class="card text-center h-100">
+        <div class="card-body py-3">
+          <div class="fs-2 fw-bold text-secondary" id="cntUnknown">{{ counts.unknown }}</div>
+          <div class="small text-muted"><i class="bi bi-question-circle me-1 text-secondary"></i>Sin datos</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Search Filter -->
+  {% if rows %}
+  <div class="card mb-3">
+    <div class="card-body py-2 px-3">
+      <div class="row align-items-center">
+        <div class="col">
+          <div class="input-group input-group-sm">
+            <span class="input-group-text bg-transparent border-end-0">
+              <i class="bi bi-search text-muted"></i>
+            </span>
+            <input type="text" class="form-control border-start-0" id="tableSearch"
+                   placeholder="Buscar en reportes..." autocomplete="off">
+          </div>
+        </div>
+        <div class="col-auto">
+          <small class="text-muted" id="searchResultCount">{{ rows|length }} registros</small>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main Table -->
+  <div class="card shadow-sm">
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover mb-0" id="monitorTable">
+          <thead class="table-light">
+            <tr>
+              <th>Reporte</th>
+              <th>Workspace</th>
+              <th>Último Estado</th>
+              <th>Inicio Refresh</th>
+              <th>Fin Refresh</th>
+              <th>Tipo</th>
+              <th>Retry Auto</th>
+              <th>Error</th>
+              <th>Último Poll</th>
+              <th class="text-end">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in rows %}
+            {% set report = row.report %}
+            {% set log = row.log %}
+            {% set cls = row.classification %}
+            <tr data-report-id="{{ report.id }}" data-classification="{{ cls }}">
+              <td>
+                <strong>{{ report.name }}</strong>
+                <br><small class="text-muted">ID: {{ report.id }}</small>
+              </td>
+              <td>{{ report.workspace.name if report.workspace else '—' }}</td>
+              <td class="status-cell">
+                {% if cls == 'completed' %}
+                  <span class="badge bg-success">
+                    <i class="bi bi-check-circle me-1"></i>Completado
+                  </span>
+                {% elif cls == 'failed_with_retry' %}
+                  <span class="badge bg-danger">
+                    <i class="bi bi-x-circle me-1"></i>Fallido
+                    <i class="bi bi-arrow-repeat ms-1" title="Retry intentado"></i>
+                  </span>
+                {% elif cls == 'failed_no_retry' %}
+                  <span class="badge bg-warning text-dark">
+                    <i class="bi bi-exclamation-triangle me-1"></i>Fallido
+                  </span>
+                {% else %}
+                  <span class="badge bg-secondary">
+                    <i class="bi bi-question-circle me-1"></i>Sin datos
+                  </span>
+                {% endif %}
+              </td>
+              <td class="small">
+                {% if log and log.start_time %}
+                  {{ log.start_time.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}—{% endif %}
+              </td>
+              <td class="small">
+                {% if log and log.end_time %}
+                  {{ log.end_time.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}—{% endif %}
+              </td>
+              <td class="small">
+                {% if log and log.refresh_type %}
+                  <span class="badge bg-light text-dark border">{{ log.refresh_type }}</span>
+                {% else %}—{% endif %}
+              </td>
+              <td class="text-center">
+                {% if log and log.retry_attempted %}
+                  <i class="bi bi-check-lg text-success fs-5" title="Retry automático realizado"></i>
+                {% else %}
+                  <span class="text-muted">—</span>
+                {% endif %}
+              </td>
+              <td class="small" style="max-width:180px;">
+                {% if row.error_summary %}
+                  <span class="text-danger" data-bs-toggle="tooltip" data-bs-placement="top"
+                        title="{{ row.error_summary }}">
+                    <i class="bi bi-exclamation-circle me-1"></i>
+                    {{ row.error_summary[:60] }}{% if row.error_summary|length > 60 %}…{% endif %}
+                  </span>
+                {% else %}—{% endif %}
+              </td>
+              <td class="small polled-at-cell">
+                {% if log and log.polled_at %}
+                  {{ log.polled_at.strftime('%Y-%m-%d %H:%M') }}
+                {% else %}—{% endif %}
+              </td>
+              <td class="text-end">
+                <button class="btn btn-sm btn-outline-primary btn-force-refresh"
+                        data-report-id="{{ report.id }}"
+                        data-report-name="{{ report.name }}"
+                        title="Forzar Refresh">
+                  <i class="bi bi-arrow-clockwise"></i>
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  {% else %}
+  <div class="alert alert-info">
+    <i class="bi bi-info-circle me-2"></i>
+    No hay reportes registrados.
+    <a href="{{ url_for('reports.new') }}" class="alert-link">Crear el primero</a>
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+
+  // ── Tooltip init ──────────────────────────────────────────────────────────
+  document.querySelectorAll('[data-bs-toggle="tooltip"]').forEach(function (el) {
+    new bootstrap.Tooltip(el, { trigger: 'hover' });
+  });
+
+  // ── Table search ─────────────────────────────────────────────────────────
+  const searchInput = document.getElementById('tableSearch');
+  const searchCount = document.getElementById('searchResultCount');
+  if (searchInput) {
+    searchInput.addEventListener('input', function () {
+      const query = this.value.toLowerCase();
+      const rows = document.querySelectorAll('#monitorTable tbody tr');
+      let visible = 0;
+      rows.forEach(row => {
+        const match = row.textContent.toLowerCase().includes(query);
+        row.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+      if (searchCount) {
+        searchCount.textContent = query
+          ? visible + ' resultado' + (visible !== 1 ? 's' : '')
+          : '{{ rows|length }} registros';
+      }
+    });
+  }
+
+  // ── Force refresh (per-report button) ────────────────────────────────────
+  document.querySelectorAll('.btn-force-refresh').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const reportId = this.dataset.reportId;
+      const reportName = this.dataset.reportName;
+      const btnEl = this;
+
+      Swal.fire({
+        title: '¿Forzar Refresh?',
+        text: `Se iniciará una actualización del modelo semántico para "${reportName}".`,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Sí, actualizar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then(result => {
+        if (!result.isConfirmed) return;
+
+        btnEl.disabled = true;
+        btnEl.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+        fetch(`/monitor/reports/${reportId}/refresh`, {
+          method: 'POST',
+          headers: { 'X-CSRFToken': getCsrfToken() }
+        })
+        .then(res => res.json().then(data => ({ ok: res.ok, status: res.status, data })))
+        .then(({ ok, status, data }) => {
+          if (ok) {
+            showSuccess(data.message || 'Refresh iniciado');
+            // Refresh table data after a short delay
+            setTimeout(refreshTableData, 3000);
+          } else if (status === 429) {
+            showError(data.message || 'Límite de actualizaciones alcanzado');
+          } else {
+            showError(data.message || 'Error al iniciar refresh');
+          }
+        })
+        .catch(() => showError('Error de conexión al iniciar refresh'))
+        .finally(() => {
+          btnEl.disabled = false;
+          btnEl.innerHTML = '<i class="bi bi-arrow-clockwise"></i>';
+        });
+      });
+    });
+  });
+
+  // ── Poll All button ───────────────────────────────────────────────────────
+  const btnPollAll = document.getElementById('btnPollAll');
+  if (btnPollAll) {
+    btnPollAll.addEventListener('click', function () {
+      btnPollAll.disabled = true;
+      btnPollAll.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Actualizando…';
+
+      fetch('/monitor/poll-all', {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCsrfToken() }
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          showSuccess('Poll completado. Recargando datos…');
+          setTimeout(() => location.reload(), 1500);
+        } else {
+          showError(data.message || 'Error durante el poll');
+          btnPollAll.disabled = false;
+          btnPollAll.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i> Actualizar Ahora';
+        }
+      })
+      .catch(() => {
+        showError('Error de conexión');
+        btnPollAll.disabled = false;
+        btnPollAll.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i> Actualizar Ahora';
+      });
+    });
+  }
+
+  // ── Auto-refresh table data every 60 seconds ─────────────────────────────
+  function refreshTableData() {
+    fetch('/monitor/status')
+      .then(res => res.json())
+      .then(data => {
+        updateTableFromStatus(data);
+        const now = new Date(data.generated_at);
+        const lastUpdatedEl = document.getElementById('lastUpdated');
+        if (lastUpdatedEl) {
+          lastUpdatedEl.textContent = now.toLocaleTimeString();
+        }
+      })
+      .catch(() => {
+        // Silently ignore auto-refresh errors
+      });
+  }
+
+  function updateTableFromStatus(data) {
+    if (!data || !data.reports) return;
+
+    const counts = { total: 0, completed: 0, failed_with_retry: 0, failed_no_retry: 0, unknown: 0 };
+
+    data.reports.forEach(entry => {
+      counts.total++;
+      counts[entry.classification] = (counts[entry.classification] || 0) + 1;
+
+      const row = document.querySelector(`tr[data-report-id="${entry.report_id}"]`);
+      if (!row) return;
+
+      // Update status badge
+      const statusCell = row.querySelector('.status-cell');
+      if (statusCell) {
+        statusCell.innerHTML = badgeHtml(entry.classification);
+      }
+
+      // Update polled_at
+      const polledCell = row.querySelector('.polled-at-cell');
+      if (polledCell && entry.polled_at) {
+        const d = new Date(entry.polled_at);
+        polledCell.textContent = d.toISOString().slice(0, 16).replace('T', ' ');
+      }
+
+      row.dataset.classification = entry.classification;
+    });
+
+    // Update counter badges
+    ['Total', 'Completed', 'FailedRetry', 'FailedNoRetry', 'Unknown'].forEach(key => {
+      const mapKey = {
+        Total: 'total', Completed: 'completed',
+        FailedRetry: 'failed_with_retry', FailedNoRetry: 'failed_no_retry', Unknown: 'unknown'
+      }[key];
+      const el = document.getElementById(`cnt${key}`);
+      if (el) el.textContent = counts[mapKey] || 0;
+    });
+  }
+
+  function badgeHtml(classification) {
+    switch (classification) {
+      case 'completed':
+        return '<span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Completado</span>';
+      case 'failed_with_retry':
+        return '<span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Fallido <i class="bi bi-arrow-repeat ms-1" title="Retry intentado"></i></span>';
+      case 'failed_no_retry':
+        return '<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i>Fallido</span>';
+      default:
+        return '<span class="badge bg-secondary"><i class="bi bi-question-circle me-1"></i>Sin datos</span>';
+    }
+  }
+
+  function getCsrfToken() {
+    // Flask-WTF CSRF token from meta tag if present, otherwise empty
+    const meta = document.querySelector('meta[name="csrf-token"]');
+    return meta ? meta.getAttribute('content') : '';
+  }
+
+  // Initial timestamp
+  const lastUpdatedEl = document.getElementById('lastUpdated');
+  if (lastUpdatedEl) lastUpdatedEl.textContent = new Date().toLocaleTimeString();
+
+  // Auto-refresh every 60 seconds
+  setInterval(refreshTableData, 60000);
+});
+</script>
+{% endblock %}
