@@ -163,8 +163,18 @@
                           data-error-summary="{{ row.error_summary }}"
                           data-error-detail="{{ row.error_detail|e }}"
                           data-report-name="{{ report.name }}"
+                          data-detail-mode="error"
                           title="Ver detalle del error">
                     <i class="bi bi-exclamation-circle"></i>
+                  </button>
+                {% elif row.info_summary %}
+                  <button type="button" class="btn btn-sm btn-outline-info btn-show-error"
+                          data-error-summary="{{ row.info_summary }}"
+                          data-error-detail="{{ row.info_detail|e }}"
+                          data-report-name="{{ report.name }}"
+                          data-detail-mode="info"
+                          title="Ver información del estado">
+                    <i class="bi bi-info-circle"></i>
                   </button>
                 {% else %}
                   <span class="text-muted">—</span>
@@ -205,22 +215,22 @@
     </div>
   </div>
 
-  <!-- Error Detail Modal -->
+  <!-- Error / Info Detail Modal -->
   <div class="modal fade" id="errorDetailModal" tabindex="-1" aria-labelledby="errorDetailModalLabel" aria-hidden="true">
     <div class="modal-dialog modal-lg modal-dialog-scrollable">
       <div class="modal-content">
-        <div class="modal-header bg-danger text-white">
+        <div class="modal-header text-white" id="errorDetailModalHeader">
           <h5 class="modal-title" id="errorDetailModalLabel">
-            <i class="bi bi-exclamation-triangle me-2"></i>Detalle del Error
+            <i class="bi me-2" id="errorDetailModalIcon"></i><span id="errorDetailModalTitle">Detalle</span>
           </h5>
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Cerrar"></button>
         </div>
         <div class="modal-body">
           <p class="fw-semibold mb-1">Reporte:</p>
           <p id="errorModalReportName" class="text-muted"></p>
-          <p class="fw-semibold mb-1">Resumen:</p>
-          <p id="errorModalSummary" class="text-danger"></p>
-          <p class="fw-semibold mb-1">Detalle completo:</p>
+          <p class="fw-semibold mb-1" id="errorModalSummaryLabel">Resumen:</p>
+          <p id="errorModalSummary"></p>
+          <p class="fw-semibold mb-1" id="errorModalDetailLabel">Detalle completo:</p>
           <pre id="errorModalDetail" class="bg-light p-3 rounded border" style="white-space:pre-wrap; max-height:400px; overflow-y:auto;"></pre>
         </div>
         <div class="modal-footer">
@@ -278,25 +288,50 @@ document.addEventListener('DOMContentLoaded', function () {
     new bootstrap.Tooltip(el, { trigger: 'hover' });
   });
 
-  // ── Error detail modal ──────────────────────────────────────────────────
+  // ── Error / Info detail modal ───────────────────────────────────────────
   const errorModal = document.getElementById('errorDetailModal');
   const errorModalInstance = errorModal ? new bootstrap.Modal(errorModal) : null;
 
-  function showErrorModal(reportName, summary, detail) {
+  function showDetailModal(reportName, summary, detail, mode) {
     if (!errorModal) return;
+    const isInfo = mode === 'info';
+    const header = document.getElementById('errorDetailModalHeader');
+    const icon = document.getElementById('errorDetailModalIcon');
+    const title = document.getElementById('errorDetailModalTitle');
+    const summaryEl = document.getElementById('errorModalSummary');
+    const summaryLabel = document.getElementById('errorModalSummaryLabel');
+    const detailLabel = document.getElementById('errorModalDetailLabel');
+
+    header.className = isInfo
+      ? 'modal-header text-white bg-info'
+      : 'modal-header text-white bg-danger';
+    icon.className = isInfo
+      ? 'bi bi-info-circle me-2'
+      : 'bi bi-exclamation-triangle me-2';
+    title.textContent = isInfo ? 'Información del Estado' : 'Detalle del Error';
+    summaryEl.className = isInfo ? 'text-info' : 'text-danger';
+    summaryLabel.textContent = isInfo ? 'Estado:' : 'Resumen:';
+    detailLabel.textContent = isInfo ? 'Datos disponibles:' : 'Detalle completo:';
+
     document.getElementById('errorModalReportName').textContent = reportName || '—';
-    document.getElementById('errorModalSummary').textContent = summary || '—';
+    summaryEl.textContent = summary || '—';
     document.getElementById('errorModalDetail').textContent = detail || summary || '—';
     errorModalInstance.show();
+  }
+
+  // Backward-compatible wrapper
+  function showErrorModal(reportName, summary, detail) {
+    showDetailModal(reportName, summary, detail, 'error');
   }
 
   document.addEventListener('click', function (e) {
     const btn = e.target.closest('.btn-show-error');
     if (!btn) return;
-    showErrorModal(
+    showDetailModal(
       btn.dataset.reportName,
       btn.dataset.errorSummary,
-      btn.dataset.errorDetail
+      btn.dataset.errorDetail,
+      btn.dataset.detailMode || 'error'
     );
   });
 
@@ -470,7 +505,11 @@ document.addEventListener('DOMContentLoaded', function () {
     // Update error cell
     const errorCell = row.querySelector('.error-cell');
     if (errorCell) {
-      errorCell.innerHTML = errorCellHtml(data.error_summary, data.error_detail, row.dataset.reportName);
+      errorCell.innerHTML = detailCellHtml(
+        data.error_summary, data.error_detail,
+        data.info_summary, data.info_detail,
+        row.dataset.reportName
+      );
     }
 
     // Update polled_at
@@ -606,7 +645,11 @@ document.addEventListener('DOMContentLoaded', function () {
       // Update error cell
       const errorCell = row.querySelector('.error-cell');
       if (errorCell) {
-        errorCell.innerHTML = errorCellHtml(entry.error_summary, entry.error_detail, entry.report_name);
+        errorCell.innerHTML = detailCellHtml(
+          entry.error_summary, entry.error_detail,
+          entry.info_summary, entry.info_detail,
+          entry.report_name
+        );
       }
 
       // Update polled_at
@@ -652,9 +695,31 @@ document.addEventListener('DOMContentLoaded', function () {
               data-error-summary="${eSummary}"
               data-error-detail="${eDetail}"
               data-report-name="${eName}"
+              data-detail-mode="error"
               title="Ver detalle del error">
               <i class="bi bi-exclamation-circle"></i>
             </button>`;
+  }
+
+  function infoCellHtml(summary, detail, reportName) {
+    if (!summary) return '<span class="text-muted">—</span>';
+    const eSummary = escapeAttr(summary);
+    const eDetail = escapeAttr(detail || summary);
+    const eName = escapeAttr(reportName || '');
+    return `<button type="button" class="btn btn-sm btn-outline-info btn-show-error"
+              data-error-summary="${eSummary}"
+              data-error-detail="${eDetail}"
+              data-report-name="${eName}"
+              data-detail-mode="info"
+              title="Ver información del estado">
+              <i class="bi bi-info-circle"></i>
+            </button>`;
+  }
+
+  function detailCellHtml(errorSummary, errorDetail, infoSummary, infoDetail, reportName) {
+    if (errorSummary) return errorCellHtml(errorSummary, errorDetail, reportName);
+    if (infoSummary) return infoCellHtml(infoSummary, infoDetail, reportName);
+    return '<span class="text-muted">—</span>';
   }
 
   function escapeAttr(str) {

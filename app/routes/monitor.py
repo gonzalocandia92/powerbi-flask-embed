@@ -87,6 +87,48 @@ def _classify(log):
     return 'unknown'
 
 
+def _build_status_info(log, classification):
+    """
+    Build an informational summary and detail for log entries that have data
+    but no error — especially for 'unknown' classification (e.g. refresh in
+    progress).
+
+    Returns (info_summary, info_detail) or (None, None) when there is nothing
+    useful to show.
+    """
+    if log is None or classification != 'unknown':
+        return None, None
+
+    # Only build info when the log actually contains API data
+    if not log.status or (log.status == 'Unknown' and not log.start_time and not log.refresh_type and not log.dataset_id):
+        return None, None
+
+    status = log.status or 'Unknown'
+
+    status_labels = {
+        'Unknown': 'En proceso / Desconocido',
+        'Disabled': 'Deshabilitado',
+    }
+    summary = f"Estado: {status_labels.get(status, status)}"
+    if status == 'Unknown' and log.start_time:
+        summary = "Actualización en curso"
+
+    info = {"estado": status}
+    if log.dataset_id:
+        info["datasetId"] = log.dataset_id
+    if log.start_time:
+        info["inicio"] = log.start_time.strftime('%Y-%m-%d %H:%M:%S UTC')
+    if log.end_time:
+        info["fin"] = log.end_time.strftime('%Y-%m-%d %H:%M:%S UTC')
+    if log.refresh_type:
+        info["tipo"] = log.refresh_type
+    if log.polled_at:
+        info["consultado"] = log.polled_at.strftime('%Y-%m-%d %H:%M:%S UTC')
+
+    detail = json.dumps(info, indent=2, ensure_ascii=False)
+    return summary, detail
+
+
 @bp.route('/')
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
@@ -113,12 +155,17 @@ def index():
         # Parse error
         error_summary, error_detail = _parse_error(log)
 
+        # Build info for "unknown" entries that have data
+        info_summary, info_detail = _build_status_info(log, classification)
+
         rows.append({
             'report': report,
             'log': log,
             'classification': classification,
             'error_summary': error_summary,
             'error_detail': error_detail,
+            'info_summary': info_summary,
+            'info_detail': info_detail,
         })
 
     # Sort: errors first, then by tenant name, workspace name, report id
@@ -171,6 +218,7 @@ def poll_report_status(report_id):
         classification = _classify(log)
 
         error_summary, error_detail = _parse_error(log)
+        info_summary, info_detail = _build_status_info(log, classification)
 
         return jsonify({
             'status': 'success',
@@ -184,6 +232,8 @@ def poll_report_status(report_id):
             'retry_attempted': log.retry_attempted if log else False,
             'error_summary': error_summary,
             'error_detail': error_detail,
+            'info_summary': info_summary,
+            'info_detail': info_detail,
         }), 200
     except Exception as exc:
         logging.error(f"[Monitor] Poll status failed for report {report_id}: {exc}")
@@ -279,6 +329,7 @@ def status():
         classification = _classify(log)
 
         error_summary, error_detail = _parse_error(log)
+        info_summary, info_detail = _build_status_info(log, classification)
 
         entry = {
             'report_id': report.id,
@@ -293,6 +344,8 @@ def status():
             'retry_attempted': log.retry_attempted if log else False,
             'error_summary': error_summary,
             'error_detail': error_detail,
+            'info_summary': info_summary,
+            'info_detail': info_detail,
         }
         data.append(entry)
 
