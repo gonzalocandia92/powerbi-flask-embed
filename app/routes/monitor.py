@@ -94,18 +94,22 @@ def index():
 
         # Parse error summary for tooltip
         error_summary = None
+        error_detail = None
         if log and log.error_json:
             try:
                 err = json.loads(log.error_json)
                 error_summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
+                error_detail = json.dumps(err, indent=2, ensure_ascii=False)
             except (json.JSONDecodeError, AttributeError):
                 error_summary = str(log.error_json)[:120]
+                error_detail = str(log.error_json)
 
         rows.append({
             'report': report,
             'log': log,
             'classification': classification,
             'error_summary': error_summary,
+            'error_detail': error_detail,
         })
 
     # Summary counters
