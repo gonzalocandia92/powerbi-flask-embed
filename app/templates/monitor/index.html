@@ -170,12 +170,20 @@
                 {% else %}—{% endif %}
               </td>
               <td class="text-end">
-                <button class="btn btn-sm btn-outline-primary btn-force-refresh"
-                        data-report-id="{{ report.id }}"
-                        data-report-name="{{ report.name }}"
-                        title="Forzar Refresh">
-                  <i class="bi bi-arrow-clockwise"></i>
-                </button>
+                <div class="btn-group" role="group">
+                  <button class="btn btn-sm btn-outline-info btn-poll-status"
+                          data-report-id="{{ report.id }}"
+                          data-report-name="{{ report.name }}"
+                          title="Ver estado actual (en PowerBI)">
+                    <i class="bi bi-cloud-check"></i>
+                  </button>
+                  <button class="btn btn-sm btn-outline-primary btn-force-refresh"
+                          data-report-id="{{ report.id }}"
+                          data-report-name="{{ report.name }}"
+                          title="Forzar refresh">
+                    <i class="bi bi-arrow-clockwise"></i>
+                  </button>
+                </div>
               </td>
             </tr>
             {% endfor %}
@@ -228,6 +236,55 @@ document.addEventListener('DOMContentLoaded', function () {
           : '{{ rows|length }} registros';
       }
     });
+  }
+
+  // ── Poll status (per-report button) ──────────────────────────────────────
+  document.querySelectorAll('.btn-poll-status').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      const reportId = this.dataset.reportId;
+      const reportName = this.dataset.reportName;
+      const btnEl = this;
+
+      btnEl.disabled = true;
+      btnEl.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+      fetch(`/monitor/reports/${reportId}/poll`, {
+        method: 'POST',
+        headers: { 'X-CSRFToken': getCsrfToken() }
+      })
+      .then(res => res.json().then(data => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (ok) {
+          updateRowFromPoll(reportId, data);
+          showSuccess(data.message || 'Estado actualizado');
+        } else {
+          showError(data.message || 'Error al consultar el estado');
+        }
+      })
+      .catch(() => showError('Error de conexión al consultar el estado'))
+      .finally(() => {
+        btnEl.disabled = false;
+        btnEl.innerHTML = '<i class="bi bi-cloud-check"></i>';
+      });
+    });
+  });
+
+  function updateRowFromPoll(reportId, data) {
+    const row = document.querySelector(`tr[data-report-id="${reportId}"]`);
+    if (!row) return;
+
+    // Update status badge
+    const statusCell = row.querySelector('.status-cell');
+    if (statusCell) statusCell.innerHTML = badgeHtml(data.classification);
+
+    // Update polled_at
+    const polledCell = row.querySelector('.polled-at-cell');
+    if (polledCell && data.polled_at) {
+      const d = new Date(data.polled_at);
+      polledCell.textContent = d.toISOString().slice(0, 16).replace('T', ' ');
+    }
+
+    row.dataset.classification = data.classification;
   }
 
   // ── Force refresh (per-report button) ────────────────────────────────────

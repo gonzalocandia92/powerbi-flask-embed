@@ -128,6 +128,51 @@ def index():
     )
 
 
+@bp.route('/reports/<int:report_id>/poll', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def poll_report_status(report_id):
+    """Poll the current refresh status from Power BI for a single report."""
+    from app.services.refresh_monitor import poll_report
+
+    report = (
+        Report.query
+        .options(
+            joinedload(Report.workspace).joinedload(Workspace.tenant).joinedload(Tenant.client),
+            joinedload(Report.usuario_pbi),
+        )
+        .get_or_404(report_id)
+    )
+
+    try:
+        log = poll_report(report)
+        classification = _classify(log)
+
+        error_summary = None
+        if log and log.error_json:
+            try:
+                err = json.loads(log.error_json)
+                error_summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
+            except (json.JSONDecodeError, AttributeError):
+                error_summary = str(log.error_json)[:120]
+
+        return jsonify({
+            'status': 'success',
+            'message': f'Estado actualizado para "{report.name}"',
+            'classification': classification,
+            'log_status': log.status if log else None,
+            'polled_at': log.polled_at.isoformat() if log and log.polled_at else None,
+            'start_time': log.start_time.isoformat() if log and log.start_time else None,
+            'end_time': log.end_time.isoformat() if log and log.end_time else None,
+            'refresh_type': log.refresh_type if log else None,
+            'retry_attempted': log.retry_attempted if log else False,
+            'error_summary': error_summary,
+        }), 200
+    except Exception as exc:
+        logging.error(f"[Monitor] Poll status failed for report {report_id}: {exc}")
+        return jsonify({'status': 'error', 'message': 'Error al consultar el estado del modelo semántico'}), 500
+
+
 @bp.route('/reports/<int:report_id>/refresh', methods=['POST'])
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
