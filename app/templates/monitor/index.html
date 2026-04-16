@@ -241,7 +241,7 @@
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Cerrar"></button>
         </div>
         <div class="modal-body p-0 position-relative" style="flex: 1 1 auto; overflow: hidden; min-height: 0;">
-          <div id="reportPreviewLoading" class="position-absolute top-0 start-0 w-100 h-100 d-flex flex-column justify-content-center align-items-center" style="z-index: 10; background: #fff;">
+          <div id="reportPreviewLoading" class="position-absolute top-0 start-0 w-100 h-100 flex-column justify-content-center align-items-center" style="z-index: 10; background: #fff; display: flex;">
             <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
               <span class="visually-hidden">Cargando...</span>
             </div>
@@ -347,8 +347,6 @@ document.addEventListener('DOMContentLoaded', function () {
           throw new Error(data.message || 'Error al cargar el reporte');
         }
 
-        document.getElementById('reportPreviewLoading').style.display = 'none';
-
         const models = window['powerbi-client'] && window['powerbi-client'].models
                        ? window['powerbi-client'].models
                        : (window.powerbi && window.powerbi.models ? window.powerbi.models : null);
@@ -371,8 +369,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
         currentEmbeddedReport = powerbi.embed(embedContainer, embedConfig);
 
+        currentEmbeddedReport.on('loaded', function () {
+          document.getElementById('reportPreviewLoading').style.display = 'none';
+        });
+
         currentEmbeddedReport.on('error', function (event) {
           console.error('Power BI embed error:', event.detail);
+          const loadingEl = document.getElementById('reportPreviewLoading');
+          loadingEl.style.display = 'flex';
+          const msg = event.detail?.message || event.detail?.detailedMessage || 'Error al cargar el reporte';
+          loadingEl.innerHTML =
+            '<div class="text-center text-danger">' +
+            '<i class="bi bi-exclamation-triangle fs-1 mb-3 d-block"></i>' +
+            '<p>' + msg + '</p></div>';
         });
       })
       .catch(err => {
