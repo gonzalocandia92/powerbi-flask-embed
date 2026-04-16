@@ -177,6 +177,12 @@
               </td>
               <td class="text-end">
                 <div class="btn-group" role="group">
+                  <button class="btn btn-sm btn-outline-success btn-view-report"
+                          data-report-id="{{ report.id }}"
+                          data-report-name="{{ report.name }}"
+                          title="Ver reporte">
+                    <i class="bi bi-eye"></i>
+                  </button>
                   <button class="btn btn-sm btn-outline-info btn-poll-status"
                           data-report-id="{{ report.id }}"
                           data-report-name="{{ report.name }}"
@@ -224,6 +230,29 @@
     </div>
   </div>
 
+  <!-- Report Preview Modal -->
+  <div class="modal fade" id="reportPreviewModal" tabindex="-1" aria-labelledby="reportPreviewModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-fullscreen">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white py-2">
+          <h5 class="modal-title" id="reportPreviewModalLabel">
+            <i class="bi bi-bar-chart-line me-2"></i><span id="reportPreviewName">Reporte</span>
+          </h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+        </div>
+        <div class="modal-body p-0 position-relative">
+          <div id="reportPreviewLoading" class="d-flex flex-column justify-content-center align-items-center" style="height: 100%;">
+            <div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">
+              <span class="visually-hidden">Cargando...</span>
+            </div>
+            <p class="text-muted">Cargando reporte...</p>
+          </div>
+          <div id="reportPreviewContainer" style="height: 100%; width: 100%;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   {% else %}
   <div class="alert alert-info">
     <i class="bi bi-info-circle me-2"></i>
@@ -236,6 +265,7 @@
 {% endblock %}
 
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function () {
 
@@ -268,6 +298,89 @@ document.addEventListener('DOMContentLoaded', function () {
       btn.dataset.errorSummary,
       btn.dataset.errorDetail
     );
+  });
+
+  // ── Report preview modal ──────────────────────────────────────────────────
+  const previewModal = document.getElementById('reportPreviewModal');
+  const previewModalInstance = previewModal ? new bootstrap.Modal(previewModal) : null;
+  let currentEmbeddedReport = null;
+
+  // Clean up embed when modal is closed
+  if (previewModal) {
+    previewModal.addEventListener('hidden.bs.modal', function () {
+      const container = document.getElementById('reportPreviewContainer');
+      if (container && window.powerbi) {
+        powerbi.reset(container);
+      }
+      container.innerHTML = '';
+      const loadingEl = document.getElementById('reportPreviewLoading');
+      loadingEl.style.display = 'flex';
+      loadingEl.innerHTML =
+        '<div class="spinner-border text-primary mb-3" style="width: 3rem; height: 3rem;" role="status">' +
+        '<span class="visually-hidden">Cargando...</span></div>' +
+        '<p class="text-muted">Cargando reporte...</p>';
+      currentEmbeddedReport = null;
+    });
+  }
+
+  document.addEventListener('click', function (e) {
+    const btn = e.target.closest('.btn-view-report');
+    if (!btn) return;
+
+    const reportId = btn.dataset.reportId;
+    const reportName = btn.dataset.reportName;
+
+    document.getElementById('reportPreviewName').textContent = reportName;
+    document.getElementById('reportPreviewLoading').style.display = 'flex';
+    document.getElementById('reportPreviewContainer').innerHTML = '';
+
+    previewModalInstance.show();
+
+    btn.disabled = true;
+    const originalHtml = btn.innerHTML;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+
+    fetch(`/monitor/reports/${reportId}/embed`)
+      .then(res => res.json().then(data => ({ ok: res.ok, data })))
+      .then(({ ok, data }) => {
+        if (!ok || data.status !== 'success') {
+          throw new Error(data.message || 'Error al cargar el reporte');
+        }
+
+        document.getElementById('reportPreviewLoading').style.display = 'none';
+
+        const models = window['powerbi-client'] && window['powerbi-client'].models
+                       ? window['powerbi-client'].models
+                       : (window.powerbi && window.powerbi.models ? window.powerbi.models : null);
+
+        const embedContainer = document.getElementById('reportPreviewContainer');
+        const embedConfig = {
+          type: 'report',
+          id: data.reportId,
+          embedUrl: data.embedUrl,
+          accessToken: data.accessToken,
+          tokenType: models ? models.TokenType.Aad : 0,
+          settings: {
+            panes: {
+              filters: { visible: false },
+              pageNavigation: { visible: true }
+            }
+          }
+        };
+
+        currentEmbeddedReport = powerbi.embed(embedContainer, embedConfig);
+      })
+      .catch(err => {
+        document.getElementById('reportPreviewLoading').innerHTML =
+          `<div class="text-center text-danger">
+            <i class="bi bi-exclamation-triangle fs-1 mb-3 d-block"></i>
+            <p>${err.message || 'Error al cargar el reporte'}</p>
+          </div>`;
+      })
+      .finally(() => {
+        btn.disabled = false;
+        btn.innerHTML = originalHtml;
+      });
   });
 
   // ── Table search ─────────────────────────────────────────────────────────

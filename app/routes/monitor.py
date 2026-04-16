@@ -3,6 +3,7 @@ Monitor routes — dataset refresh status for all reports.
 
 GET  /monitor/           — Dashboard table view
 POST /monitor/reports/<id>/refresh — Force manual refresh for a single report
+GET  /monitor/reports/<id>/embed  — Embed config JSON for modal preview
 GET  /monitor/status     — JSON snapshot of latest statuses (for front-end polling)
 POST /monitor/poll-all   — Trigger an immediate poll of all reports
 """
@@ -19,7 +20,7 @@ from sqlalchemy.orm import joinedload
 
 from app import db
 from app.models import Report, Workspace, Tenant, DatasetRefreshLog
-from app.utils.powerbi import refresh_dataset
+from app.utils.powerbi import refresh_dataset, get_embed_for_report
 from app.utils.decorators import retry_on_db_error
 
 bp = Blueprint('monitor', __name__, url_prefix='/monitor')
@@ -230,6 +231,34 @@ def force_refresh(report_id):
                 return jsonify({'status': 'error', 'message': 'Límite diario de actualizaciones de Power BI alcanzado'}), 429
         logging.error(f"[Monitor] Manual refresh failed for report {report_id}: {exc}")
         return jsonify({'status': 'error', 'message': 'Error al iniciar el refresh del modelo semántico'}), 500
+
+
+@bp.route('/reports/<int:report_id>/embed')
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def embed_config(report_id):
+    """Return embed configuration JSON for displaying a report in a modal."""
+    report = (
+        Report.query
+        .options(
+            joinedload(Report.workspace).joinedload(Workspace.tenant).joinedload(Tenant.client),
+            joinedload(Report.usuario_pbi),
+        )
+        .get_or_404(report_id)
+    )
+
+    try:
+        embed_token, embed_url, rid = get_embed_for_report(report)
+        return jsonify({
+            'status': 'success',
+            'embedUrl': embed_url,
+            'accessToken': embed_token,
+            'reportId': rid,
+            'reportName': report.name,
+        }), 200
+    except Exception as exc:
+        logging.error(f"[Monitor] Embed config failed for report {report_id}: {exc}")
+        return jsonify({'status': 'error', 'message': 'Error al obtener la configuración de embed del reporte'}), 500
 
 
 @bp.route('/status')
