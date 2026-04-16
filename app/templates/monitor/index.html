@@ -108,7 +108,7 @@
             {% set report = row.report %}
             {% set log = row.log %}
             {% set cls = row.classification %}
-            <tr data-report-id="{{ report.id }}" data-classification="{{ cls }}">
+            <tr data-report-id="{{ report.id }}" data-report-name="{{ report.name }}" data-classification="{{ cls }}">
               <td>
                 <strong>{{ report.name }}</strong>
                 <br><small class="text-muted">ID: {{ report.id }}</small>
@@ -341,7 +341,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // Update error cell
     const errorCell = row.querySelector('.error-cell');
     if (errorCell) {
-      errorCell.innerHTML = errorCellHtml(data.error_summary, data.error_detail, row.querySelector('.btn-poll-status')?.dataset.reportName);
+      errorCell.innerHTML = errorCellHtml(data.error_summary, data.error_detail, row.dataset.reportName);
     }
 
     // Update polled_at
@@ -529,9 +529,12 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function escapeAttr(str) {
-    const div = document.createElement('div');
-    div.appendChild(document.createTextNode(str));
-    return div.innerHTML;
+    return str
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
   }
 
   function getCsrfToken() {

@@ -53,6 +53,23 @@ def _get_latest_logs_by_report():
     return {log.report_id_fk: log for log in latest_logs}
 
 
+def _parse_error(log):
+    """
+    Parse error_json from a DatasetRefreshLog into (summary, detail).
+    Returns (None, None) when there is no error.
+    """
+    if not log or not log.error_json:
+        return None, None
+    try:
+        err = json.loads(log.error_json)
+        summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
+        detail = json.dumps(err, indent=2, ensure_ascii=False)
+    except (json.JSONDecodeError, AttributeError):
+        summary = str(log.error_json)[:120]
+        detail = str(log.error_json)
+    return summary, detail
+
+
 def _classify(log):
     """
     Return a classification string for a given log entry (or None).
@@ -92,17 +109,8 @@ def index():
         log = latest_logs.get(report.id)
         classification = _classify(log)
 
-        # Parse error summary for tooltip
-        error_summary = None
-        error_detail = None
-        if log and log.error_json:
-            try:
-                err = json.loads(log.error_json)
-                error_summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
-                error_detail = json.dumps(err, indent=2, ensure_ascii=False)
-            except (json.JSONDecodeError, AttributeError):
-                error_summary = str(log.error_json)[:120]
-                error_detail = str(log.error_json)
+        # Parse error
+        error_summary, error_detail = _parse_error(log)
 
         rows.append({
             'report': report,
@@ -161,16 +169,7 @@ def poll_report_status(report_id):
         log = poll_report(report)
         classification = _classify(log)
 
-        error_summary = None
-        error_detail = None
-        if log and log.error_json:
-            try:
-                err = json.loads(log.error_json)
-                error_summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
-                error_detail = json.dumps(err, indent=2, ensure_ascii=False)
-            except (json.JSONDecodeError, AttributeError):
-                error_summary = str(log.error_json)[:120]
-                error_detail = str(log.error_json)
+        error_summary, error_detail = _parse_error(log)
 
         return jsonify({
             'status': 'success',
@@ -250,16 +249,7 @@ def status():
         log = latest_logs.get(report.id)
         classification = _classify(log)
 
-        error_summary = None
-        error_detail = None
-        if log and log.error_json:
-            try:
-                err = json.loads(log.error_json)
-                error_summary = err.get("errorDescription") or err.get("message") or str(err)[:120]
-                error_detail = json.dumps(err, indent=2, ensure_ascii=False)
-            except (json.JSONDecodeError, AttributeError):
-                error_summary = str(log.error_json)[:120]
-                error_detail = str(log.error_json)
+        error_summary, error_detail = _parse_error(log)
 
         entry = {
             'report_id': report.id,
