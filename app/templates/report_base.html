@@ -285,14 +285,50 @@
         .main-container, .report-container, .header-section, .footer {
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
+
+        .zoom-controls-panel {
+            display: none;
+        }
+        body.fullscreen-mode .zoom-controls-panel {
+            display: flex;
+        }
+        .zoom-slider {
+            writing-mode: vertical-lr;
+            direction: rtl;
+            height: 100px;
+            width: 6px;
+            cursor: pointer;
+            accent-color: rgba(255,255,255,0.8);
+            background: transparent;
+        }
+        .zoom-label {
+            color: white;
+            font-size: 0.75rem;
+            background: rgba(0,0,0,0.6);
+            padding: 2px 6px;
+            border-radius: 10px;
+            backdrop-filter: blur(5px);
+        }
     </style>
 </head>
 <body>
     <!-- Controles de pantalla completa (ocultos inicialmente) -->
     <div class="fullscreen-controls">
-        <button id="exitFullscreenBtn" class="exit-fullscreen-btn" title="Salir de pantalla completa">
+        <button id="exitFullscreenBtn" class="exit-fullscreen-btn" title="Salir de pantalla completa" aria-label="Salir de pantalla completa">
             <i class="fas fa-compress"></i>
         </button>
+        <!-- Panel de zoom (solo fullscreen) -->
+        <div class="zoom-controls-panel mt-3 d-flex flex-column align-items-center gap-2">
+            <button id="zoomInBtn" class="exit-fullscreen-btn zoom-btn" title="Acercar (+)" aria-label="Acercar">
+                <i class="fas fa-plus"></i>
+            </button>
+            <input type="range" id="zoomSlider" min="50" max="200" value="100" step="10"
+                   class="zoom-slider" title="Nivel de zoom" aria-label="Zoom">
+            <button id="zoomOutBtn" class="exit-fullscreen-btn zoom-btn" title="Alejar (−)" aria-label="Alejar">
+                <i class="fas fa-minus"></i>
+            </button>
+            <span id="zoomLabel" class="zoom-label">100%</span>
+        </div>
     </div>
 
     <div class="container-fluid py-4">
@@ -445,6 +481,7 @@
                 
                 // Restaurar título original
                 document.title = "Reporte - {{ config_name }}";
+                applyZoom(100);
             }
             
             // Event listeners para los botones de pantalla completa
@@ -457,6 +494,25 @@
                     exitFullscreen();
                 }
             });
+
+            // Zoom controls
+            const zoomInBtn = document.getElementById('zoomInBtn');
+            const zoomOutBtn = document.getElementById('zoomOutBtn');
+            const zoomSlider = document.getElementById('zoomSlider');
+            const zoomLabel = document.getElementById('zoomLabel');
+            let zoomLevel = 100;
+
+            function applyZoom(level) {
+                zoomLevel = Math.min(200, Math.max(50, level));
+                container.style.transform = `scale(${zoomLevel / 100})`;
+                container.style.transformOrigin = 'top center';
+                zoomSlider.value = zoomLevel;
+                zoomLabel.textContent = zoomLevel + '%';
+            }
+
+            zoomInBtn.addEventListener('click', () => applyZoom(zoomLevel + 10));
+            zoomOutBtn.addEventListener('click', () => applyZoom(zoomLevel - 10));
+            zoomSlider.addEventListener('input', () => applyZoom(parseInt(zoomSlider.value)));
 
             // Refresh dataset button
             const refreshBtn = document.getElementById('refreshDatasetBtn');
