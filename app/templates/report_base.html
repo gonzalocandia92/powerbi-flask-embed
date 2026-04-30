@@ -292,15 +292,6 @@
         body.fullscreen-mode .zoom-controls-panel {
             display: flex;
         }
-        .zoom-slider {
-            writing-mode: vertical-lr;
-            direction: rtl;
-            height: 100px;
-            width: 6px;
-            cursor: pointer;
-            accent-color: rgba(255,255,255,0.8);
-            background: transparent;
-        }
         .zoom-label {
             color: white;
             font-size: 0.75rem;
@@ -309,50 +300,18 @@
             border-radius: 10px;
             backdrop-filter: blur(5px);
         }
-        .pan-divider {
-            width: 30px;
-            height: 1px;
-            background: rgba(255,255,255,0.3);
-            margin: 4px 0;
+        .pan-hint {
+            color: rgba(255,255,255,0.7);
+            font-size: 0.65rem;
+            text-align: center;
+            line-height: 1.4;
+            margin-top: 6px;
         }
-        .pan-controls-h {
-            display: none;
-            position: fixed;
-            bottom: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            z-index: 1001;
-            background: rgba(0,0,0,0.7);
-            backdrop-filter: blur(10px);
-            border-radius: 25px;
-            padding: 8px 16px;
-            align-items: center;
-            gap: 10px;
+        body.fullscreen-mode.ctrl-held #reportContainer {
+            cursor: grab;
         }
-        body.fullscreen-mode .pan-controls-h {
-            display: flex;
-        }
-        .pan-slider-h {
-            width: min(40vw, 300px);
-            cursor: pointer;
-            accent-color: rgba(255,255,255,0.8);
-        }
-        .pan-btn-small {
-            background: rgba(255,255,255,0.2);
-            color: white;
-            border: none;
-            border-radius: 50%;
-            width: 32px;
-            height: 32px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            font-size: 0.8rem;
-            transition: background 0.2s;
-        }
-        .pan-btn-small:hover {
-            background: rgba(255,255,255,0.4);
+        body.fullscreen-mode.ctrl-held.panning #reportContainer {
+            cursor: grabbing;
         }
     </style>
 </head>
@@ -364,42 +323,15 @@
         </button>
         <!-- Panel de zoom (solo fullscreen) -->
         <div class="zoom-controls-panel mt-3 d-flex flex-column align-items-center gap-2">
-            <button id="zoomInBtn" class="exit-fullscreen-btn zoom-btn" title="Acercar (+)" aria-label="Acercar">
+            <button id="zoomInBtn" class="exit-fullscreen-btn zoom-btn" title="Acercar (Ctrl+Scroll ↑)" aria-label="Acercar">
                 <i class="fas fa-plus"></i>
             </button>
-            <input type="range" id="zoomSlider" min="50" max="200" value="100" step="10"
-                   class="zoom-slider" title="Nivel de zoom" aria-label="Zoom">
-            <button id="zoomOutBtn" class="exit-fullscreen-btn zoom-btn" title="Alejar (−)" aria-label="Alejar">
+            <span id="zoomLabel" class="zoom-label">100%</span>
+            <button id="zoomOutBtn" class="exit-fullscreen-btn zoom-btn" title="Alejar (Ctrl+Scroll ↓)" aria-label="Alejar">
                 <i class="fas fa-minus"></i>
             </button>
-            <span id="zoomLabel" class="zoom-label">100%</span>
-            <!-- Separador -->
-            <div class="pan-divider"></div>
-            <!-- Pan vertical -->
-            <button id="panUpBtn" class="exit-fullscreen-btn zoom-btn" title="Mover arriba" aria-label="Desplazar arriba">
-                <i class="fas fa-chevron-up"></i>
-            </button>
-            <input type="range" id="panYSlider" min="-50" max="50" value="0" step="2"
-                   class="zoom-slider" title="Desplazamiento vertical" aria-label="Desplazamiento vertical">
-            <button id="panDownBtn" class="exit-fullscreen-btn zoom-btn" title="Mover abajo" aria-label="Desplazar abajo">
-                <i class="fas fa-chevron-down"></i>
-            </button>
+            <div class="pan-hint">Ctrl+Scroll<br>zoom<br><br>Ctrl+Arrastrar<br>mover</div>
         </div>
-    </div>
-
-    <!-- Pan horizontal (solo fullscreen) -->
-    <div class="pan-controls-h" id="panControlsH">
-        <button id="panLeftBtn" class="pan-btn-small" title="Mover izquierda" aria-label="Desplazar izquierda">
-            <i class="fas fa-chevron-left"></i>
-        </button>
-        <input type="range" id="panXSlider" min="-50" max="50" value="0" step="2"
-               class="pan-slider-h" title="Desplazamiento horizontal" aria-label="Desplazamiento horizontal">
-        <button id="panRightBtn" class="pan-btn-small" title="Mover derecha" aria-label="Desplazar derecha">
-            <i class="fas fa-chevron-right"></i>
-        </button>
-        <button id="resetPanBtn" class="pan-btn-small" title="Centrar vista" aria-label="Centrar vista">
-            <i class="fas fa-compress-arrows-alt"></i>
-        </button>
     </div>
 
     <div class="container-fluid py-4">
@@ -554,6 +486,7 @@
                 document.title = "Reporte - {{ config_name }}";
                 applyZoom(100);
                 applyPan(0, 0);
+                body.classList.remove('ctrl-held', 'panning');
             }
             
             // Event listeners para los botones de pantalla completa
@@ -570,18 +503,10 @@
             // Zoom & Pan controls
             const zoomInBtn = document.getElementById('zoomInBtn');
             const zoomOutBtn = document.getElementById('zoomOutBtn');
-            const zoomSlider = document.getElementById('zoomSlider');
             const zoomLabel = document.getElementById('zoomLabel');
-            const panUpBtn = document.getElementById('panUpBtn');
-            const panDownBtn = document.getElementById('panDownBtn');
-            const panLeftBtn = document.getElementById('panLeftBtn');
-            const panRightBtn = document.getElementById('panRightBtn');
-            const panXSlider = document.getElementById('panXSlider');
-            const panYSlider = document.getElementById('panYSlider');
-            const resetPanBtn = document.getElementById('resetPanBtn');
             let zoomLevel = 100;
-            let panX = 0; // percent
-            let panY = 0; // percent
+            let panX = 0; // percent of container width
+            let panY = 0; // percent of container height
 
             function applyTransform() {
                 container.style.transform = `translate(${panX}%, ${panY}%) scale(${zoomLevel / 100})`;
@@ -590,7 +515,6 @@
 
             function applyZoom(level) {
                 zoomLevel = Math.min(200, Math.max(50, level));
-                zoomSlider.value = zoomLevel;
                 zoomLabel.textContent = zoomLevel + '%';
                 applyTransform();
             }
@@ -598,22 +522,11 @@
             function applyPan(x, y) {
                 panX = Math.min(50, Math.max(-50, x));
                 panY = Math.min(50, Math.max(-50, y));
-                panXSlider.value = panX;
-                panYSlider.value = panY;
                 applyTransform();
             }
 
             zoomInBtn.addEventListener('click', () => applyZoom(zoomLevel + 10));
             zoomOutBtn.addEventListener('click', () => applyZoom(zoomLevel - 10));
-            zoomSlider.addEventListener('input', () => applyZoom(parseInt(zoomSlider.value)));
-
-            panUpBtn.addEventListener('click', () => applyPan(panX, panY - 5));
-            panDownBtn.addEventListener('click', () => applyPan(panX, panY + 5));
-            panLeftBtn.addEventListener('click', () => applyPan(panX - 5, panY));
-            panRightBtn.addEventListener('click', () => applyPan(panX + 5, panY));
-            panXSlider.addEventListener('input', () => applyPan(parseInt(panXSlider.value), panY));
-            panYSlider.addEventListener('input', () => applyPan(panX, parseInt(panYSlider.value)));
-            resetPanBtn.addEventListener('click', () => applyPan(0, 0));
 
             // Ctrl+Scroll para zoom
             document.addEventListener('wheel', function(e) {
@@ -622,6 +535,51 @@
                     applyZoom(zoomLevel + (e.deltaY < 0 ? 10 : -10));
                 }
             }, { passive: false });
+
+            // Ctrl+Drag para mover (pan)
+            let isDragging = false;
+            let dragStartX = 0, dragStartY = 0;
+            let dragStartPanX = 0, dragStartPanY = 0;
+
+            document.addEventListener('keydown', function(e) {
+                if (isFullscreen && e.key === 'Control') {
+                    body.classList.add('ctrl-held');
+                }
+            });
+            document.addEventListener('keyup', function(e) {
+                if (e.key === 'Control') {
+                    body.classList.remove('ctrl-held');
+                    if (isDragging) {
+                        isDragging = false;
+                        body.classList.remove('panning');
+                    }
+                }
+            });
+
+            container.addEventListener('mousedown', function(e) {
+                if (isFullscreen && e.ctrlKey) {
+                    isDragging = true;
+                    dragStartX = e.clientX;
+                    dragStartY = e.clientY;
+                    dragStartPanX = panX;
+                    dragStartPanY = panY;
+                    body.classList.add('panning');
+                    e.preventDefault();
+                }
+            });
+            document.addEventListener('mousemove', function(e) {
+                if (isDragging && container.offsetWidth && container.offsetHeight) {
+                    const dx = ((e.clientX - dragStartX) / container.offsetWidth) * 100;
+                    const dy = ((e.clientY - dragStartY) / container.offsetHeight) * 100;
+                    applyPan(dragStartPanX + dx, dragStartPanY + dy);
+                }
+            });
+            document.addEventListener('mouseup', function() {
+                if (isDragging) {
+                    isDragging = false;
+                    body.classList.remove('panning');
+                }
+            });
 
             // Refresh dataset button
             const refreshBtn = document.getElementById('refreshDatasetBtn');
