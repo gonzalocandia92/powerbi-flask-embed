@@ -307,10 +307,17 @@
             line-height: 1.4;
             margin-top: 6px;
         }
-        body.fullscreen-mode.ctrl-held #reportContainer {
+        #dragOverlay {
+            position: absolute;
+            inset: 0;
+            z-index: 5;
+            pointer-events: none;
+        }
+        body.fullscreen-mode.ctrl-held #dragOverlay {
+            pointer-events: all;
             cursor: grab;
         }
-        body.fullscreen-mode.ctrl-held.panning #reportContainer {
+        body.fullscreen-mode.ctrl-held.panning #dragOverlay {
             cursor: grabbing;
         }
     </style>
@@ -388,7 +395,9 @@
                     </div>
                     
                     <!-- Report Container -->
-                    <div id="reportContainer" class="report-container"></div>
+                    <div id="reportContainer" class="report-container">
+                        <div id="dragOverlay"></div>
+                    </div>
                     
                     <!-- Footer -->
                     <div class="footer">
@@ -537,6 +546,7 @@
             }, { passive: false });
 
             // Ctrl+Drag para mover (pan)
+            const dragOverlay = document.getElementById('dragOverlay');
             let isDragging = false;
             let dragStartX = 0, dragStartY = 0;
             let dragStartPanX = 0, dragStartPanY = 0;
@@ -556,7 +566,7 @@
                 }
             });
 
-            container.addEventListener('mousedown', function(e) {
+            dragOverlay.addEventListener('mousedown', function(e) {
                 if (isFullscreen && e.ctrlKey) {
                     isDragging = true;
                     dragStartX = e.clientX;
