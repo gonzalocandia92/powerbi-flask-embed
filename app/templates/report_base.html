@@ -31,7 +31,7 @@
         }
         
         body.fullscreen-mode {
-            background: #1a1a1a;
+            background: white;
             padding: 0;
             margin: 0;
         }
@@ -285,14 +285,118 @@
         .main-container, .report-container, .header-section, .footer {
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
         }
+
+        .zoom-controls-panel {
+            display: none;
+        }
+        body.fullscreen-mode .zoom-controls-panel {
+            display: flex;
+        }
+        .zoom-label {
+            color: white;
+            font-size: 0.75rem;
+            background: rgba(0,0,0,0.6);
+            padding: 2px 6px;
+            border-radius: 10px;
+            backdrop-filter: blur(5px);
+        }
+        .pan-hint {
+            color: rgba(255,255,255,0.7);
+            font-size: 0.65rem;
+            text-align: center;
+            line-height: 1.4;
+            margin-top: 6px;
+        }
+        /* ── Pan viewport: clips the zoomed report in fullscreen ── */
+        #panViewport {
+            position: relative;
+            width: 100%;
+        }
+        body.fullscreen-mode {
+            overflow: hidden;
+        }
+        body.fullscreen-mode #panViewport {
+            position: fixed;
+            inset: 0;
+            overflow: hidden;
+            background: #000;
+            z-index: 0;
+        }
+        body.fullscreen-mode.zoomed #panViewport {
+            bottom: 22px;
+            right: 22px;
+        }
+        body.fullscreen-mode .report-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            /* width & height set by JS on zoom */
+        }
+
+        /* ── Slider bars (shown only in fullscreen + zoomed) ── */
+        #hSliderBar,
+        #vSliderBar {
+            display: none;
+            position: fixed;
+            background: rgba(0,0,0,0.55);
+            backdrop-filter: blur(4px);
+            z-index: 1002;
+            align-items: center;
+            justify-content: center;
+        }
+        #hSliderBar {
+            bottom: 0;
+            left: 0;
+            right: 22px;
+            height: 22px;
+            padding: 0 8px;
+        }
+        #vSliderBar {
+            right: 0;
+            top: 0;
+            bottom: 22px;
+            width: 22px;
+            padding: 8px 0;
+        }
+        body.fullscreen-mode.zoomed #hSliderBar,
+        body.fullscreen-mode.zoomed #vSliderBar {
+            display: flex;
+        }
+        #hSlider {
+            width: 100%;
+            accent-color: #3498db;
+            cursor: pointer;
+        }
+        #vSlider {
+            height: calc(100% - 4px);
+            accent-color: #3498db;
+            cursor: pointer;
+            writing-mode: vertical-lr;
+            appearance: slider-vertical;
+            -webkit-appearance: slider-vertical;
+        }
     </style>
 </head>
 <body>
     <!-- Controles de pantalla completa (ocultos inicialmente) -->
     <div class="fullscreen-controls">
-        <button id="exitFullscreenBtn" class="exit-fullscreen-btn" title="Salir de pantalla completa">
+        <button id="exitFullscreenBtn" class="exit-fullscreen-btn" title="Salir de pantalla completa" aria-label="Salir de pantalla completa">
             <i class="fas fa-compress"></i>
         </button>
+        <!-- Panel de zoom (solo fullscreen) -->
+        <div class="zoom-controls-panel mt-3 d-flex flex-column align-items-center gap-2">
+            <button id="zoomInBtn" class="exit-fullscreen-btn zoom-btn" title="Acercar (Ctrl+Scroll ↑)" aria-label="Acercar">
+                <i class="fas fa-plus"></i>
+            </button>
+            <span id="zoomLabel" class="zoom-label">100%</span>
+            <button id="zoomOutBtn" class="exit-fullscreen-btn zoom-btn" title="Alejar (Ctrl+Scroll ↓)" aria-label="Alejar">
+                <i class="fas fa-minus"></i>
+            </button>
+            <button id="resetZoomBtn" class="exit-fullscreen-btn zoom-btn" title="Restaurar zoom (100%)" aria-label="Restaurar zoom" style="font-size:0.8rem;">
+                <i class="fas fa-compress-arrows-alt"></i>
+            </button>
+            <div class="pan-hint">Ctrl+Scroll<br>zoom<br><br>Sliders<br>mover</div>
+        </div>
     </div>
 
     <div class="container-fluid py-4">
@@ -348,8 +452,10 @@
                         </div>
                     </div>
                     
-                    <!-- Report Container -->
-                    <div id="reportContainer" class="report-container"></div>
+                    <!-- Report Container (wrapped in panViewport for fullscreen zoom/pan) -->
+                    <div id="panViewport">
+                        <div id="reportContainer" class="report-container"></div>
+                    </div>
                     
                     <!-- Footer -->
                     <div class="footer">
@@ -367,6 +473,15 @@
                 </div>
             </div>
         </div>
+    </div>
+
+    <!-- Horizontal pan slider (fixed at bottom, fullscreen only) -->
+    <div id="hSliderBar">
+        <input type="range" id="hSlider" min="0" max="0" value="0" step="1">
+    </div>
+    <!-- Vertical pan slider (fixed at right, fullscreen only) -->
+    <div id="vSliderBar">
+        <input type="range" id="vSlider" min="0" max="0" value="0" step="1">
     </div>
 
     <script>
@@ -419,13 +534,21 @@
             function enterFullscreen() {
                 body.classList.add('fullscreen-mode');
                 isFullscreen = true;
-                
-                // Re-renderizar el reporte para adaptarse al nuevo tamaño
-                if (report) {
-                    setTimeout(() => {
-                        report.refresh();
-                    }, 300);
-                }
+
+                // Initialise container to full viewport dimensions (zoom = 100%)
+                setTimeout(() => {
+                    const vw = panViewport.clientWidth;
+                    const vh = panViewport.clientHeight;
+                    container.style.width  = vw + 'px';
+                    container.style.height = vh + 'px';
+                    container.style.top    = '0';
+                    container.style.left   = '0';
+                    zoomLevel = 100;
+                    zoomLabel.textContent = '100%';
+                    hSlider.value = 0;
+                    vSlider.value = 0;
+                    if (report) report.refresh();
+                }, 50);
                 
                 // Cambiar el título del documento
                 document.title = "📊 " + "{{ config_name }}" + " - Pantalla completa";
@@ -433,16 +556,29 @@
             
             // Función para salir de pantalla completa
             function exitFullscreen() {
-                body.classList.remove('fullscreen-mode');
+                body.classList.remove('fullscreen-mode', 'zoomed');
                 isFullscreen = false;
-                
+
+                // Reset zoom state
+                zoomLevel = 100;
+                zoomLabel.textContent = '100%';
+                hSlider.value = 0;
+                vSlider.value = 0;
+
+                // Clear inline styles set by zoom/pan
+                container.style.width = '';
+                container.style.height = '';
+                container.style.top = '';
+                container.style.left = '';
+                container.style.transform = '';
+
                 // Re-renderizar el reporte
                 if (report) {
                     setTimeout(() => {
                         report.refresh();
                     }, 300);
                 }
-                
+
                 // Restaurar título original
                 document.title = "Reporte - {{ config_name }}";
             }
@@ -457,6 +593,74 @@
                     exitFullscreen();
                 }
             });
+
+            // ── Zoom & Pan (slider-based) ──────────────────────────────────
+            const zoomInBtn   = document.getElementById('zoomInBtn');
+            const zoomOutBtn  = document.getElementById('zoomOutBtn');
+            const resetZoomBtn = document.getElementById('resetZoomBtn');
+            const zoomLabel   = document.getElementById('zoomLabel');
+            const panViewport = document.getElementById('panViewport');
+            const hSlider     = document.getElementById('hSlider');
+            const vSlider     = document.getElementById('vSlider');
+            let zoomLevel = 100;
+
+            // Resize #reportContainer to zoomLevel% of the panViewport and update sliders.
+            function applyZoom(level) {
+                zoomLevel = Math.min(200, Math.max(100, level));
+                zoomLabel.textContent = zoomLevel + '%';
+                if (!isFullscreen) return;
+
+                const vw = panViewport.clientWidth;
+                const vh = panViewport.clientHeight;
+                const rw = Math.round(zoomLevel / 100 * vw);
+                const rh = Math.round(zoomLevel / 100 * vh);
+
+                container.style.width  = rw + 'px';
+                container.style.height = rh + 'px';
+
+                const maxPanX = rw - vw;
+                const maxPanY = rh - vh;
+
+                hSlider.max = maxPanX;
+                vSlider.max = maxPanY;
+
+                // Clamp current slider values
+                hSlider.value = Math.min(parseInt(hSlider.value) || 0, maxPanX);
+                vSlider.value = Math.min(parseInt(vSlider.value) || 0, maxPanY);
+                applyPan();
+
+                if (zoomLevel > 100) {
+                    body.classList.add('zoomed');
+                } else {
+                    body.classList.remove('zoomed');
+                    hSlider.value = 0;
+                    vSlider.value = 0;
+                    container.style.top  = '0';
+                    container.style.left = '0';
+                }
+            }
+
+            // Translate #reportContainer by slider values (negative offset = pan right/down).
+            function applyPan() {
+                container.style.left = '-' + (parseInt(hSlider.value) || 0) + 'px';
+                container.style.top  = '-' + (parseInt(vSlider.value) || 0) + 'px';
+            }
+
+            hSlider.addEventListener('input', applyPan);
+            vSlider.addEventListener('input', applyPan);
+
+            zoomInBtn.addEventListener('click',   () => applyZoom(zoomLevel + 10));
+            zoomOutBtn.addEventListener('click',  () => applyZoom(zoomLevel - 10));
+            resetZoomBtn.addEventListener('click', () => applyZoom(100));
+
+            // Ctrl+Scroll para zoom
+            document.addEventListener('wheel', function(e) {
+                if (isFullscreen && e.ctrlKey) {
+                    e.preventDefault();
+                    applyZoom(zoomLevel + (e.deltaY < 0 ? 10 : -10));
+                }
+            }, { passive: false });
+
 
             // Refresh dataset button
             const refreshBtn = document.getElementById('refreshDatasetBtn');
