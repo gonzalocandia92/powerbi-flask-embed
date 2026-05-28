@@ -354,6 +354,19 @@ def delete_link(report_id, link_id):
     return redirect(url_for('main.index'))
 
 
+@bp.route('/<int:report_id>/toggle-chatbot', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def toggle_chatbot(report_id):
+    """Toggle chatbot visibility for a report."""
+    report = Report.query.get_or_404(report_id)
+    report.chatbot_enabled = not report.chatbot_enabled
+    db.session.commit()
+    estado = "habilitado" if report.chatbot_enabled else "deshabilitado"
+    flash(f"Chatbot KLARA {estado} para el reporte «{report.name}»", "success")
+    return redirect(url_for('reports.detail', report_id=report_id))
+
+
 # --- URL-based Report Creation Wizard ---
 
 @bp.route('/from-url', methods=['GET', 'POST'])

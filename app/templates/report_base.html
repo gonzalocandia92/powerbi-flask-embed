@@ -375,6 +375,199 @@
             appearance: slider-vertical;
             -webkit-appearance: slider-vertical;
         }
+
+        /* ── KLARA SIDEBAR WIDGET ── */
+        :root {
+            --sudata-green: #4caf50;
+            --sudata-green-light: #66bb6a;
+            --sudata-dark: #1b1f3b;
+            --sudata-soft: #f4f6f8;
+            --sudata-border: #e5e7eb;
+            --sudata-text: #111827;
+            --sudata-muted: #6b7280;
+            --klara-sidebar-w: 420px;
+            --klara-sidebar-expanded-w: 760px;
+        }
+
+        .klara-sidebar-widget, .klara-sidebar-widget * { box-sizing: border-box; }
+        .klara-sidebar-widget {
+            font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        /* Botón flotante — circular minimalista */
+        .klara-minimal-button {
+            position: fixed; right: 24px; bottom: 24px; z-index: 999998;
+            width: 62px; height: 62px;
+            border: none; border-radius: 50%; cursor: pointer;
+            background: linear-gradient(135deg, var(--sudata-dark), var(--sudata-green));
+            color: white; box-shadow: 0 16px 38px rgba(27,31,59,.24);
+            transition: transform 0.22s ease, box-shadow 0.22s ease, opacity 0.22s ease;
+        }
+        .klara-minimal-button:hover { transform: translateY(-3px) scale(1.03); box-shadow: 0 20px 46px rgba(27,31,59,.32); }
+        .klara-minimal-button.hidden { opacity: 0; pointer-events: none; }
+        .klara-minimal-letter { font-size: 22px; font-weight: 900; letter-spacing: .03em; }
+        .klara-minimal-pulse {
+            position: absolute; top: 8px; right: 8px; width: 11px; height: 11px;
+            border-radius: 50%; background: var(--sudata-green-light);
+            box-shadow: 0 0 0 6px rgba(102,187,106,.18);
+        }
+
+        .klara-avatar {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: white; color: var(--sudata-green);
+            display: flex; align-items: center; justify-content: center; font-weight: 900;
+        }
+        .klara-avatar.big { width: 42px; height: 42px; }
+
+        /* Panel lateral — usa transform para garantizar que siempre se oculta completamente */
+        .klara-sidebar-panel {
+            position: fixed; top: 0; right: 0; z-index: 999999;
+            width: var(--klara-sidebar-w); height: 100vh;
+            background: white; box-shadow: -18px 0 44px rgba(17,24,39,.18);
+            display: flex; flex-direction: column;
+            transform: translateX(100%); /* oculto fuera de la pantalla */
+            transition: transform 0.3s ease, width 0.3s ease;
+        }
+        .klara-sidebar-panel.open { transform: translateX(0); }
+        .klara-sidebar-panel.expanded { width: min(var(--klara-sidebar-expanded-w), 100vw); }
+
+        /* Header */
+        .klara-sidebar-header {
+            padding: 16px;
+            background: radial-gradient(circle at top right, rgba(102,187,106,.26), transparent 35%),
+                        linear-gradient(135deg, var(--sudata-dark), var(--sudata-green));
+            color: white; display: flex; justify-content: space-between; align-items: center;
+        }
+        .klara-title { display: flex; align-items: center; gap: 10px; }
+        .klara-title h2 { margin: 0; font-size: 18px; letter-spacing: .05em; }
+        .klara-title p { margin: 3px 0 0; font-size: 12px; opacity: .86; }
+        .klara-controls { display: flex; gap: 8px; }
+        .klara-controls button {
+            width: 34px; height: 34px; border: none; border-radius: 10px;
+            background: rgba(255,255,255,.18); color: white; cursor: pointer; font-size: 18px;
+        }
+        .klara-controls button:hover { background: rgba(255,255,255,.28); }
+
+        /* Contexto */
+        .klara-context {
+            padding: 10px 16px; background: #f8fafc;
+            border-bottom: 1px solid var(--sudata-border);
+            display: flex; justify-content: space-between; gap: 12px; font-size: 12px;
+        }
+        .klara-context span { color: var(--sudata-muted); }
+        .klara-context strong { color: var(--sudata-green); }
+
+        /* Mensajes */
+        .klara-sidebar-messages {
+            flex: 1; padding: 18px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 12px;
+            background: var(--sudata-soft);
+        }
+        .klara-msg { max-width: 84%; animation: klaraMsgIn .22s ease; }
+        .klara-msg.user { align-self: flex-end; }
+        .klara-msg.bot { align-self: flex-start; }
+        .klara-bubble {
+            padding: 11px 14px; border-radius: 16px;
+            font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word;
+        }
+        .klara-msg.user .klara-bubble { background: var(--sudata-green); color: white; border-bottom-right-radius: 5px; }
+        .klara-msg.bot .klara-bubble { background: white; color: var(--sudata-text); border: 1px solid var(--sudata-border); border-bottom-left-radius: 5px; }
+        .klara-sql-debug {
+            margin-top: 8px; padding: 8px; border-radius: 10px;
+            background: #eef2ff; color: #3730a3; font-family: monospace;
+            font-size: 11px; line-height: 1.4; overflow-x: auto; border: 1px solid #c7d2fe;
+        }
+
+        /* Typing */
+        .klara-typing {
+            align-self: flex-start; padding: 12px 14px;
+            border-radius: 16px; border-bottom-left-radius: 5px;
+            background: white; border: 1px solid var(--sudata-border);
+            display: flex; gap: 5px;
+        }
+        .klara-typing span {
+            width: 7px; height: 7px; border-radius: 50%; background: var(--sudata-green);
+            animation: klaraTyping 1.2s infinite ease-in-out;
+        }
+        .klara-typing span:nth-child(2) { animation-delay: .16s; }
+        .klara-typing span:nth-child(3) { animation-delay: .32s; }
+
+        /* Sugerencias */
+        .klara-sidebar-suggestions {
+            padding: 10px; display: flex; gap: 6px; overflow-x: auto;
+            border-top: 1px solid var(--sudata-border); background: white;
+        }
+        .klara-sidebar-suggestion {
+            flex: 0 0 auto; padding: 7px 12px;
+            border: 1px solid #bbf7d0; border-radius: 999px;
+            background: #f0fdf4; color: #166534;
+            cursor: pointer; font-size: 12px; font-weight: 700; white-space: nowrap;
+        }
+        .klara-sidebar-suggestion:hover { background: #dcfce7; }
+
+        /* Input */
+        .klara-sidebar-input { padding: 12px; border-top: 1px solid var(--sudata-border); background: white; }
+        #klara-sidebar-form { display: flex; gap: 8px; align-items: flex-end; }
+        #klara-sidebar-text {
+            flex: 1; min-height: 42px; max-height: 110px; padding: 11px 13px;
+            border: 1px solid #d1d5db; border-radius: 16px; resize: none; outline: none;
+            font-family: inherit; font-size: 14px;
+        }
+        #klara-sidebar-text:focus { border-color: var(--sudata-green); box-shadow: 0 0 0 3px rgba(76,175,80,.14); }
+        #klara-sidebar-send {
+            width: 42px; height: 42px; border: none; border-radius: 50%;
+            background: var(--sudata-green); color: white; cursor: pointer;
+            font-size: 18px; flex-shrink: 0;
+        }
+        #klara-sidebar-send:hover { background: #43a047; }
+        #klara-sidebar-send:disabled { background: #9ca3af; cursor: not-allowed; }
+        .klara-counter {
+            margin-top: 6px; color: var(--sudata-muted);
+            display: flex; justify-content: space-between; font-size: 11px;
+        }
+
+        /* ── Report shifting: el tablero se corre cuando el sidebar se abre/expande ── */
+
+        /* Modo normal: se reduce el ancho disponible de la página */
+        body:not(.fullscreen-mode) {
+            transition: padding-right 0.3s ease;
+        }
+        body.klara-sidebar-open:not(.fullscreen-mode) {
+            padding-right: var(--klara-sidebar-w);
+        }
+        body.klara-sidebar-expanded:not(.fullscreen-mode) {
+            padding-right: min(var(--klara-sidebar-expanded-w), 100vw);
+        }
+
+        /* Modo fullscreen: se acorta el panViewport por la derecha */
+        #panViewport {
+            transition: right 0.3s ease, bottom 0.3s ease;
+        }
+        body.klara-sidebar-open.fullscreen-mode #panViewport {
+            right: var(--klara-sidebar-w) !important;
+        }
+        body.klara-sidebar-expanded.fullscreen-mode #panViewport {
+            right: min(var(--klara-sidebar-expanded-w), 100vw) !important;
+        }
+        /* También ajustar hSliderBar en fullscreen con sidebar */
+        body.klara-sidebar-open.fullscreen-mode #hSliderBar {
+            right: calc(22px + var(--klara-sidebar-w));
+        }
+        body.klara-sidebar-expanded.fullscreen-mode #hSliderBar {
+            right: calc(22px + min(var(--klara-sidebar-expanded-w), 100vw));
+        }
+
+        /* Animaciones */
+        @keyframes klaraMsgIn { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: translateY(0); } }
+        @keyframes klaraTyping {
+            0%, 80%, 100% { opacity: .35; transform: translateY(0); }
+            40% { opacity: 1; transform: translateY(-3px); }
+        }
+
+        @media (max-width: 768px) {
+            .klara-minimal-button { right: 14px; bottom: 14px; }
+            .klara-sidebar-panel, .klara-sidebar-panel.expanded { width: 100%; }
+        }
     </style>
 </head>
 <body>
@@ -649,6 +842,11 @@
             hSlider.addEventListener('input', applyPan);
             vSlider.addEventListener('input', applyPan);
 
+            // Expuesto globalmente para que el sidebar pueda recalcular el reporte
+            window._klaraReportResize = function() {
+                if (isFullscreen) applyZoom(zoomLevel);
+            };
+
             zoomInBtn.addEventListener('click',   () => applyZoom(zoomLevel + 10));
             zoomOutBtn.addEventListener('click',  () => applyZoom(zoomLevel - 10));
             resetZoomBtn.addEventListener('click', () => applyZoom(100));
@@ -775,6 +973,188 @@
                 {% endif %}
             }
         });
+    </script>
+
+    <!-- ── KLARA SIDEBAR WIDGET ── -->
+    <div id="klara-sidebar-widget" class="klara-sidebar-widget">
+        <button id="klara-sidebar-button" class="klara-minimal-button" type="button" aria-label="Abrir KLARA">
+            <span class="klara-minimal-pulse"></span>
+            <span class="klara-minimal-letter">K</span>
+        </button>
+        <aside id="klara-sidebar-panel" class="klara-sidebar-panel">
+            <header class="klara-sidebar-header">
+                <div class="klara-title">
+                    <div class="klara-avatar big">K</div>
+                    <div>
+                        <h2>KLARA</h2>
+                        <p>Asistente Analítico Sudata</p>
+                    </div>
+                </div>
+                <div class="klara-controls">
+                    <button id="klara-sidebar-expand" type="button" title="Expandir chat">⛶</button>
+                    <button id="klara-sidebar-close" type="button" title="Cerrar chat">×</button>
+                </div>
+            </header>
+            <div class="klara-context">
+                <span>Contexto activo</span>
+                <strong>Dashboard activo</strong>
+            </div>
+            <section id="klara-sidebar-messages" class="klara-sidebar-messages"></section>
+            <section class="klara-sidebar-suggestions">
+                <button class="klara-sidebar-suggestion" type="button">¿Cuál fue el producto más vendido?</button>
+                <button class="klara-sidebar-suggestion" type="button">¿Cuánto se vendió este mes?</button>
+                <button class="klara-sidebar-suggestion" type="button">Mostrame ventas por producto</button>
+            </section>
+            <footer class="klara-sidebar-input">
+                <form id="klara-sidebar-form">
+                    <textarea id="klara-sidebar-text" placeholder="Preguntá sobre tus datos..." maxlength="500" rows="1"></textarea>
+                    <button id="klara-sidebar-send" type="submit" title="Enviar mensaje">➜</button>
+                </form>
+                <div class="klara-counter">
+                    <span>KLARA · Sudata</span>
+                    <span id="klara-sidebar-counter">0/500</span>
+                </div>
+            </footer>
+        </aside>
+    </div>
+
+    <!-- Slug del reporte activo — usado por el chatbot para dar contexto -->
+    <script>var KLARA_SLUG = "{{ slug | default('') }}";</script>
+
+    <!-- ── KLARA SIDEBAR JS ── -->
+    <script>
+    (function () {
+        document.addEventListener("DOMContentLoaded", function () {
+            var panel    = document.getElementById("klara-sidebar-panel");
+            var button   = document.getElementById("klara-sidebar-button");
+            var closeBtn = document.getElementById("klara-sidebar-close");
+            var expandBtn = document.getElementById("klara-sidebar-expand");
+            var form     = document.getElementById("klara-sidebar-form");
+            var input    = document.getElementById("klara-sidebar-text");
+            var sendBtn  = document.getElementById("klara-sidebar-send");
+            var messages = document.getElementById("klara-sidebar-messages");
+            var counter  = document.getElementById("klara-sidebar-counter");
+            var suggestions = document.querySelectorAll(".klara-sidebar-suggestion");
+            var isExpanded = false, isTyping = false, klaraSessionId = null;
+
+            function resizeReport() {
+                setTimeout(function() {
+                    if (window._klaraReportResize) window._klaraReportResize();
+                }, 320); // después de la transición CSS de 300ms
+            }
+
+            function openSidebar() {
+                panel.classList.add("open");
+                document.body.classList.add("klara-sidebar-open");
+                button.classList.add("hidden");
+                input.focus();
+                resizeReport();
+            }
+
+            function closeSidebar() {
+                /* Siempre quita expanded + open: el panel desaparece completamente */
+                panel.classList.remove("open", "expanded");
+                document.body.classList.remove("klara-sidebar-open", "klara-sidebar-expanded");
+                isExpanded = false;
+                expandBtn.textContent = "⛶";
+                expandBtn.title = "Expandir chat";
+                setTimeout(function () { button.classList.remove("hidden"); }, 300);
+                resizeReport();
+            }
+
+            function toggleExpand() {
+                isExpanded = !isExpanded;
+                panel.classList.toggle("expanded", isExpanded);
+                document.body.classList.toggle("klara-sidebar-expanded", isExpanded);
+                expandBtn.textContent = isExpanded ? "↘" : "⛶";
+                expandBtn.title = isExpanded ? "Volver a modo parcial" : "Expandir chat";
+                resizeReport();
+            }
+
+            function sanitize(text) {
+                var d = document.createElement("div");
+                d.textContent = text || "";
+                return d.innerHTML;
+            }
+
+            function addMessage(type, text, sqlUsado) {
+                var wrapper = document.createElement("div");
+                var bubble  = document.createElement("div");
+                wrapper.className = "klara-msg " + type;
+                bubble.className  = "klara-bubble";
+                bubble.innerHTML  = sanitize(text).replace(/\n/g, "<br>");
+                if (sqlUsado) {
+                    var dbg = document.createElement("div");
+                    dbg.className = "klara-sql-debug";
+                    dbg.textContent = "DAX ejecutado: " + sqlUsado;
+                    bubble.appendChild(dbg);
+                }
+                wrapper.appendChild(bubble);
+                messages.appendChild(wrapper);
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            function showTyping() {
+                isTyping = true; sendBtn.disabled = true;
+                var t = document.createElement("div");
+                t.id = "klara-sidebar-typing"; t.className = "klara-typing";
+                t.innerHTML = "<span></span><span></span><span></span>";
+                messages.appendChild(t);
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            function hideTyping() {
+                isTyping = false; sendBtn.disabled = false;
+                var t = document.getElementById("klara-sidebar-typing");
+                if (t) t.remove();
+            }
+
+            async function sendQuestion(pregunta) {
+                pregunta = (pregunta || input.value).trim();
+                if (!pregunta || isTyping) return;
+                addMessage("user", pregunta);
+                input.value = ""; input.style.height = "auto";
+                counter.textContent = "0/500";
+                showTyping();
+                try {
+                    var resp = await fetch("/chat", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({
+                            pregunta: pregunta,
+                            slug: KLARA_SLUG,
+                            session_id: klaraSessionId
+                        })
+                    });
+                    var data = await resp.json();
+                    hideTyping();
+                    if (data.session_id) klaraSessionId = data.session_id;
+                    addMessage("bot", data.respuesta || "Sin respuesta.", data.dax_usado || null);
+                } catch (e) {
+                    hideTyping();
+                    addMessage("bot", "No pude conectar con el servidor.");
+                }
+            }
+
+            button.addEventListener("click", openSidebar);
+            closeBtn.addEventListener("click", closeSidebar);
+            expandBtn.addEventListener("click", toggleExpand);
+            form.addEventListener("submit", function (e) { e.preventDefault(); sendQuestion(); });
+            input.addEventListener("input", function () {
+                counter.textContent = input.value.length + "/500";
+                input.style.height = "auto";
+                input.style.height = Math.min(input.scrollHeight, 110) + "px";
+            });
+            input.addEventListener("keydown", function (e) {
+                if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendQuestion(); }
+            });
+            suggestions.forEach(function (btn) {
+                btn.addEventListener("click", function () { sendQuestion(btn.textContent.trim()); });
+            });
+
+            addMessage("bot", "Hola, soy KLARA. Puedo ayudarte a consultar ventas, productos y métricas del tablero sin escribir código.");
+        });
+    })();
     </script>
 
     <!-- Bootstrap JS -->

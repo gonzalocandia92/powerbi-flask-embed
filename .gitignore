@@ -32,3 +32,6 @@ instance/
 *.sqlite
 *.sqlite3=2.7.0
 .env
+
+#GenAi
+.claude

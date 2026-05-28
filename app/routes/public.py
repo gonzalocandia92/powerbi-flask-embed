@@ -67,7 +67,9 @@ def view(custom_slug):
         report_id=report_id,
         config_name=report.name,
         is_public=True,
-        allow_refresh=link.allow_refresh
+        allow_refresh=link.allow_refresh,
+        slug=custom_slug,
+        chatbot_enabled=report.chatbot_enabled,
     ))
     
     if not visitor_id_is_valid:

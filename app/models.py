@@ -150,6 +150,17 @@ class Report(db.Model):
     es_publico = db.Column(db.Boolean, default=True, nullable=False)
     es_privado = db.Column(db.Boolean, default=False, nullable=False)
 
+    # Chatbot visibility — pending DB column (sudata_owner must run ALTER TABLE)
+    # chatbot_enabled = db.Column(db.Boolean, default=False, nullable=False)
+
+    @property
+    def chatbot_enabled(self):
+        return False
+
+    @chatbot_enabled.setter
+    def chatbot_enabled(self, value):
+        pass
+
     created_at = db.Column(db.DateTime, default=_utcnow)
 
     # Relationships
@@ -241,6 +252,55 @@ class DatasetRefreshLog(db.Model):
 
     __table_args__ = (
         db.Index('ix_refresh_log_report_polled', 'report_id_fk', 'polled_at'),
+    )
+
+
+class ChatSession(db.Model):
+    """Chat conversation session — cabecera del log de KLARA."""
+
+    __tablename__ = 'chat_sessions'
+
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    slug = db.Column(db.String(120), nullable=True, index=True)
+    title = db.Column(db.String(200), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    last_message_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    total_messages = db.Column(db.Integer, default=0, nullable=False)
+    had_errors = db.Column(db.Boolean, default=False, nullable=False)
+
+    messages = db.relationship(
+        'ChatMessage', back_populates='session', lazy='dynamic',
+        cascade='all, delete-orphan'
+    )
+
+
+class ChatMessage(db.Model):
+    """Individual message in a KLARA chat session — detalle del log."""
+
+    __tablename__ = 'chat_messages'
+
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    session_id = db.Column(
+        db.BigInteger, db.ForeignKey('chat_sessions.id', ondelete='CASCADE'),
+        nullable=False, index=True
+    )
+    role = db.Column(db.String(20), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    latency_ms = db.Column(db.Integer, nullable=True)
+    model_used = db.Column(db.String(100), nullable=True)
+    input_tokens = db.Column(db.Integer, nullable=True)
+    output_tokens = db.Column(db.Integer, nullable=True)
+    mcp_used = db.Column(db.Boolean, nullable=True)
+    tools_called = db.Column(db.JSON, nullable=True)
+    dax_query = db.Column(db.Text, nullable=True)
+    had_error = db.Column(db.Boolean, default=False, nullable=False)
+    error_message = db.Column(db.Text, nullable=True)
+
+    session = db.relationship('ChatSession', back_populates='messages')
+
+    __table_args__ = (
+        db.Index('ix_chat_message_session_created', 'session_id', 'created_at'),
     )
 
 
