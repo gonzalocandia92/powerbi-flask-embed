@@ -244,7 +244,21 @@
             </a>
             {% endif %}
 
-            {# Toggle KLARA — pending DB column, restore after PM runs SQL #}
+            <!-- Chatbot KLARA toggle -->
+            <form method="POST"
+                  action="{{ url_for('reports.toggle_chatbot', report_id=report.id) }}">
+              {% if report.chatbot_enabled %}
+              <button type="submit" class="btn btn-success w-100"
+                      title="El chatbot KLARA está habilitado para este reporte. Click para deshabilitarlo.">
+                <i class="bi bi-chat-dots-fill me-2"></i>KLARA Habilitada
+              </button>
+              {% else %}
+              <button type="submit" class="btn btn-outline-secondary w-100"
+                      title="El chatbot KLARA está deshabilitado. Click para habilitarlo.">
+                <i class="bi bi-chat-dots me-2"></i>KLARA Deshabilitada
+              </button>
+              {% endif %}
+            </form>
 
             <hr>
 

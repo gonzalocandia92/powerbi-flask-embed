@@ -150,16 +150,8 @@ class Report(db.Model):
     es_publico = db.Column(db.Boolean, default=True, nullable=False)
     es_privado = db.Column(db.Boolean, default=False, nullable=False)
 
-    # Chatbot visibility — pending DB column (sudata_owner must run ALTER TABLE)
-    # chatbot_enabled = db.Column(db.Boolean, default=False, nullable=False)
-
-    @property
-    def chatbot_enabled(self):
-        return False
-
-    @chatbot_enabled.setter
-    def chatbot_enabled(self, value):
-        pass
+    # Chatbot visibility — disable to hide KLARA for this report's public links
+    chatbot_enabled = db.Column(db.Boolean, default=False, nullable=False)
 
     created_at = db.Column(db.DateTime, default=_utcnow)
 

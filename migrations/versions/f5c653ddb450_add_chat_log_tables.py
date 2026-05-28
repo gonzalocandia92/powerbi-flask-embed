@@ -58,11 +58,14 @@ def upgrade():
             batch_op.create_index('ix_chat_message_session_created', ['session_id', 'created_at'], unique=False)
             batch_op.create_index(batch_op.f('ix_chat_messages_session_id'), ['session_id'], unique=False)
 
-    # chatbot_enabled — requires sudata_owner to run:
-    # ALTER TABLE reports ADD COLUMN IF NOT EXISTS chatbot_enabled BOOLEAN NOT NULL DEFAULT false;
+    with op.batch_alter_table('reports', schema=None) as batch_op:
+        batch_op.add_column(sa.Column('chatbot_enabled', sa.Boolean(), nullable=False, server_default='false'))
 
 
 def downgrade():
+    with op.batch_alter_table('reports', schema=None) as batch_op:
+        batch_op.drop_column('chatbot_enabled')
+
     with op.batch_alter_table('chat_messages', schema=None) as batch_op:
         batch_op.drop_index(batch_op.f('ix_chat_messages_session_id'))
         batch_op.drop_index('ix_chat_message_session_created')
