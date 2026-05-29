@@ -2,15 +2,15 @@
 Chatbot endpoint — accessible from public report pages without authentication.
 
 Contract:
-  POST /chat
-  Body:  { "pregunta": "...", "slug": "...", "session_id": 123 }
-  200:   { "respuesta": "...", "dax_usado": "...|null", "session_id": 123 }
-  400:   { "error": "..." }
-  500:   { "respuesta": "...", "dax_usado": null, "session_id": null }
+    POST /chat
+    Body:  { "message"|"pregunta": "...", "slug": "...", "conversation_id"|"session_id": 123 }
+    200:   { "answer": "...", "conversation_id": 123, "report_id": 1, "tool_rounds": 1 }
+    400:   { "error": "..." }
+    500:   { "error": "...", "conversation_id": 123|null }
 
 Log endpoints:
-  GET /api/chatbot/sessions              — list sessions, newest first
-  GET /api/chatbot/sessions/<id>         — session detail + messages
+    GET /api/chatbot/sessions              — list sessions, newest first
+    GET /api/chatbot/sessions/<id>         — session detail + messages
 """
 import logging
 from datetime import datetime, timezone
@@ -18,7 +18,7 @@ from flask import Blueprint, request, jsonify
 from app import db
 from app.models import ChatSession, ChatMessage
 from app.services.chatbot_service import procesar_pregunta
-from app.utils.chatbot_context import get_report_context, get_workspace_info, get_all_active_reports
+from app.utils.chatbot_context import get_report_and_dataset_by_slug, get_workspace_info, get_all_active_reports
 from app.utils.decorators import retry_on_db_error
 
 bp = Blueprint('chatbot', __name__)
@@ -31,19 +31,37 @@ def chat():
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
 
-    pregunta = data.get("pregunta", "").strip()
+    pregunta = (data.get("message") or data.get("pregunta") or "").strip()
     if not pregunta:
         return jsonify({"error": "La pregunta no puede estar vacía"}), 400
 
     slug = data.get("slug", "").strip() or None
-    session_id = data.get("session_id") or None
-    context = get_report_context(slug) if slug else None
+    conversation_id = data.get("conversation_id") or data.get("session_id")
+    reset_history = bool(data.get("reset_history", False))
+    if not slug:
+        return jsonify({"error": "slug is required"}), 400
+
     title = pregunta[:80] + ("…" if len(pregunta) > 80 else "")
 
     session = None
     try:
-        if session_id:
-            session = db.session.get(ChatSession, session_id)
+        try:
+            resolved = get_report_and_dataset_by_slug(slug)
+        except Exception:
+            logging.exception("[Chatbot] Failed to resolve dataset for slug %s", slug)
+            return jsonify({"error": "Unable to resolve dataset for this report"}), 500
+
+        if not resolved:
+            return jsonify({"error": "Slug not found or inactive"}), 404
+
+        report, dataset_id = resolved
+        if conversation_id:
+            try:
+                session_id = int(conversation_id)
+            except (TypeError, ValueError):
+                session_id = None
+            if session_id:
+                session = db.session.get(ChatSession, session_id)
         if not session:
             session = ChatSession(slug=slug, title=title)
             db.session.add(session)
@@ -51,19 +69,30 @@ def chat():
 
         db.session.add(ChatMessage(session_id=session.id, role="user", content=pregunta))
 
-        resultado = procesar_pregunta(pregunta, context=context)
+        client_ip = request.headers.get("X-Forwarded-For") or request.remote_addr or "unknown"
+        client_ip = client_ip.split(",")[0].strip()
+        user_key = f"public:{client_ip}"
+
+        resultado = procesar_pregunta(
+            pregunta,
+            dataset_id=dataset_id,
+            user_key=user_key,
+            report_id=report.id,
+            conversation_id=str(session.id),
+            reset_history=reset_history,
+        )
 
         db.session.add(ChatMessage(
             session_id=session.id,
             role="assistant",
-            content=resultado["respuesta"],
+            content=resultado["answer"],
             latency_ms=resultado.get("latency_ms"),
             model_used=resultado.get("model"),
             input_tokens=resultado.get("input_tokens"),
             output_tokens=resultado.get("output_tokens"),
             mcp_used=resultado.get("mcp_used"),
             tools_called=resultado.get("tools_called") or None,
-            dax_query=resultado.get("dax_usado"),
+            dax_query=resultado.get("dax_query"),
             had_error=False,
         ))
 
@@ -72,9 +101,11 @@ def chat():
         db.session.commit()
 
         return jsonify({
-            "respuesta": resultado["respuesta"],
-            "dax_usado": resultado.get("dax_usado"),
-            "session_id": session.id,
+            "answer": resultado["answer"],
+            "conversation_id": session.id,
+            "report_id": report.id,
+            "tool_rounds": resultado.get("tool_rounds", 0),
+            "dax_query": resultado.get("dax_query"),
         })
 
     except Exception as e:
@@ -96,9 +127,8 @@ def chat():
             logging.exception("[Chatbot] Failed to log error to DB")
 
         return jsonify({
-            "respuesta": f"Error al procesar la consulta: {str(e)}",
-            "dax_usado": None,
-            "session_id": session.id if session and session.id else None,
+            "error": f"Error al procesar la consulta: {str(e)}",
+            "conversation_id": session.id if session and session.id else None,
         }), 500
 
 
@@ -158,9 +188,9 @@ def test_mcp_log():
         output_tokens=147,
         mcp_used=True,
         tools_called=[{
-            "name": "execute_dax",
+            "name": "execute_dax_query",
             "input": {
-                "query": (
+                "dax_query": (
                     "EVALUATE SUMMARIZECOLUMNS("
                     "Ventas[Region], "
                     "FILTER(Ventas, Ventas[Trimestre] = \"Q1 2026\"), "
@@ -195,8 +225,8 @@ def test_mcp_log():
         output_tokens=62,
         mcp_used=True,
         tools_called=[{
-            "name": "execute_dax",
-            "input": {"query": "EVALUATE SUMMARIZECOLUMNS(Ventas[Region], FILTER(Ventas, Ventas[Trimestre] = \"Q1 2025\"), \"Total\", SUM(Ventas[Monto]))"}
+            "name": "execute_dax_query",
+            "input": {"dax_query": "EVALUATE SUMMARIZECOLUMNS(Ventas[Region], FILTER(Ventas, Ventas[Trimestre] = \"Q1 2025\"), \"Total\", SUM(Ventas[Monto]))"}
         }],
         dax_query="EVALUATE SUMMARIZECOLUMNS(Ventas[Region], FILTER(Ventas, Ventas[Trimestre] = \"Q1 2025\"), \"Total\", SUM(Ventas[Monto]))",
         had_error=True,

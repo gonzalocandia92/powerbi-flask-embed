@@ -197,6 +197,7 @@ def view_report(report_id):
         embed_token=embed_token,
         embed_url=embed_url,
         report_id=rid,
+        report_pk=report.id,
         config_name=report.name,
         is_public=False,
         allow_refresh=True

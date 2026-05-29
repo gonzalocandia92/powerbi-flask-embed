@@ -2,12 +2,13 @@
 Utilities that expose app data as context for the KLARA chatbot.
 
 These functions are the bridge between our Flask/DB world and the MCP server.
-The other dev can call these from their MCP server (via HTTP or direct import)
-to get report metadata, workspace IDs, and dataset identifiers — so Claude
-always knows which data source it's working against.
+They resolve report metadata, workspace IDs, and dataset identifiers.
 """
 import os
+from typing import Optional, Tuple
+
 from app.models import PublicLink, Report
+from app.utils.powerbi import get_current_dataset_id
 
 
 def get_report_context(slug: str | None) -> str | None:
@@ -35,8 +36,10 @@ def get_report_context(slug: str | None) -> str | None:
         f"Tenant ID: {tenant.tenant_id}",
     ]
 
-    # Include the dataset ID override from env if set, otherwise note the report ID.
-    dataset_id = os.getenv("CHATBOT_DATASET_ID") or report.report_id
+    try:
+        dataset_id = get_current_dataset_id(report)
+    except Exception:
+        dataset_id = os.getenv("CHATBOT_DATASET_ID") or report.report_id
     lines.append(f"Dataset ID: {dataset_id}")
 
     return "\n".join(lines)
@@ -64,12 +67,31 @@ def get_workspace_info(slug: str) -> dict | None:
     workspace = report.workspace
     tenant = workspace.tenant
 
+    try:
+        dataset_id = get_current_dataset_id(report)
+    except Exception:
+        dataset_id = os.getenv("CHATBOT_DATASET_ID") or report.report_id
+
     return {
         "workspace_id": workspace.workspace_id,
-        "dataset_id": os.getenv("CHATBOT_DATASET_ID") or report.report_id,
+        "dataset_id": dataset_id,
         "tenant_id": tenant.tenant_id,
         "report_name": report.name,
     }
+
+
+def get_report_and_dataset_by_slug(slug: str) -> Optional[Tuple[Report, str]]:
+    """Resolve a public report and its dataset_id by slug."""
+    if not slug:
+        return None
+
+    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
+    if not link:
+        return None
+
+    report: Report = link.report
+    dataset_id = get_current_dataset_id(report)
+    return report, dataset_id
 
 
 def get_all_active_reports() -> list[dict]:

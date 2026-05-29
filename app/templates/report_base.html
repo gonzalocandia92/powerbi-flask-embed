@@ -150,7 +150,7 @@
         body.fullscreen-mode .footer {
             display: none;
         }
-        
+
         .powerbi-logo {
             height: 20px;
             margin-left: 5px;
@@ -649,7 +649,7 @@
                     <div id="panViewport">
                         <div id="reportContainer" class="report-container"></div>
                     </div>
-                    
+
                     <!-- Footer -->
                     <div class="footer">
                         <div class="d-flex justify-content-between align-items-center flex-wrap">
@@ -688,13 +688,12 @@
             const fullscreenBtn = document.getElementById("fullscreenBtn");
             const exitFullscreenBtn = document.getElementById("exitFullscreenBtn");
             const body = document.body;
-            
             let isFullscreen = false;
             let report; // Variable global para el reporte
             
             // Hide error display initially
             errorDisplay.style.display = 'none';
-            
+
             // Embed configuration
             const config = {
                 type: 'report',
@@ -1122,15 +1121,19 @@
                         method: "POST",
                         headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
-                            pregunta: pregunta,
+                            message: pregunta,
                             slug: KLARA_SLUG,
-                            session_id: klaraSessionId
+                            conversation_id: klaraSessionId
                         })
                     });
                     var data = await resp.json();
                     hideTyping();
-                    if (data.session_id) klaraSessionId = data.session_id;
-                    addMessage("bot", data.respuesta || "Sin respuesta.", data.dax_usado || null);
+                    if (!resp.ok) {
+                        addMessage("bot", data.error || "Ocurrió un error al procesar el chat.");
+                        return;
+                    }
+                    if (data.conversation_id) klaraSessionId = data.conversation_id;
+                    addMessage("bot", data.answer || "Sin respuesta.", data.dax_query || null);
                 } catch (e) {
                     hideTyping();
                     addMessage("bot", "No pude conectar con el servidor.");

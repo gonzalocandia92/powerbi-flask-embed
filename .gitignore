@@ -8,8 +8,8 @@ __pycache__/
 .env
 
 # Virtual environment folder (aunque usas Docker, por las dudas)
-venv/
-env/
+.venv/
+.env/
 
 # Flask instance folder
 instance/
@@ -35,3 +35,5 @@ instance/
 
 #GenAi
 .claude
+
+.idea/
