@@ -52,6 +52,7 @@ class ReportForm(FlaskForm):
     usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])
     es_publico = BooleanField("Es Público (accesible sin autenticación)")
     es_privado = BooleanField("Es Privado (requiere autenticación de empresa)")
+    chatbot_enabled = BooleanField("Habilitar chatbot KLARA en links públicos")
     empresas = SelectMultipleField("Empresas Asociadas", coerce=int, validators=[])
     submit = SubmitField("Guardar")
 

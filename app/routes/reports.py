@@ -137,6 +137,7 @@ def edit(report_id):
         report.usuario_pbi_id = form.usuario_pbi.data
         report.es_publico = es_publico
         report.es_privado = es_privado
+        report.chatbot_enabled = form.chatbot_enabled.data
         
         # Update empresa associations
         selected_empresa_ids = request.form.getlist('empresas')

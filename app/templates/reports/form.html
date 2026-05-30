@@ -88,6 +88,14 @@
                   {{ form.es_privado.label(class="form-check-label") }}
                   <div class="form-text">El reporte puede ser accedido por empresas autenticadas vía API</div>
                 </div>
+
+                <hr class="my-3">
+
+                <div class="form-check">
+                  {{ form.chatbot_enabled(class="form-check-input") }}
+                  {{ form.chatbot_enabled.label(class="form-check-label") }}
+                  <div class="form-text">Muestra el botón de KLARA en los links públicos de este reporte</div>
+                </div>
               </div>
             </div>
 
