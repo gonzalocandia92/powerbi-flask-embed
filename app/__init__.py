@@ -7,6 +7,7 @@ using Azure AD authentication and the Power BI REST API.
 import os
 import atexit
 import logging
+import asyncio
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
@@ -57,6 +58,21 @@ def create_app():
     
     db.init_app(app)
     migrate.init_app(app, db)
+
+    # Flask async views require the 'async' extra. In environments where that
+    # dependency is unavailable, provide a lightweight compatibility shim so
+    # async routes can still run under WSGI.
+    try:
+        from asgiref.sync import async_to_sync as asgiref_async_to_sync
+    except ImportError:
+        def _async_to_sync(func):
+            def wrapper(*args, **kwargs):
+                return asyncio.run(func(*args, **kwargs))
+            return wrapper
+
+        app.async_to_sync = _async_to_sync
+    else:
+        app.async_to_sync = asgiref_async_to_sync
     
     login_manager.login_view = 'auth.login'
     login_manager.init_app(app)

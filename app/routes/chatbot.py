@@ -1,138 +1,78 @@
 """
-Chatbot endpoint — accessible from public report pages without authentication.
+Chatbot endpoint accessible from public report pages without authentication.
 
 Contract:
     POST /chat
     Body:  { "message"|"pregunta": "...", "slug": "...", "conversation_id"|"session_id": 123 }
     200:   { "answer": "...", "conversation_id": 123, "report_id": 1, "tool_rounds": 1 }
     400:   { "error": "..." }
-    500:   { "error": "...", "conversation_id": 123|null }
-
-Log endpoints:
-    GET /api/chatbot/sessions              — list sessions, newest first
-    GET /api/chatbot/sessions/<id>         — session detail + messages
+    404:   { "error": "..." }
+    500:   { "error": "..." }
 """
 import logging
 from datetime import datetime, timezone
-from flask import Blueprint, request, jsonify
+
+from flask import Blueprint, jsonify, request
+
 from app import db
-from app.models import ChatSession, ChatMessage
-from app.services.chatbot_service import procesar_pregunta
-from app.utils.chatbot_context import get_report_and_dataset_by_slug, get_workspace_info, get_all_active_reports
-from app.utils.decorators import retry_on_db_error
+from app.models import ChatMessage, ChatSession
+from app.services import chatbot_service
+from app.utils.chatbot_context import get_all_active_reports, get_workspace_info
 
-bp = Blueprint('chatbot', __name__)
+bp = Blueprint("chatbot", __name__)
 
 
-@bp.route('/chat', methods=['POST'])
-@retry_on_db_error(max_retries=2, delay=0.5)
-def chat():
+@bp.route("/chat", methods=["POST"])
+async def chat():
     data = request.get_json(silent=True)
     if not data:
         return jsonify({"error": "Request body must be JSON"}), 400
 
     pregunta = (data.get("message") or data.get("pregunta") or "").strip()
     if not pregunta:
-        return jsonify({"error": "La pregunta no puede estar vacía"}), 400
+        return jsonify({"error": "La pregunta no puede estar vacia"}), 400
 
-    slug = data.get("slug", "").strip() or None
-    conversation_id = data.get("conversation_id") or data.get("session_id")
-    reset_history = bool(data.get("reset_history", False))
+    slug = (data.get("slug") or "").strip() or None
     if not slug:
         return jsonify({"error": "slug is required"}), 400
 
-    title = pregunta[:80] + ("…" if len(pregunta) > 80 else "")
+    conversation_id = data.get("conversation_id") or data.get("session_id")
+    conversation_id_value = str(conversation_id).strip() if conversation_id is not None else None
+    if not conversation_id_value:
+        conversation_id_value = None
 
-    session = None
+    reset_history = bool(data.get("reset_history", False))
+
+    client_ip = request.headers.get("X-Forwarded-For") or request.remote_addr or "unknown"
+    client_ip = client_ip.split(",")[0].strip()
+    user_key = f"public:{client_ip}"
+
     try:
-        try:
-            resolved = get_report_and_dataset_by_slug(slug)
-        except Exception:
-            logging.exception("[Chatbot] Failed to resolve dataset for slug %s", slug)
-            return jsonify({"error": "Unable to resolve dataset for this report"}), 500
-
-        if not resolved:
-            return jsonify({"error": "Slug not found or inactive"}), 404
-
-        report, dataset_id = resolved
-        if conversation_id:
-            try:
-                session_id = int(conversation_id)
-            except (TypeError, ValueError):
-                session_id = None
-            if session_id:
-                session = db.session.get(ChatSession, session_id)
-        if not session:
-            session = ChatSession(slug=slug, title=title)
-            db.session.add(session)
-            db.session.flush()
-
-        db.session.add(ChatMessage(session_id=session.id, role="user", content=pregunta))
-
-        client_ip = request.headers.get("X-Forwarded-For") or request.remote_addr or "unknown"
-        client_ip = client_ip.split(",")[0].strip()
-        user_key = f"public:{client_ip}"
-
-        resultado = procesar_pregunta(
+        resultado = await chatbot_service.procesar_interaccion_completa(
             pregunta,
-            dataset_id=dataset_id,
+            slug=slug,
             user_key=user_key,
-            report_id=report.id,
-            conversation_id=str(session.id),
+            conversation_id=conversation_id_value,
             reset_history=reset_history,
         )
+    except chatbot_service.ChatbotNotFoundError as exc:
+        return jsonify({"error": str(exc)}), 404
+    except Exception as exc:
+        logging.exception("[Chatbot] Failed to process /chat request")
+        return jsonify({"error": f"Error al procesar la consulta: {str(exc)}"}), 500
 
-        db.session.add(ChatMessage(
-            session_id=session.id,
-            role="assistant",
-            content=resultado["answer"],
-            latency_ms=resultado.get("latency_ms"),
-            model_used=resultado.get("model"),
-            input_tokens=resultado.get("input_tokens"),
-            output_tokens=resultado.get("output_tokens"),
-            mcp_used=resultado.get("mcp_used"),
-            tools_called=resultado.get("tools_called") or None,
-            dax_query=resultado.get("dax_query"),
-            had_error=False,
-        ))
-
-        session.total_messages += 2
-        session.last_message_at = datetime.now(timezone.utc)
-        db.session.commit()
-
-        return jsonify({
+    return jsonify(
+        {
             "answer": resultado["answer"],
-            "conversation_id": session.id,
-            "report_id": report.id,
+            "conversation_id": resultado["conversation_id"],
+            "report_id": resultado["report_id"],
             "tool_rounds": resultado.get("tool_rounds", 0),
             "dax_query": resultado.get("dax_query"),
-        })
-
-    except Exception as e:
-        try:
-            db.session.rollback()
-            if session and session.id:
-                db.session.add(ChatMessage(
-                    session_id=session.id,
-                    role="assistant",
-                    content=f"Error al procesar la consulta: {str(e)}",
-                    had_error=True,
-                    error_message=str(e),
-                ))
-                session.total_messages += 1
-                session.had_errors = True
-                db.session.commit()
-        except Exception:
-            db.session.rollback()
-            logging.exception("[Chatbot] Failed to log error to DB")
-
-        return jsonify({
-            "error": f"Error al procesar la consulta: {str(e)}",
-            "conversation_id": session.id if session and session.id else None,
-        }), 500
+        }
+    )
 
 
-@bp.route('/api/chatbot/context/<slug>', methods=['GET'])
+@bp.route("/api/chatbot/context/<slug>", methods=["GET"])
 def report_context(slug):
     info = get_workspace_info(slug)
     if not info:
@@ -140,54 +80,22 @@ def report_context(slug):
     return jsonify(info)
 
 
-@bp.route('/api/chatbot/reports', methods=['GET'])
+@bp.route("/api/chatbot/reports", methods=["GET"])
 def active_reports():
     return jsonify(get_all_active_reports())
 
 
-@bp.route('/api/chatbot/test-mcp', methods=['POST'])
-def test_mcp_log():
+@bp.route("/api/chatbot/test-agent", methods=["POST"])
+def test_agent_log():
     """
-    Simulates a full MCP-assisted conversation and logs it to the DB.
-    Use this to verify the log tables capture all fields correctly.
-    DELETE this endpoint before going to production.
+    Simula un Flujo de Agente Nativo y guarda mensajes de prueba en la DB.
+    Úsalo para verificar que las tablas de log capturan todos los campos correctamente.
+    ELIMINA este endpoint antes de ir a producción.
     """
-    from datetime import datetime, timezone
-
     slug = request.get_json(silent=True, force=True) or {}
     slug = slug.get("slug", "test-slug")
-
-    session = ChatSession(
-        slug=slug,
-        title="Consulta de ventas por región (prueba MCP)",
-    )
-    db.session.add(session)
-    db.session.flush()
-
-    # Mensaje del usuario
-    db.session.add(ChatMessage(
-        session_id=session.id,
-        role="user",
-        content="¿Cuáles son las ventas totales por región en el último trimestre?",
-    ))
-
-    # Respuesta del asistente simulando MCP con DAX
-    db.session.add(ChatMessage(
-        session_id=session.id,
-        role="assistant",
-        content=(
-            "Las ventas del último trimestre por región son:\n"
-            "• Región Norte: $4.320.000\n"
-            "• Región Sur: $2.870.000\n"
-            "• Región Centro: $6.150.000\n"
-            "El total acumulado es $13.340.000."
-        ),
-        latency_ms=2340,
-        model_used="claude-haiku-4-5-20251001",
-        input_tokens=812,
-        output_tokens=147,
-        mcp_used=True,
-        tools_called=[{
+    tools_called = [
+        {
             "name": "execute_dax_query",
             "input": {
                 "dax_query": (
@@ -196,57 +104,97 @@ def test_mcp_log():
                     "FILTER(Ventas, Ventas[Trimestre] = \"Q1 2026\"), "
                     "\"Total\", SUM(Ventas[Monto]))"
                 )
-            }
-        }],
-        dax_query=(
-            "EVALUATE SUMMARIZECOLUMNS("
-            "Ventas[Region], "
-            "FILTER(Ventas, Ventas[Trimestre] = \"Q1 2026\"), "
-            "\"Total\", SUM(Ventas[Monto]))"
-        ),
-        had_error=False,
-    ))
+            },
+        }
+    ]
 
-    # Segundo turno — pregunta de seguimiento
-    db.session.add(ChatMessage(
-        session_id=session.id,
-        role="user",
-        content="¿Y comparado con el mismo trimestre del año anterior?",
-    ))
+    session = ChatSession(
+        slug=slug,
+        title="Consulta de ventas por region (prueba de agente)",
+    )
+    db.session.add(session)
+    db.session.flush()
 
-    # Respuesta con error simulado para probar had_error
-    db.session.add(ChatMessage(
-        session_id=session.id,
-        role="assistant",
-        content="No se pudo obtener el dato comparativo: el dataset no contiene información del Q1 2025.",
-        latency_ms=1870,
-        model_used="claude-haiku-4-5-20251001",
-        input_tokens=934,
-        output_tokens=62,
-        mcp_used=True,
-        tools_called=[{
-            "name": "execute_dax_query",
-            "input": {"dax_query": "EVALUATE SUMMARIZECOLUMNS(Ventas[Region], FILTER(Ventas, Ventas[Trimestre] = \"Q1 2025\"), \"Total\", SUM(Ventas[Monto]))"}
-        }],
-        dax_query="EVALUATE SUMMARIZECOLUMNS(Ventas[Region], FILTER(Ventas, Ventas[Trimestre] = \"Q1 2025\"), \"Total\", SUM(Ventas[Monto]))",
-        had_error=True,
-        error_message="Dataset does not contain data for Q1 2025",
-    ))
+    db.session.add(
+        ChatMessage(
+            session_id=session.id,
+            role="user",
+            content="Cuales son las ventas totales por region en el ultimo trimestre?",
+        )
+    )
+
+    db.session.add(
+        ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content=(
+                "Las ventas del ultimo trimestre por region son:\n"
+                "• Region Norte: $4.320.000\n"
+                "• Region Sur: $2.870.000\n"
+                "• Region Centro: $6.150.000\n"
+                "El total acumulado es $13.340.000."
+            ),
+            latency_ms=2340,
+            model_used="claude-haiku-4-5-20251001",
+            input_tokens=812,
+            output_tokens=147,
+            mcp_used=bool(tools_called),
+            tools_called=tools_called,
+            dax_query=(
+                "EVALUATE SUMMARIZECOLUMNS("
+                "Ventas[Region], "
+                "FILTER(Ventas, Ventas[Trimestre] = \"Q1 2026\"), "
+                "\"Total\", SUM(Ventas[Monto]))"
+            ),
+            had_error=False,
+        )
+    )
+
+    db.session.add(
+        ChatMessage(
+            session_id=session.id,
+            role="user",
+            content="Y comparado con el mismo trimestre del ano anterior?",
+        )
+    )
+
+    db.session.add(
+        ChatMessage(
+            session_id=session.id,
+            role="assistant",
+            content="No se pudo obtener el dato comparativo: el dataset no contiene informacion del Q1 2025.",
+            latency_ms=1870,
+            model_used="claude-haiku-4-5-20251001",
+            input_tokens=934,
+            output_tokens=62,
+            mcp_used=bool(tools_called),
+            tools_called=tools_called,
+            dax_query=(
+                "EVALUATE SUMMARIZECOLUMNS(Ventas[Region], "
+                "FILTER(Ventas, Ventas[Trimestre] = \"Q1 2025\"), "
+                "\"Total\", SUM(Ventas[Monto]))"
+            ),
+            had_error=True,
+            error_message="Dataset does not contain data for Q1 2025",
+        )
+    )
 
     session.total_messages = 4
     session.last_message_at = datetime.now(timezone.utc)
     session.had_errors = True
     db.session.commit()
 
-    return jsonify({
-        "ok": True,
-        "session_id": session.id,
-        "detail_url": f"/api/chatbot/sessions/{session.id}",
-        "list_url": "/api/chatbot/sessions",
-    })
+    return jsonify(
+        {
+            "ok": True,
+            "session_id": session.id,
+            "detail_url": f"/api/chatbot/sessions/{session.id}",
+            "list_url": "/api/chatbot/sessions",
+        }
+    )
 
 
-@bp.route('/api/chatbot/sessions', methods=['GET'])
+@bp.route("/api/chatbot/sessions", methods=["GET"])
 def list_sessions():
     limit = min(int(request.args.get("limit", 50)), 200)
     slug = request.args.get("slug") or None
@@ -254,44 +202,54 @@ def list_sessions():
     if slug:
         q = q.filter_by(slug=slug)
     sessions = q.limit(limit).all()
-    return jsonify([{
-        "id": s.id,
-        "slug": s.slug,
-        "title": s.title,
-        "created_at": s.created_at.isoformat(),
-        "last_message_at": s.last_message_at.isoformat(),
-        "total_messages": s.total_messages,
-        "had_errors": s.had_errors,
-    } for s in sessions])
+    return jsonify(
+        [
+            {
+                "id": s.id,
+                "slug": s.slug,
+                "title": s.title,
+                "created_at": s.created_at.isoformat(),
+                "last_message_at": s.last_message_at.isoformat(),
+                "total_messages": s.total_messages,
+                "had_errors": s.had_errors,
+            }
+            for s in sessions
+        ]
+    )
 
 
-@bp.route('/api/chatbot/sessions/<int:session_id>', methods=['GET'])
+@bp.route("/api/chatbot/sessions/<int:session_id>", methods=["GET"])
 def get_session(session_id):
     session = db.session.get(ChatSession, session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
     messages = session.messages.order_by(ChatMessage.created_at.asc()).all()
-    return jsonify({
-        "id": session.id,
-        "slug": session.slug,
-        "title": session.title,
-        "created_at": session.created_at.isoformat(),
-        "last_message_at": session.last_message_at.isoformat(),
-        "total_messages": session.total_messages,
-        "had_errors": session.had_errors,
-        "messages": [{
-            "id": m.id,
-            "role": m.role,
-            "content": m.content,
-            "created_at": m.created_at.isoformat(),
-            "latency_ms": m.latency_ms,
-            "model_used": m.model_used,
-            "input_tokens": m.input_tokens,
-            "output_tokens": m.output_tokens,
-            "mcp_used": m.mcp_used,
-            "tools_called": m.tools_called,
-            "dax_query": m.dax_query,
-            "had_error": m.had_error,
-            "error_message": m.error_message,
-        } for m in messages],
-    })
+    return jsonify(
+        {
+            "id": session.id,
+            "slug": session.slug,
+            "title": session.title,
+            "created_at": session.created_at.isoformat(),
+            "last_message_at": session.last_message_at.isoformat(),
+            "total_messages": session.total_messages,
+            "had_errors": session.had_errors,
+            "messages": [
+                {
+                    "id": m.id,
+                    "role": m.role,
+                    "content": m.content,
+                    "created_at": m.created_at.isoformat(),
+                    "latency_ms": m.latency_ms,
+                    "model_used": m.model_used,
+                    "input_tokens": m.input_tokens,
+                    "output_tokens": m.output_tokens,
+                    "mcp_used": m.mcp_used,
+                    "tools_called": m.tools_called,
+                    "dax_query": m.dax_query,
+                    "had_error": m.had_error,
+                    "error_message": m.error_message,
+                }
+                for m in messages
+            ],
+        }
+    )

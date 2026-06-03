@@ -3,50 +3,13 @@ Local schema reranking helpers for chat.
 """
 from __future__ import annotations
 
-import importlib.util
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
-from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal
 
 SchemaKind = Literal["tabla", "medida", "otro"]
 DEFAULT_RERANK_TIMEOUT_SECONDS = 10
-
-_SCHEMA_DATA_PATH = Path(__file__).resolve().with_name("schema_data.py")
-_SCHEMA_DATA_CACHE: tuple[float, List[str]] | None = None
-
-
-def _load_tablas_schema() -> List[str]:
-    if not _SCHEMA_DATA_PATH.exists():
-        return []
-
-    try:
-        current_mtime = _SCHEMA_DATA_PATH.stat().st_mtime
-    except OSError:
-        return []
-
-    global _SCHEMA_DATA_CACHE
-    if _SCHEMA_DATA_CACHE is not None and _SCHEMA_DATA_CACHE[0] == current_mtime:
-        return list(_SCHEMA_DATA_CACHE[1])
-
-    spec = importlib.util.spec_from_file_location("mcp_schema_data_local", _SCHEMA_DATA_PATH)
-    if spec is None or spec.loader is None:
-        return []
-
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
-    tablas_schema = getattr(module, "TABLAS_SCHEMA", [])
-    if not tablas_schema:
-        _SCHEMA_DATA_CACHE = (current_mtime, [])
-        return []
-    if not isinstance(tablas_schema, list):
-        raise RuntimeError("TABLAS_SCHEMA must be a list of strings")
-
-    loaded = [str(item) for item in tablas_schema if str(item).strip()]
-    _SCHEMA_DATA_CACHE = (current_mtime, loaded)
-    return list(loaded)
 
 
 def _get_voyage_client():
@@ -138,13 +101,12 @@ def build_schema_items_from_live_schema(mcp_schema_json: str) -> List[str]:
 
 def buscar_tablas_y_medidas_relevantes(
     pregunta: str,
+    esquema_dinamico: List[str],
     n_tablas: int = 3,
     n_medidas: int = 5,
-    schema_items: Optional[List[str]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    tablas_schema = schema_items if schema_items is not None else _load_tablas_schema()
-    todas_las_tablas = [doc for doc in tablas_schema if clasificar_schema_item(doc) == "tabla"]
-    todas_las_medidas = [doc for doc in tablas_schema if clasificar_schema_item(doc) == "medida"]
+    todas_las_tablas = [doc for doc in esquema_dinamico if clasificar_schema_item(doc) == "tabla"]
+    todas_las_medidas = [doc for doc in esquema_dinamico if clasificar_schema_item(doc) == "medida"]
 
     tablas_relevantes = buscar_elementos_relevantes_rerank(pregunta, todas_las_tablas, top_k=n_tablas)
     medidas_relevantes = buscar_elementos_relevantes_rerank(pregunta, todas_las_medidas, top_k=n_medidas)
@@ -154,12 +116,14 @@ def buscar_tablas_y_medidas_relevantes(
 
 def build_schema_context_json(
     pregunta: str,
+    esquema_dinamico: List[str],
     n_tablas: int = 3,
     n_medidas: int = 5,
-    schema_items: Optional[List[str]] = None,
 ) -> str:
     resultados = buscar_tablas_y_medidas_relevantes(
-        pregunta, n_tablas=n_tablas, n_medidas=n_medidas, schema_items=schema_items
+        pregunta,
+        esquema_dinamico,
+        n_tablas=n_tablas,
+        n_medidas=n_medidas,
     )
     return json.dumps(resultados, ensure_ascii=False, separators=(",", ":"), default=str)
-
