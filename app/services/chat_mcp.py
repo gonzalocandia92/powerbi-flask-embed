@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, cast
 
-from .schema_rerank import build_schema_context_json
+from .schema_rerank import build_schema_context_json, build_schema_items_from_live_schema
 
 ANTHROPIC_API_KEY=os.environ.get("ANTHROPIC_API_KEY")
 
@@ -50,6 +50,8 @@ Usa 'Moneda'[Moneda Campos] = "'Medidas'[Ventas USD]" SOLO si el usuario pide ex
 
 _CHAT_STATE_LOCK = threading.RLock()
 _CHAT_STATES: dict[str, "ChatConversationState"] = {}
+_LIVE_SCHEMA_CACHE: dict[str, tuple[float, list]] = {}
+_LIVE_SCHEMA_CACHE_TTL = 3600  # segundos — refresca el schema del dataset cada 1 hora
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEBUG_FILE_LOCK = threading.RLock()
 _DEBUG_FILE_DEFAULT = _PROJECT_ROOT / "chat_mcp_debug.txt"
@@ -376,27 +378,58 @@ async def _fetch_schema_context(
     debug_enabled: bool,
     required: bool,
 ) -> str:
+    import time
+
     _debug_print(
         "mcp:get_schema_context:request",
         {"dataset_id": dataset_id, "question": question},
         enabled=debug_enabled,
     )
+
+    # --- Obtener schema en vivo del modelo (con cache por TTL) ---
+    now = time.time()
+    cached = _LIVE_SCHEMA_CACHE.get(dataset_id)
+    if cached is None or (now - cached[0]) > _LIVE_SCHEMA_CACHE_TTL:
+        try:
+            raw_schema = await asyncio.wait_for(
+                bridge.get_semantic_model_schema(dataset_id),
+                timeout=30,
+            )
+            schema_items = build_schema_items_from_live_schema(raw_schema)
+            _LIVE_SCHEMA_CACHE[dataset_id] = (now, schema_items)
+            _debug_print(
+                "mcp:live_schema:loaded",
+                {"dataset_id": dataset_id, "items": len(schema_items)},
+                enabled=debug_enabled,
+            )
+        except Exception as exc:
+            logging.warning("No se pudo obtener el schema en vivo del MCP: %s", exc)
+            schema_items = cached[1] if cached else None
+    else:
+        schema_items = cached[1]
+        _debug_print(
+            "mcp:live_schema:cache_hit",
+            {"dataset_id": dataset_id, "items": len(schema_items)},
+            enabled=debug_enabled,
+        )
+
+    # --- Reranking con schema en vivo (o fallback a schema_data.py si falla) ---
     try:
         fetched_schema_text = await asyncio.wait_for(
-            asyncio.to_thread(build_schema_context_json, question, 3, 5),
+            asyncio.to_thread(build_schema_context_json, question, 3, 5, schema_items),
             timeout=max(1, int(settings.schema_context_timeout_seconds)),
         )
         _debug_print("mcp:get_schema_context:response", fetched_schema_text, enabled=debug_enabled)
         return fetched_schema_text.strip()
-    except asyncio.TimeoutError as exc:
+    except asyncio.TimeoutError:
         logging.warning(
-            "Timed out fetching reranked schema context locally after %s seconds",
+            "Timed out fetching reranked schema context after %s seconds",
             settings.schema_context_timeout_seconds,
         )
         _debug_print("mcp:get_schema_context:timeout", {"seconds": settings.schema_context_timeout_seconds}, enabled=debug_enabled)
         return ""
     except Exception as exc:
-        logging.exception("Failed to fetch reranked schema context locally")
+        logging.exception("Failed to fetch reranked schema context")
         _debug_print("mcp:get_schema_context:error", repr(exc), enabled=debug_enabled)
         return ""
 

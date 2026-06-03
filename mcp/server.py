@@ -174,12 +174,15 @@ def get_semantic_model_schema(dataset_id: str) -> str:
             if not name:
                 continue
 
+            parts = [str(name)]
+            if descr:
+                parts.append(str(descr))
             if expr:
-                clean_measures.append(f"{name} = {expr}")
-            elif descr:
-                clean_measures.append(f"{name} = {descr}")
-            else:
-                clean_measures.append(str(name))
+                expr_str = str(expr)
+                if len(expr_str) > 300:
+                    expr_str = expr_str[:300] + "..."
+                parts.append(f"Expresion: {expr_str}")
+            clean_measures.append(" | ".join(parts))
 
         clean_relationships: List[str] = []
         for row in relationship_rows:

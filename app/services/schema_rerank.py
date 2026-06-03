@@ -8,7 +8,7 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 SchemaKind = Literal["tabla", "medida", "otro"]
 DEFAULT_RERANK_TIMEOUT_SECONDS = 10
@@ -117,12 +117,32 @@ def buscar_elementos_relevantes_rerank(
     return elementos_ordenados
 
 
+def build_schema_items_from_live_schema(mcp_schema_json: str) -> List[str]:
+    """Convert get_semantic_model_schema output to reranker-compatible strings."""
+    try:
+        schema = json.loads(mcp_schema_json)
+    except Exception:
+        return []
+
+    items: List[str] = []
+
+    for table_name, columns in schema.get("Tables", {}).items():
+        col_list = ", ".join(str(c) for c in columns[:25])
+        items.append(f"Tabla: {table_name}. Columnas: {col_list}")
+
+    for measure_str in schema.get("Measures", []):
+        items.append(f"Medida: {measure_str}")
+
+    return items
+
+
 def buscar_tablas_y_medidas_relevantes(
     pregunta: str,
     n_tablas: int = 3,
     n_medidas: int = 5,
+    schema_items: Optional[List[str]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
-    tablas_schema = _load_tablas_schema()
+    tablas_schema = schema_items if schema_items is not None else _load_tablas_schema()
     todas_las_tablas = [doc for doc in tablas_schema if clasificar_schema_item(doc) == "tabla"]
     todas_las_medidas = [doc for doc in tablas_schema if clasificar_schema_item(doc) == "medida"]
 
@@ -132,7 +152,14 @@ def buscar_tablas_y_medidas_relevantes(
     return {"tablas": tablas_relevantes, "medidas": medidas_relevantes}
 
 
-def build_schema_context_json(pregunta: str, n_tablas: int = 3, n_medidas: int = 5) -> str:
-    resultados = buscar_tablas_y_medidas_relevantes(pregunta, n_tablas=n_tablas, n_medidas=n_medidas)
+def build_schema_context_json(
+    pregunta: str,
+    n_tablas: int = 3,
+    n_medidas: int = 5,
+    schema_items: Optional[List[str]] = None,
+) -> str:
+    resultados = buscar_tablas_y_medidas_relevantes(
+        pregunta, n_tablas=n_tablas, n_medidas=n_medidas, schema_items=schema_items
+    )
     return json.dumps(resultados, ensure_ascii=False, separators=(",", ":"), default=str)
 
