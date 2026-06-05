@@ -90,7 +90,10 @@ def new():
             workspace_id_fk=form.workspace.data,
             usuario_pbi_id=form.usuario_pbi.data,
             es_publico=es_publico,
-            es_privado=es_privado
+            es_privado=es_privado,
+            filter_enabled=form.filter_enabled.data,
+            filter_table=form.filter_table.data or None,
+            filter_column=form.filter_column.data or None,
         )
         db.session.add(report)
         db.session.commit()
@@ -138,6 +141,9 @@ def edit(report_id):
         report.es_publico = es_publico
         report.es_privado = es_privado
         report.chatbot_enabled = form.chatbot_enabled.data
+        report.filter_enabled = form.filter_enabled.data
+        report.filter_table = form.filter_table.data or None
+        report.filter_column = form.filter_column.data or None
         
         # Update empresa associations
         selected_empresa_ids = request.form.getlist('empresas')

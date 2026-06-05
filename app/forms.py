@@ -54,6 +54,9 @@ class ReportForm(FlaskForm):
     es_privado = BooleanField("Es Privado (requiere autenticación de empresa)")
     chatbot_enabled = BooleanField("Habilitar chatbot KLARA en links públicos")
     empresas = SelectMultipleField("Empresas Asociadas", coerce=int, validators=[])
+    filter_enabled = BooleanField("Acepta filtros en la API privada")
+    filter_table = StringField("Nombre de tabla (modelo Power BI)", validators=[Optional(), Length(max=200)])
+    filter_column = StringField("Nombre de campo/columna", validators=[Optional(), Length(max=200)])
     submit = SubmitField("Guardar")
 
 
