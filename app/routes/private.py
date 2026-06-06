@@ -124,7 +124,7 @@ def report_config():
         filter_value = request.args.get('filter')
         if filter_value and report.filter_enabled and report.filter_table and report.filter_column:
             pbi_filter = f"{report.filter_table}/{report.filter_column} eq {filter_value}"
-            embed_url = embed_url + "?filter=" + urllib.parse.quote(pbi_filter, safe='')
+            embed_url = embed_url + "&filter=" + urllib.parse.quote(pbi_filter, safe='')
 
         return jsonify({
             'embedUrl': embed_url,
