@@ -66,7 +66,7 @@ def list_reports():
         Report.es_privado == True
     ).all()
     
-    reports_data = [{'id': r.id, 'name': r.name} for r in private_reports]
+    reports_data = [{'id': r.id, 'name': r.name, 'filterable': r.filter_enabled} for r in private_reports]
     
     return jsonify({
         'empresa_id': empresa.id,
