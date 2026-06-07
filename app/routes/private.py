@@ -2,6 +2,7 @@
 Private client API routes for authentication and report access.
 """
 import logging
+import urllib.parse
 from flask import Blueprint, request, jsonify
 import jwt as pyjwt
 
@@ -65,7 +66,7 @@ def list_reports():
         Report.es_privado == True
     ).all()
     
-    reports_data = [{'id': r.id, 'name': r.name} for r in private_reports]
+    reports_data = [{'id': r.id, 'name': r.name, 'filterable': r.filter_enabled} for r in private_reports]
     
     return jsonify({
         'empresa_id': empresa.id,
@@ -118,6 +119,13 @@ def report_config():
     
     try:
         embed_token, embed_url, rid = get_embed_for_report(report)
+
+        # Apply a Power BI URL filter when the report is configured for private filtering.
+        filter_value = request.args.get('filter')
+        if filter_value and report.filter_enabled and report.filter_table and report.filter_column:
+            pbi_filter = f"{report.filter_table}/{report.filter_column} eq {filter_value}"
+            embed_url = embed_url + "&filter=" + urllib.parse.quote(pbi_filter, safe='')
+
         return jsonify({
             'embedUrl': embed_url,
             'reportId': rid,

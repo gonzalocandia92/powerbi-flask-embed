@@ -96,6 +96,36 @@
                   {{ form.chatbot_enabled.label(class="form-check-label") }}
                   <div class="form-text">Muestra el botón de KLARA en los links públicos de este reporte</div>
                 </div>
+
+                <hr class="my-3">
+
+                <div class="form-check mb-3">
+                  {{ form.filter_enabled(class="form-check-input") }}
+                  {{ form.filter_enabled.label(class="form-check-label") }}
+                  <div class="form-text">Permite aplicar un filtro por parámetro en la API privada de este reporte</div>
+                </div>
+
+                <div class="row">
+                  <div class="col-md-6 mb-3">
+                    {{ form.filter_table.label(class="form-label") }}
+                    {{ form.filter_table(class="form-control" + (" is-invalid" if form.filter_table.errors else "")) }}
+                    {% if form.filter_table.errors %}
+                      <div class="invalid-feedback">
+                        {% for error in form.filter_table.errors %}{{ error }}{% endfor %}
+                      </div>
+                    {% endif %}
+                  </div>
+
+                  <div class="col-md-6 mb-3">
+                    {{ form.filter_column.label(class="form-label") }}
+                    {{ form.filter_column(class="form-control" + (" is-invalid" if form.filter_column.errors else "")) }}
+                    {% if form.filter_column.errors %}
+                      <div class="invalid-feedback">
+                        {% for error in form.filter_column.errors %}{{ error }}{% endfor %}
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
               </div>
             </div>
 

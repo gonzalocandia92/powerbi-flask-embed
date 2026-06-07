@@ -6,10 +6,24 @@ Domain hierarchy:
   Report (M) ↔ (N) Empresa
 """
 from datetime import datetime, timezone
+import sqlalchemy as sa
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet, InvalidToken
 import os
+from sqlalchemy.ext.compiler import compiles
+
+try:
+    from pgvector.sqlalchemy import Vector
+except ImportError:  # pragma: no cover - fallback for environments without pgvector installed
+    class Vector(sa.types.UserDefinedType):
+        cache_ok = True
+
+        def __init__(self, dimensions):
+            self.dimensions = dimensions
+
+        def get_col_spec(self, **kw):
+            return f"VECTOR({self.dimensions})"
 
 from app import db
 
@@ -153,6 +167,11 @@ class Report(db.Model):
     # Chatbot visibility — disable to hide KLARA for this report's public links
     chatbot_enabled = db.Column(db.Boolean, default=False, nullable=False)
 
+    # Filter configuration for private API access
+    filter_enabled = db.Column(db.Boolean, default=False, nullable=False)
+    filter_table = db.Column(db.String(200), nullable=True)
+    filter_column = db.Column(db.String(200), nullable=True)
+
     created_at = db.Column(db.DateTime, default=_utcnow)
 
     # Relationships
@@ -160,6 +179,12 @@ class Report(db.Model):
     usuario_pbi = db.relationship('UsuarioPBI')
     public_links = db.relationship('PublicLink', back_populates='report', lazy='dynamic', cascade='all, delete-orphan')
     empresas = db.relationship('Empresa', secondary='empresa_report', back_populates='reports')
+    schema_embeddings = db.relationship(
+        'SchemaEmbedding',
+        back_populates='report',
+        lazy='dynamic',
+        cascade='all, delete-orphan',
+    )
 
 
 class Empresa(db.Model):
@@ -245,6 +270,34 @@ class DatasetRefreshLog(db.Model):
     __table_args__ = (
         db.Index('ix_refresh_log_report_polled', 'report_id_fk', 'polled_at'),
     )
+
+
+class SchemaEmbedding(db.Model):
+    """Persisted semantic-model embeddings for vector retrieval."""
+
+    __tablename__ = 'schema_embeddings'
+
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    report_id_fk = db.Column(
+        db.BigInteger,
+        db.ForeignKey('reports.id', ondelete='CASCADE'),
+        nullable=False,
+        index=True,
+    )
+    dataset_id = db.Column(db.String(200), nullable=False, index=True)
+    item_type = db.Column(db.String(50), nullable=False, index=True)
+    item_name = db.Column(db.String(255), nullable=False)
+    content_text = db.Column(db.Text, nullable=False)
+    embedding = db.Column(Vector(1024), nullable=False)
+    last_updated = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    report = db.relationship('Report', back_populates='schema_embeddings')
+
+
+@compiles(Vector, 'sqlite')
+def _compile_vector_sqlite(type_, compiler, **kw):
+    """Allow metadata creation in SQLite-based tests."""
+    return 'BLOB'
 
 
 class ChatSession(db.Model):

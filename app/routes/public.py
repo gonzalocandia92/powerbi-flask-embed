@@ -4,7 +4,7 @@ Public report viewing routes (no authentication required).
 import logging
 import time
 import requests as _requests_lib
-from flask import Blueprint, render_template, request, make_response, jsonify
+from flask import Blueprint, render_template, request, make_response, jsonify, url_for
 
 from app.models import PublicLink, Report, Workspace, Tenant
 from app.utils.decorators import retry_on_db_error
@@ -68,6 +68,7 @@ def view(custom_slug):
         config_name=report.name,
         is_public=True,
         allow_refresh=link.allow_refresh,
+        refresh_url=url_for('public.refresh', custom_slug=custom_slug),
         slug=custom_slug,
         chatbot_enabled=report.chatbot_enabled,
     ))

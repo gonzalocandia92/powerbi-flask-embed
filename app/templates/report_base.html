@@ -870,7 +870,7 @@
                     btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Actualizando...';
                     btn.style.background = '#f39c12';
 
-                    fetch(window.location.pathname + '/refresh', {
+                    fetch('{{ refresh_url | default("") }}', {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' }
                     })

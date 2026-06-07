@@ -1,9 +1,9 @@
 """Native Power BI helpers for the chat flow."""
-import os
 import json
 import logging
+import os
 from collections import defaultdict
-from typing import Dict, List
+from typing import Any, Dict, List
 
 import msal
 import requests
@@ -13,7 +13,7 @@ SCOPES = ["https://analysis.windows.net/powerbi/api/.default"]
 
 
 def _get_access_token(credentials: Dict[str, str]) -> str:
-    """Combina el tenant de la DB con credenciales de solo lectura del entorno."""
+    """Combine the DB tenant with read-only environment credentials."""
     tenant_id = credentials["TENANT_ID"]
 
     client_id = os.getenv("POWERBI_TOOL_CLIENT_ID") or os.getenv("CLIENT_ID_MCP")
@@ -40,10 +40,8 @@ def _get_access_token(credentials: Dict[str, str]) -> str:
     raise RuntimeError(f"Error MSAL: {result.get('error_description', result)}")
 
 
-def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, str]) -> List[str]:
-    """
-    Obtiene documentos planos de tablas y medidas del modelo semántico.
-    """
+def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Fetch structured table and measure chunks from a semantic model."""
     try:
         tables_res = execute_dax_query_local(dataset_id, "EVALUATE INFO.VIEW.TABLES()", credentials)
         if tables_res.startswith("Error"):
@@ -51,13 +49,13 @@ def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, 
         t_rows = json.loads(tables_res)
 
         table_descriptions = {}
-        for t in t_rows:
-            t_name = t.get("[Name]")
-            t_description = t.get("[Description]")
+        for table_row in t_rows:
+            table_name = table_row.get("[Name]")
+            table_description = table_row.get("[Description]")
 
-            if not t_name or t_name.startswith("DateTable") or t_name.startswith("LocalDate"):
+            if not table_name or table_name.startswith("DateTable") or table_name.startswith("LocalDate"):
                 continue
-            table_descriptions[t_name] = t_description or ""
+            table_descriptions[table_name] = table_description or ""
 
         columns_res = execute_dax_query_local(dataset_id, "EVALUATE INFO.VIEW.COLUMNS()", credentials)
         if columns_res.startswith("Error"):
@@ -65,50 +63,64 @@ def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, 
         c_rows = json.loads(columns_res)
 
         tables_dict = defaultdict(list)
-        for c in c_rows:
-            t_name = c.get("[Table]")
-            c_name = c.get("[Name]")
-            c_type = c.get("[DataType]")
+        for column_row in c_rows:
+            table_name = column_row.get("[Table]")
+            column_name = column_row.get("[Name]")
+            column_type = column_row.get("[DataType]")
 
-            if not t_name or t_name.startswith("DateTable") or t_name.startswith("LocalDate"):
+            if not table_name or table_name.startswith("DateTable") or table_name.startswith("LocalDate"):
                 continue
-            if c_name and c_name.startswith("RowNumber-"):
+            if column_name and column_name.startswith("RowNumber-"):
                 continue
 
-            tables_dict[t_name].append(f"{c_name} ({c_type})")
+            tables_dict[table_name].append(f"{column_name} ({column_type})")
 
         measures_res = execute_dax_query_local(dataset_id, "EVALUATE INFO.VIEW.MEASURES()", credentials)
         if measures_res.startswith("Error"):
             raise RuntimeError(measures_res)
         m_rows = json.loads(measures_res)
 
-        documentos: List[str] = []
+        documents: List[Dict[str, Any]] = []
         for table_name, columns in tables_dict.items():
-            descripcion = table_descriptions.get(table_name, "")
-            columnas = ", ".join(columns)
-            documentos.append(f"Tabla: {table_name}. Descripción: {descripcion}. Columnas: {columnas}")
+            description = table_descriptions.get(table_name, "")
+            columns_text = ", ".join(columns)
+            documents.append(
+                {
+                    "item_type": "table",
+                    "item_name": table_name,
+                    "content_text": f"Tabla: {table_name}. Descripcion: {description}. Columnas: {columns_text}",
+                    "description": description,
+                    "columns": list(columns),
+                }
+            )
 
-        for m in m_rows:
-            name = m.get("[Name]")
-            descr = m.get("[Description]")
-
+        for measure_row in m_rows:
+            name = measure_row.get("[Name]")
+            description = measure_row.get("[Description]")
             if not name:
                 continue
 
-            documentos.append(f"Medida: {name}. Descripcion: {descr or ''}.")
+            documents.append(
+                {
+                    "item_type": "measure",
+                    "item_name": name,
+                    "content_text": f"Medida: {name}. Descripcion: {description or ''}.",
+                    "description": description or "",
+                }
+            )
 
-        return documentos
-    except Exception as e:
+        return documents
+    except Exception as exc:
         LOG.exception("Error obteniendo el esquema del dataset")
         raise RuntimeError(
-            f"Error obteniendo el esquema: {str(e)}\nIntenta explorar los datos usando consultas DAX básicas."
-        ) from e
+            f"Error obteniendo el esquema: {exc}\nIntenta explorar los datos usando consultas DAX basicas."
+        ) from exc
 
 
 def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[str, str]) -> str:
-    """Ejecuta DAX directamente contra la API de Power BI."""
+    """Execute DAX directly against the Power BI API."""
     if not dax_query or not str(dax_query).strip():
-        return "Error: dax_query vacío"
+        return "Error: dax_query vacio"
 
     try:
         token = _get_access_token(credentials)
@@ -126,7 +138,7 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
 
         if response.status_code == 404:
             return (
-                f"Error: No se encontró el Dataset ID '{dataset_id}'. "
+                f"Error: No se encontro el Dataset ID '{dataset_id}'. "
                 "Verifica que exista y que el Service Principal tenga acceso."
             )
 
@@ -141,4 +153,4 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
         return json.dumps(rows, ensure_ascii=False)
     except Exception as exc:
         LOG.exception("Error ejecutando DAX localmente")
-        return f"Error técnico ejecutando DAX: {str(exc)}"
+        return f"Error tecnico ejecutando DAX: {str(exc)}"

@@ -12,15 +12,15 @@ import json
 import logging
 import os
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, cast
 from zoneinfo import ZoneInfo
 
-from .powerbi_tools import execute_dax_query_local, get_tables_and_measures_description
-from .schema_rerank import build_schema_context_json
+from app.models import SchemaEmbedding
+
+from .powerbi_tools import execute_dax_query_local
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
@@ -31,8 +31,6 @@ DEFAULT_MAX_TOOL_ROUNDS = 6
 DEFAULT_DEBUG_ENABLED = True
 DEFAULT_PROMPT_CACHING_ENABLED = True
 DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS = 20
-DEFAULT_SCHEMA_CACHE_TTL_SECONDS = 3600
-DEFAULT_SCHEMA_CACHE_MAX_ENTRIES = 100
 
 DATE_TABLE_GUIDANCE = (
     '"Date": ["Date (Date)", "Anio (Integer)", "Mes (Integer)", "Day (Integer)", '
@@ -54,8 +52,6 @@ Usa 'Moneda'[Moneda Campos] = "'Medidas'[Ventas USD]" SOLO si el usuario pide ex
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEBUG_FILE_LOCK = threading.RLock()
 _DEBUG_FILE_DEFAULT = _PROJECT_ROOT / "agent_core_debug.txt"
-_SCHEMA_CACHE_LOCK = threading.RLock()
-_SCHEMA_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _parse_bool(value: Any, default: bool = False) -> bool:
@@ -162,90 +158,17 @@ def _debug_enabled() -> bool:
     return _parse_bool(os.getenv("CHAT_DEBUG_ENABLED"), default=DEFAULT_DEBUG_ENABLED)
 
 
-def _parse_int_env(name: str, default: int, minimum: int = 0) -> int:
-    raw_value = os.getenv(name, str(default))
+def _get_voyage_client():
+    api_key = os.getenv("VOYAGE_API_KEY")
+    if not api_key:
+        raise RuntimeError("VOYAGE_API_KEY is required")
+
     try:
-        return max(minimum, int(str(raw_value).strip()))
-    except Exception:
-        return default
+        import voyageai
+    except ImportError as exc:  # pragma: no cover - dependency missing in test env
+        raise RuntimeError("The 'voyageai' package is required to retrieve schema context.") from exc
 
-
-def _get_schema_cache_ttl_seconds() -> int:
-    return _parse_int_env(
-        "CHAT_SCHEMA_CACHE_TTL_SECONDS",
-        DEFAULT_SCHEMA_CACHE_TTL_SECONDS,
-        minimum=0,
-    )
-
-
-def _get_schema_cache_max_entries() -> int:
-    return _parse_int_env(
-        "CHAT_SCHEMA_CACHE_MAX_ENTRIES",
-        DEFAULT_SCHEMA_CACHE_MAX_ENTRIES,
-        minimum=1,
-    )
-
-
-def _build_schema_cache_key(dataset_id: str, powerbi_credentials: Dict[str, Any]) -> str:
-    tenant_id = str(powerbi_credentials.get("TENANT_ID") or "").strip()
-    dataset_key = str(dataset_id).strip()
-    if tenant_id:
-        return f"{tenant_id}:{dataset_key}"
-    return dataset_key
-
-
-def _get_schema_cache_entry(cache_key: str) -> Optional[Dict[str, Any]]:
-    with _SCHEMA_CACHE_LOCK:
-        entry = _SCHEMA_CACHE.get(cache_key)
-        if entry is None:
-            return None
-        return dict(entry)
-
-
-def _get_cached_schema_items(cache_key: str, ttl_seconds: int) -> Optional[List[str]]:
-    if ttl_seconds <= 0:
-        return None
-
-    entry = _get_schema_cache_entry(cache_key)
-    if entry is None:
-        return None
-
-    fetched_at = float(entry.get("fetched_at", 0))
-    if (time.time() - fetched_at) > ttl_seconds:
-        return None
-
-    schema_items = entry.get("schema_items") or []
-    return [str(item) for item in schema_items]
-
-
-def _get_stale_schema_items(cache_key: str) -> Optional[List[str]]:
-    entry = _get_schema_cache_entry(cache_key)
-    if entry is None:
-        return None
-    schema_items = entry.get("schema_items") or []
-    if not schema_items:
-        return None
-    return [str(item) for item in schema_items]
-
-
-def _store_schema_cache_entry(cache_key: str, schema_items: List[str]) -> None:
-    now = time.time()
-    normalized_items = [str(item) for item in schema_items if str(item).strip()]
-    max_entries = _get_schema_cache_max_entries()
-
-    with _SCHEMA_CACHE_LOCK:
-        _SCHEMA_CACHE[cache_key] = {
-            "fetched_at": now,
-            "schema_items": normalized_items,
-        }
-        if len(_SCHEMA_CACHE) <= max_entries:
-            return
-
-        oldest_key = min(
-            _SCHEMA_CACHE,
-            key=lambda key: float(_SCHEMA_CACHE[key].get("fetched_at", 0)),
-        )
-        _SCHEMA_CACHE.pop(oldest_key, None)
+    return voyageai.Client(api_key=api_key)
 
 async def _rewrite_query_for_reranker(
     *,
@@ -297,69 +220,64 @@ async def _fetch_schema_context(
     debug_enabled: bool,
     required: bool,
 ) -> str:
-    cache_key = _build_schema_cache_key(dataset_id, powerbi_credentials)
-    cache_ttl_seconds = _get_schema_cache_ttl_seconds()
-
     _debug_print(
         "tool:get_schema_context:request",
         {
             "dataset_id": dataset_id,
             "question": question,
-            "cache_key": cache_key,
-            "cache_ttl_seconds": cache_ttl_seconds,
         },
         enabled=debug_enabled,
     )
     try:
-        esquema_dinamico = _get_cached_schema_items(cache_key, cache_ttl_seconds)
-        if esquema_dinamico is not None:
-            _debug_print(
-                "tool:get_schema_context:cache_hit",
-                {"cache_key": cache_key, "items": len(esquema_dinamico)},
-                enabled=debug_enabled,
-            )
-        else:
-            _debug_print(
-                "tool:get_schema_context:cache_miss",
-                {"cache_key": cache_key},
-                enabled=debug_enabled,
-            )
-            try:
-                esquema_dinamico = await asyncio.to_thread(
-                    get_tables_and_measures_description,
-                    dataset_id,
-                    powerbi_credentials,
-                )
-                _store_schema_cache_entry(cache_key, esquema_dinamico)
-                _debug_print(
-                    "tool:get_schema_context:cache_store",
-                    {"cache_key": cache_key, "items": len(esquema_dinamico)},
-                    enabled=debug_enabled,
-                )
-            except Exception as exc:
-                esquema_dinamico = _get_stale_schema_items(cache_key)
-                if esquema_dinamico is None:
-                    raise
-                logging.warning(
-                    "Failed to refresh schema for %s; using stale cached schema: %s",
-                    cache_key,
-                    exc,
-                )
-                _debug_print(
-                    "tool:get_schema_context:stale_cache_fallback",
-                    {"cache_key": cache_key, "items": len(esquema_dinamico), "error": repr(exc)},
-                    enabled=debug_enabled,
-                )
-
-        fetched_schema_text = await asyncio.wait_for(
-            asyncio.to_thread(build_schema_context_json, question, esquema_dinamico, 3, 5),
+        voyage_client = _get_voyage_client()
+        query_vector = await asyncio.wait_for(
+            asyncio.to_thread(
+                lambda: voyage_client.embed(
+                    [question],
+                    model="voyage-4",
+                    input_type="query",
+                ).embeddings[0]
+            ),
             timeout=max(1, int(settings.schema_context_timeout_seconds)),
         )
+        query_vector_list = list(query_vector)
+        _debug_print(
+            "tool:get_schema_context:query_vector_ready",
+            {"dataset_id": dataset_id, "dimensions": len(query_vector_list)},
+            enabled=debug_enabled,
+        )
+
+        table_results = (
+            SchemaEmbedding.query
+            .filter(
+                SchemaEmbedding.dataset_id == dataset_id,
+                SchemaEmbedding.item_type == "table",
+            )
+            .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
+            .limit(3)
+            .all()
+        )
+        measure_results = (
+            SchemaEmbedding.query
+            .filter(
+                SchemaEmbedding.dataset_id == dataset_id,
+                SchemaEmbedding.item_type == "measure",
+            )
+            .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
+            .limit(5)
+            .all()
+        )
+
+        payload = {
+            "tables": [row.content_text for row in table_results],
+            "measures": [row.content_text for row in measure_results],
+        }
+        fetched_schema_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
         _debug_print("tool:get_schema_context:response", fetched_schema_text, enabled=debug_enabled)
         return fetched_schema_text.strip()
     except asyncio.TimeoutError:
         logging.warning(
-            "Timed out fetching reranked schema context locally after %s seconds",
+            "Timed out fetching vector schema context after %s seconds",
             settings.schema_context_timeout_seconds,
         )
         _debug_print(
@@ -369,7 +287,7 @@ async def _fetch_schema_context(
         )
         return ""
     except Exception as exc:
-        logging.exception("Failed to fetch reranked schema context locally")
+        logging.exception("Failed to fetch vector schema context")
         _debug_print("tool:get_schema_context:error", repr(exc), enabled=debug_enabled)
         return ""
 
@@ -623,11 +541,14 @@ class ToolRegistry:
             if not dataset_id:
                 raise RuntimeError("dataset_id is required to fetch schema context")
 
-            optimized_question = await self.rewrite_query_for_reranker(
-                user_message=str(question),
-                settings=settings,
-                debug_enabled=debug_enabled,
-            )
+            question_is_rewritten = bool(tool_input.get("question_is_rewritten"))
+            optimized_question = str(question)
+            if not question_is_rewritten:
+                optimized_question = await self.rewrite_query_for_reranker(
+                    user_message=str(question),
+                    settings=settings,
+                    debug_enabled=debug_enabled,
+                )
             return await _fetch_schema_context(
                 dataset_id=dataset_id,
                 powerbi_credentials=powerbi_credentials,
@@ -767,21 +688,16 @@ class AgentOrchestrator:
             debug_enabled=settings_debug_enabled,
         )
 
-        search_query = user_message
         if not schema_text:
-            search_query = await self.tool_registry.rewrite_query_for_reranker(
-                user_message=user_message,
-                settings=self.settings,
-                debug_enabled=settings_debug_enabled,
+            # We call the tool directly to ensure only one rewrite happens.
+            # execute_tool will handle the rewrite if question_is_rewritten is not passed.
+            fetched_schema_text = await self.tool_registry.execute_tool(
+                "get_schema_context",
+                {"question": user_message}, # No question_is_rewritten passed -> execute_tool will rewrite it
+                context,
             )
-
-        fetched_schema_text = await self.tool_registry.execute_tool(
-            "get_schema_context",
-            {"question": search_query},
-            context,
-        )
-        if fetched_schema_text:
-            schema_text = fetched_schema_text
+            if fetched_schema_text:
+                schema_text = fetched_schema_text
 
         system_prompt = self.prompt_manager.get_system_prompt(schema_text)
         tools: Any = self.tool_registry.get_all_tools()
