@@ -97,6 +97,12 @@
                   <div class="form-text">Muestra el botón de KLARA en los links públicos de este reporte</div>
                 </div>
 
+                <div class="form-check mt-2">
+                  {{ form.show_dax_query(class="form-check-input") }}
+                  {{ form.show_dax_query.label(class="form-check-label") }}
+                  <div class="form-text">Muestra la consulta DAX ejecutada en cada respuesta del chat (desactivado por defecto para clientes)</div>
+                </div>
+
                 <hr class="my-3">
 
                 <div class="form-check mb-3">

@@ -272,6 +272,22 @@
               {% endif %}
             </form>
 
+            <!-- DAX query visibility toggle -->
+            <form method="POST"
+                  action="{{ url_for('reports.toggle_show_dax', report_id=report.id) }}">
+              {% if report.show_dax_query %}
+              <button type="submit" class="btn btn-warning w-100"
+                      title="Las consultas DAX son visibles en el chat. Click para ocultarlas.">
+                <i class="bi bi-code-square me-2"></i>DAX Visible
+              </button>
+              {% else %}
+              <button type="submit" class="btn btn-outline-secondary w-100"
+                      title="Las consultas DAX están ocultas en el chat. Click para mostrarlas.">
+                <i class="bi bi-code-slash me-2"></i>DAX Oculto
+              </button>
+              {% endif %}
+            </form>
+
             <hr>
 
             <button type="button"

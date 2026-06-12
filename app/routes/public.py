@@ -71,6 +71,7 @@ def view(custom_slug):
         refresh_url=url_for('public.refresh', custom_slug=custom_slug),
         slug=custom_slug,
         chatbot_enabled=report.chatbot_enabled,
+        show_dax_query=report.show_dax_query,
     ))
     
     if not visitor_id_is_valid:

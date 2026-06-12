@@ -178,6 +178,7 @@ def edit(report_id):
         report.es_publico = es_publico
         report.es_privado = es_privado
         report.chatbot_enabled = form.chatbot_enabled.data
+        report.show_dax_query = form.show_dax_query.data
         report.filter_enabled = form.filter_enabled.data
         report.filter_table = form.filter_table.data or None
         report.filter_column = form.filter_column.data or None
@@ -415,6 +416,19 @@ def toggle_chatbot(report_id):
         _queue_embeddings_if_available(report)
     estado = "habilitado" if report.chatbot_enabled else "deshabilitado"
     flash(f"Chatbot KLARA {estado} para el reporte «{report.name}»", "success")
+    return redirect(url_for('reports.detail', report_id=report_id))
+
+
+@bp.route('/<int:report_id>/toggle-show-dax', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def toggle_show_dax(report_id):
+    """Toggle DAX query visibility in the chat for a report."""
+    report = Report.query.get_or_404(report_id)
+    report.show_dax_query = not report.show_dax_query
+    db.session.commit()
+    estado = "activada" if report.show_dax_query else "desactivada"
+    flash(f"Visibilidad de consultas DAX {estado} para el reporte «{report.name}»", "success")
     return redirect(url_for('reports.detail', report_id=report_id))
 
 

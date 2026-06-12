@@ -167,6 +167,9 @@ class Report(db.Model):
     # Chatbot visibility — disable to hide KLARA for this report's public links
     chatbot_enabled = db.Column(db.Boolean, default=False, nullable=False)
 
+    # Whether to show DAX queries in the chat (off by default for clients)
+    show_dax_query = db.Column(db.Boolean, default=False, nullable=False)
+
     # Filter configuration for private API access
     filter_enabled = db.Column(db.Boolean, default=False, nullable=False)
     filter_table = db.Column(db.String(200), nullable=True)

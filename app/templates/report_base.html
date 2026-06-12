@@ -492,6 +492,32 @@
         .klara-typing span:nth-child(2) { animation-delay: .16s; }
         .klara-typing span:nth-child(3) { animation-delay: .32s; }
 
+        /* Thinking text (progressive loading messages) */
+        .klara-thinking-text {
+            align-self: flex-start; max-width: 84%;
+            padding: 9px 14px; border-radius: 16px; border-bottom-left-radius: 5px;
+            background: white; border: 1px solid var(--sudata-border);
+            font-size: 13px; color: var(--sudata-muted); font-style: italic;
+            animation: klaraMsgIn .22s ease;
+        }
+
+        /* Timestamp below each bubble */
+        .klara-msg-time {
+            display: block; font-size: 10px; color: var(--sudata-muted);
+            margin-top: 3px; line-height: 1;
+        }
+        .klara-msg.user .klara-msg-time { text-align: right; }
+        .klara-msg.bot  .klara-msg-time { text-align: left; }
+
+        /* Date separator between days */
+        .klara-date-sep {
+            text-align: center; font-size: 11px; color: var(--sudata-muted);
+            margin: 10px 4px; display: flex; align-items: center; gap: 8px;
+        }
+        .klara-date-sep::before, .klara-date-sep::after {
+            content: ''; flex: 1; height: 1px; background: var(--sudata-border);
+        }
+
         /* Sugerencias */
         .klara-sidebar-suggestions {
             padding: 10px; display: flex; gap: 6px; overflow-x: auto;
@@ -1019,7 +1045,10 @@
     </div>
 
     <!-- Slug del reporte activo — usado por el chatbot para dar contexto -->
-    <script>var KLARA_SLUG = "{{ slug | default('') }}";</script>
+    <script>
+        var KLARA_SLUG = "{{ slug | default('') }}";
+        var KLARA_SHOW_DAX = {{ show_dax_query | default(false) | tojson }};
+    </script>
 
     <!-- ── KLARA SIDEBAR JS ── -->
     <script>
@@ -1036,6 +1065,37 @@
             var counter  = document.getElementById("klara-sidebar-counter");
             var suggestions = document.querySelectorAll(".klara-sidebar-suggestion");
             var isExpanded = false, isTyping = false, klaraSessionId = null;
+            var lastMsgDate = null, _thinkingEl = null, _thinkingTimers = [];
+
+            /* ── Date/time helpers ── */
+            function _fmt2(n) { return String(n).padStart(2, '0'); }
+
+            function formatTime(date) {
+                return _fmt2(date.getHours()) + ':' + _fmt2(date.getMinutes());
+            }
+
+            function formatDateSep(date) {
+                var now = new Date();
+                var diffDays = Math.floor((now - date) / 86400000);
+                if (diffDays < 7) {
+                    var days = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+                    return days[date.getDay()];
+                }
+                return _fmt2(date.getDate()) + '/' + _fmt2(date.getMonth() + 1) + '/' + date.getFullYear();
+            }
+
+            function isSameDay(d1, d2) {
+                return d1.getFullYear() === d2.getFullYear() &&
+                       d1.getMonth()    === d2.getMonth()    &&
+                       d1.getDate()     === d2.getDate();
+            }
+
+            function insertDateSep(date) {
+                var sep = document.createElement('div');
+                sep.className = 'klara-date-sep';
+                sep.textContent = formatDateSep(date);
+                messages.appendChild(sep);
+            }
 
             function resizeReport() {
                 setTimeout(function() {
@@ -1078,35 +1138,63 @@
             }
 
             function addMessage(type, text, sqlUsado) {
+                var now = new Date();
+                if (!lastMsgDate || !isSameDay(lastMsgDate, now)) {
+                    insertDateSep(now);
+                }
+                lastMsgDate = now;
+
                 var wrapper = document.createElement("div");
                 var bubble  = document.createElement("div");
+                var time    = document.createElement("span");
                 wrapper.className = "klara-msg " + type;
                 bubble.className  = "klara-bubble";
                 bubble.innerHTML  = sanitize(text).replace(/\n/g, "<br>");
-                if (sqlUsado) {
+                if (sqlUsado && KLARA_SHOW_DAX) {
                     var dbg = document.createElement("div");
                     dbg.className = "klara-sql-debug";
                     dbg.textContent = "DAX ejecutado: " + sqlUsado;
                     bubble.appendChild(dbg);
                 }
+                time.className = "klara-msg-time";
+                time.textContent = formatTime(now);
                 wrapper.appendChild(bubble);
+                wrapper.appendChild(time);
                 messages.appendChild(wrapper);
                 messages.scrollTop = messages.scrollHeight;
             }
 
-            function showTyping() {
+            var _thinkingSteps = [
+                { delay: 3000,  text: "Estoy analizando los datos..." },
+                { delay: 8000,  text: "Ahora estoy preparando la respuesta..." },
+                { delay: 16000, text: "Ya casi está..." }
+            ];
+
+            function showThinking() {
                 isTyping = true; sendBtn.disabled = true;
-                var t = document.createElement("div");
-                t.id = "klara-sidebar-typing"; t.className = "klara-typing";
-                t.innerHTML = "<span></span><span></span><span></span>";
-                messages.appendChild(t);
+                var el = document.createElement("div");
+                el.id = "klara-sidebar-typing"; el.className = "klara-typing";
+                el.innerHTML = "<span></span><span></span><span></span>";
+                messages.appendChild(el);
                 messages.scrollTop = messages.scrollHeight;
+                _thinkingEl = el;
+
+                _thinkingSteps.forEach(function(step) {
+                    var t = setTimeout(function() {
+                        if (!_thinkingEl) return;
+                        _thinkingEl.className = "klara-thinking-text";
+                        _thinkingEl.textContent = step.text;
+                        messages.scrollTop = messages.scrollHeight;
+                    }, step.delay);
+                    _thinkingTimers.push(t);
+                });
             }
 
-            function hideTyping() {
+            function hideThinking() {
                 isTyping = false; sendBtn.disabled = false;
-                var t = document.getElementById("klara-sidebar-typing");
-                if (t) t.remove();
+                _thinkingTimers.forEach(clearTimeout);
+                _thinkingTimers = [];
+                if (_thinkingEl) { _thinkingEl.remove(); _thinkingEl = null; }
             }
 
             async function sendQuestion(pregunta) {
@@ -1115,7 +1203,7 @@
                 addMessage("user", pregunta);
                 input.value = ""; input.style.height = "auto";
                 counter.textContent = "0/500";
-                showTyping();
+                showThinking();
                 try {
                     var resp = await fetch("/chat", {
                         method: "POST",
@@ -1127,7 +1215,7 @@
                         })
                     });
                     var data = await resp.json();
-                    hideTyping();
+                    hideThinking();
                     if (!resp.ok) {
                         addMessage("bot", data.error || "Ocurrió un error al procesar el chat.");
                         return;
@@ -1135,7 +1223,7 @@
                     if (data.conversation_id) klaraSessionId = data.conversation_id;
                     addMessage("bot", data.answer || "Sin respuesta.", data.dax_query || null);
                 } catch (e) {
-                    hideTyping();
+                    hideThinking();
                     addMessage("bot", "No pude conectar con el servidor.");
                 }
             }
