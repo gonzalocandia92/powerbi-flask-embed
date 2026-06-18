@@ -8,8 +8,9 @@ __pycache__/
 .env
 
 # Virtual environment folder (aunque usas Docker, por las dudas)
+.venv/
+.env/
 venv/
-env/
 
 # Flask instance folder
 instance/
@@ -32,3 +33,10 @@ instance/
 *.sqlite
 *.sqlite3=2.7.0
 .env
+
+#GenAi
+.claude
+
+.idea/
+
+.github/

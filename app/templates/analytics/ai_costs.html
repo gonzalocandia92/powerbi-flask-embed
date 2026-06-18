@@ -1,0 +1,341 @@
+{% extends "layout.html" %}
+
+{% block title %}Consumo AI Dashboard - Sudata PBI{% endblock %}
+
+{% block styles %}
+<style>
+  .ai-overview {
+    --blue: #1668e8;
+    --green: #178b54;
+    --cyan: #17b1c5;
+    --yellow: #ffb20a;
+    color: #18243a;
+  }
+
+  .ai-overview .page-title {
+    color: #18243a;
+    font-size: clamp(2rem, 4vw, 2.7rem);
+    font-weight: 850;
+    letter-spacing: -0.04em;
+  }
+
+  .overview-filter {
+    background: var(--primary-gradient);
+    border-radius: 14px;
+    box-shadow: 0 10px 26px rgba(102, 126, 234, 0.2);
+  }
+
+  .overview-filter .card-body {
+    background: transparent;
+    padding: 1.35rem;
+  }
+
+  .overview-filter .form-label {
+    color: white;
+    font-size: 0.78rem;
+  }
+
+  .overview-filter .form-control,
+  .overview-filter .form-select {
+    min-height: 46px;
+    color: white;
+    background-color: rgba(255,255,255,0.16);
+    border: 1px solid rgba(255,255,255,0.3);
+  }
+
+  .overview-filter .form-control::placeholder {
+    color: rgba(255,255,255,0.78);
+  }
+
+  .overview-filter option {
+    color: #18243a;
+  }
+
+  .overview-metric {
+    min-height: 140px;
+    border-radius: 12px;
+    color: white;
+  }
+
+  .overview-metric .card-body {
+    background: transparent;
+    padding: 1.45rem;
+  }
+
+  .overview-blue { background: linear-gradient(135deg, #0861e7, #2477ed); }
+  .overview-green { background: linear-gradient(135deg, #14804c, #21965d); }
+  .overview-cyan { background: linear-gradient(135deg, #14a5bb, #22bbcb); }
+  .overview-yellow { background: linear-gradient(135deg, #f3a600, #ffbe19); }
+
+  .overview-label {
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.06em;
+    opacity: 0.86;
+    text-transform: uppercase;
+  }
+
+  .overview-value {
+    font-size: 2rem;
+    font-weight: 850;
+    margin-top: 0.45rem;
+    line-height: 1.1;
+  }
+
+  .overview-panel {
+    border: 1px solid #e4e9f0;
+    border-radius: 14px;
+    box-shadow: 0 8px 22px rgba(25, 38, 66, 0.08);
+  }
+
+  .overview-panel .card-header {
+    background: var(--primary-gradient);
+    padding: 1.1rem 1.4rem;
+  }
+
+  .overview-panel .card-header h5,
+  .overview-panel .card-header i {
+    color: white !important;
+  }
+
+  .chart-box {
+    height: 310px;
+    position: relative;
+  }
+
+  .scope-table thead th {
+    padding: 0.9rem;
+    font-size: 0.72rem;
+  }
+
+  .scope-table tbody td {
+    padding: 0.95rem 0.9rem;
+    font-size: 0.86rem;
+  }
+
+  .scope-progress {
+    width: 145px;
+    height: 9px;
+    background: #e8edf4;
+    border-radius: 999px;
+    overflow: hidden;
+  }
+
+  .scope-progress-bar {
+    height: 100%;
+    border-radius: inherit;
+  }
+
+  .scope-action {
+    width: 34px;
+    height: 34px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid #d6dfef;
+    color: #1769e8;
+    background: white;
+  }
+
+  @media (max-width: 767px) {
+    .chart-box { height: 260px; }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="container-fluid ai-overview">
+  <div class="mb-4">
+    <div>
+      <h1 class="page-title mb-1">Consumo AI Dashboard</h1>
+      <p class="text-muted mb-0">Seguimiento de gasto, tokens, limites y actividad por empresa.</p>
+    </div>
+  </div>
+
+  <div class="card overview-filter mb-4">
+    <div class="card-body">
+      <form method="get" action="{{ url_for('analytics.ai_costs') }}">
+        <div class="row g-3 align-items-end">
+          <div class="col-lg-3 col-md-6">
+            <label class="form-label" for="company">Empresa</label>
+            <input class="form-control" id="company" name="company" value="{{ company_search }}" placeholder="Buscar empresa...">
+          </div>
+          <div class="col-lg-2 col-md-6">
+            <label class="form-label" for="period">Periodo</label>
+            <select class="form-select" id="period" name="period">
+              <option value="7" {% if period == '7' %}selected{% endif %}>Ultimos 7 dias</option>
+              <option value="30" {% if period == '30' %}selected{% endif %}>Ultimos 30 dias</option>
+              <option value="90" {% if period == '90' %}selected{% endif %}>Ultimos 90 dias</option>
+            </select>
+          </div>
+          <div class="col-lg-2 col-md-6">
+            <label class="form-label" for="status">Estado</label>
+            <select class="form-select" id="status" name="status">
+              <option value="">Todos</option>
+              <option value="normal" {% if status_filter == 'normal' %}selected{% endif %}>Normal</option>
+              <option value="cerca_del_limite" {% if status_filter == 'cerca_del_limite' %}selected{% endif %}>Cerca del limite</option>
+              <option value="excedido" {% if status_filter == 'excedido' %}selected{% endif %}>Excedido</option>
+              <option value="global" {% if status_filter == 'global' %}selected{% endif %}>Global</option>
+            </select>
+          </div>
+          <div class="col-lg-3 col-md-6">
+            <label class="form-label" for="provider">Proveedor</label>
+            <select class="form-select" id="provider" name="provider">
+              <option value="">Todos</option>
+              {% for item in providers %}
+              <option value="{{ item }}" {% if provider == item %}selected{% endif %}>{{ item|title }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-lg-2">
+            <button class="btn btn-light w-100" type="submit">
+              <i class="bi bi-search me-1"></i>Aplicar
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-xl-3 col-md-6">
+      <div class="card overview-metric overview-blue h-100"><div class="card-body">
+        <div class="overview-label">Costo total</div>
+        <div class="overview-value">USD {{ '%.4f'|format(spent_usd) }}</div>
+        <div class="small mt-2">Ultimos {{ period }} dias</div>
+      </div></div>
+    </div>
+    <div class="col-xl-3 col-md-6">
+      <div class="card overview-metric overview-green h-100"><div class="card-body">
+        <div class="overview-label">Tokens totales</div>
+        <div class="overview-value">{{ '{:,}'.format(total_tokens) }}</div>
+        <div class="small mt-2">Entrada + salida</div>
+      </div></div>
+    </div>
+    <div class="col-xl-3 col-md-6">
+      <div class="card overview-metric overview-cyan h-100"><div class="card-body">
+        <div class="overview-label">Empresas activas</div>
+        <div class="overview-value">{{ active_companies }}</div>
+        <div class="small mt-2">Con consumo AI</div>
+      </div></div>
+    </div>
+    <div class="col-xl-3 col-md-6">
+      <div class="card overview-metric overview-yellow h-100"><div class="card-body">
+        <div class="overview-label">Eventos AI</div>
+        <div class="overview-value">{{ '{:,}'.format(total_events) }}</div>
+        <div class="small mt-2">Total eventos</div>
+      </div></div>
+    </div>
+  </div>
+
+  <div class="row g-4 mb-4">
+    <div class="col-lg-7">
+      <div class="card overview-panel h-100">
+        <div class="card-header"><h5 class="mb-0"><i class="bi bi-graph-up-arrow me-2"></i>Tendencia diaria de costo</h5></div>
+        <div class="card-body"><div class="chart-box"><canvas id="dailyCostChart"></canvas></div></div>
+      </div>
+    </div>
+    <div class="col-lg-5">
+      <div class="card overview-panel h-100">
+        <div class="card-header"><h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Consumo por tipo de evento</h5></div>
+        <div class="card-body"><div class="chart-box"><canvas id="eventTypeChart"></canvas></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card overview-panel">
+    <div class="card-header"><h5 class="mb-0"><i class="bi bi-buildings me-2"></i>Consumo por empresa</h5></div>
+    <div class="table-responsive">
+      <table class="table scope-table align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Empresa</th>
+            <th class="text-end">Limite USD</th>
+            <th class="text-end">Consumo USD</th>
+            <th class="text-end">Disponible USD</th>
+            <th>% usado</th>
+            <th>Ultima actividad</th>
+            <th>Estado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in scope_rows %}
+          {% set progress_color = '#ef4444' if row.usage_percent >= 100 else ('#f59e0b' if row.usage_percent >= 80 else ('#3b82f6' if row.scope == 'global' else '#22c55e')) %}
+          <tr>
+            <td class="fw-semibold">{{ row.label }}</td>
+            <td class="text-end">{{ '%.2f'|format(row.limit_usd) if row.limit_usd is not none else '--' }}</td>
+            <td class="text-end">{{ '%.4f'|format(row.cost_usd) }}</td>
+            <td class="text-end">{{ '%.4f'|format(row.remaining_usd) if row.remaining_usd is not none else '--' }}</td>
+            <td>
+              <div class="d-flex align-items-center gap-2">
+                <div class="scope-progress"><div class="scope-progress-bar" style="width: {{ [row.usage_percent, 100]|min }}%; background: {{ progress_color }}"></div></div>
+                <span>{{ '%.0f'|format(row.usage_percent) }}%</span>
+              </div>
+            </td>
+            <td>{{ row.last_activity.strftime('%d/%m/%Y %H:%M') if row.last_activity else '--' }}</td>
+            <td>
+              <span class="badge {% if row.status == 'Normal' %}bg-success-subtle text-success{% elif row.status == 'Cerca del limite' %}bg-warning-subtle text-warning{% elif row.status == 'Excedido' %}bg-danger-subtle text-danger{% elif row.status == 'Global' %}bg-primary-subtle text-primary{% else %}bg-secondary-subtle text-secondary{% endif %}">
+                {{ row.status }}
+              </span>
+            </td>
+            <td class="text-end">
+              <a class="btn scope-action" href="{{ url_for('analytics.ai_cost_detail', scope=row.scope) }}" title="Ver detalle">
+                <i class="bi bi-eye"></i>
+              </a>
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="8" class="text-center text-muted py-5">No hay resultados para los filtros seleccionados.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+  const dailyRows = {{ daily_rows | tojson }};
+  new Chart(document.getElementById('dailyCostChart'), {
+    type: 'line',
+    data: {
+      labels: dailyRows.map(row => row.date),
+      datasets: [{
+        data: dailyRows.map(row => row.cost_usd),
+        borderColor: '#2494e8',
+        backgroundColor: 'rgba(36, 148, 232, 0.15)',
+        fill: true,
+        tension: 0.4,
+        pointRadius: 2
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+
+  const eventRows = {{ event_rows | tojson }};
+  new Chart(document.getElementById('eventTypeChart'), {
+    type: 'doughnut',
+    data: {
+      labels: eventRows.map(row => row.event_type.replaceAll('_', ' ')),
+      datasets: [{
+        data: eventRows.map(row => row.cost_usd),
+        backgroundColor: ['#50a7d8', '#47cf83', '#8254cf', '#ff6767', '#f5b942']
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '58%',
+      plugins: { legend: { position: 'right' } }
+    }
+  });
+</script>
+{% endblock %}

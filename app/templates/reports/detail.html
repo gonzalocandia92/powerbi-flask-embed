@@ -105,6 +105,18 @@
               {% if report.es_privado %}
               <span class="badge bg-info fs-6"><i class="bi bi-check-circle me-1"></i>Habilitado</span>
               <p class="text-muted small mt-2">El reporte puede ser accedido por empresas autenticadas vía API</p>
+              <h6 class="mt-3">Filtrable:</h6>
+              {% if report.filter_enabled %}
+              <span class="badge bg-success fs-6"><i class="bi bi-funnel-fill me-1"></i>Sí</span>
+              <dl class="row mt-2 mb-0">
+                <dt class="col-sm-5 small">Tabla:</dt>
+                <dd class="col-sm-7"><code class="small">{{ report.filter_table or '-' }}</code></dd>
+                <dt class="col-sm-5 small">Columna:</dt>
+                <dd class="col-sm-7"><code class="small">{{ report.filter_column or '-' }}</code></dd>
+              </dl>
+              {% else %}
+              <span class="badge bg-secondary fs-6"><i class="bi bi-funnel me-1"></i>No</span>
+              {% endif %}
               {% else %}
               <span class="badge bg-secondary fs-6"><i class="bi bi-x-circle me-1"></i>Deshabilitado</span>
               {% endif %}
@@ -243,6 +255,38 @@
               <i class="bi bi-link-45deg me-2"></i>Crear Link Público
             </a>
             {% endif %}
+
+            <!-- Chatbot KLARA toggle -->
+            <form method="POST"
+                  action="{{ url_for('reports.toggle_chatbot', report_id=report.id) }}">
+              {% if report.chatbot_enabled %}
+              <button type="submit" class="btn btn-success w-100"
+                      title="El chatbot KLARA está habilitado para este reporte. Click para deshabilitarlo.">
+                <i class="bi bi-chat-dots-fill me-2"></i>KLARA Habilitada
+              </button>
+              {% else %}
+              <button type="submit" class="btn btn-outline-secondary w-100"
+                      title="El chatbot KLARA está deshabilitado. Click para habilitarlo.">
+                <i class="bi bi-chat-dots me-2"></i>KLARA Deshabilitada
+              </button>
+              {% endif %}
+            </form>
+
+            <!-- DAX query visibility toggle -->
+            <form method="POST"
+                  action="{{ url_for('reports.toggle_show_dax', report_id=report.id) }}">
+              {% if report.show_dax_query %}
+              <button type="submit" class="btn btn-warning w-100"
+                      title="Las consultas DAX son visibles en el chat. Click para ocultarlas.">
+                <i class="bi bi-code-square me-2"></i>DAX Visible
+              </button>
+              {% else %}
+              <button type="submit" class="btn btn-outline-secondary w-100"
+                      title="Las consultas DAX están ocultas en el chat. Click para mostrarlas.">
+                <i class="bi bi-code-slash me-2"></i>DAX Oculto
+              </button>
+              {% endif %}
+            </form>
 
             <hr>
 

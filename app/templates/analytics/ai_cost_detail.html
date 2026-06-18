@@ -1,0 +1,389 @@
+{% extends "layout.html" %}
+
+{% block title %}Costos de IA - Sudata PBI{% endblock %}
+
+{% block styles %}
+<style>
+  .costs-page {
+    --cost-blue: #1268ef;
+    --cost-green: #159f64;
+    --cost-cyan: #11b7cc;
+    --cost-yellow: #ffb800;
+  }
+
+  .costs-page .page-title {
+    font-size: clamp(1.75rem, 3vw, 2.45rem);
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    color: #172033;
+  }
+
+  .costs-page .breadcrumb {
+    font-size: 0.82rem;
+    font-weight: 600;
+  }
+
+  .cost-filter {
+    background: var(--primary-gradient);
+    border-radius: 14px;
+    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.2);
+    color: white;
+  }
+
+  .cost-filter .card-body {
+    background: transparent;
+    padding: 1.25rem;
+  }
+
+  .cost-filter .form-label {
+    color: white;
+    font-size: 0.78rem;
+    margin-bottom: 0.35rem;
+  }
+
+  .cost-filter .form-select {
+    min-height: 44px;
+    border: 1px solid rgba(255,255,255,0.28);
+    background-color: rgba(255,255,255,0.18);
+    color: white;
+  }
+
+  .cost-filter .form-select option {
+    color: #172033;
+  }
+
+  .metric-card {
+    min-height: 132px;
+    border-radius: 14px;
+    color: white;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .metric-card::after {
+    content: "";
+    position: absolute;
+    width: 120px;
+    height: 120px;
+    right: -42px;
+    top: -55px;
+    border-radius: 50%;
+    background: rgba(255,255,255,0.13);
+  }
+
+  .metric-card .card-body {
+    background: transparent;
+    padding: 1.25rem;
+    position: relative;
+    z-index: 1;
+  }
+
+  .metric-blue { background: linear-gradient(135deg, #075de6, #1479ff); }
+  .metric-green { background: linear-gradient(135deg, #128c59, #19ad72); }
+  .metric-cyan { background: linear-gradient(135deg, #0a9eb5, #16c4d9); }
+  .metric-yellow { background: linear-gradient(135deg, #f2a900, #ffc51b); }
+
+  .metric-label {
+    font-size: 0.75rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    opacity: 0.9;
+    text-transform: uppercase;
+  }
+
+  .metric-value {
+    font-size: 1.7rem;
+    font-weight: 800;
+    line-height: 1.2;
+    margin: 0.4rem 0 0.15rem;
+  }
+
+  .metric-foot {
+    font-size: 0.75rem;
+    opacity: 0.88;
+  }
+
+  .cost-panel {
+    border-radius: 14px;
+    border: 1px solid #e7ebf2;
+    box-shadow: 0 3px 12px rgba(20, 31, 54, 0.06);
+  }
+
+  .cost-panel .card-header {
+    background: white;
+    color: #172033 !important;
+    padding: 1rem 1.2rem;
+    border-bottom: 1px solid #edf0f5;
+  }
+
+  .cost-panel .card-header h5,
+  .cost-panel .card-header i {
+    color: #172033 !important;
+  }
+
+  .cost-panel .card-body {
+    padding: 1.2rem;
+  }
+
+  .usage-progress {
+    height: 14px;
+    border-radius: 999px;
+    background: #edf0f5;
+    overflow: hidden;
+  }
+
+  .usage-progress .progress-bar {
+    background: linear-gradient(90deg, #18b968 0%, #86ca22 65%, #f1c40f 100%);
+    border-radius: 999px;
+  }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: currentColor;
+    margin-left: 0.3rem;
+  }
+
+  .costs-table thead th {
+    padding: 0.8rem 0.9rem;
+    font-size: 0.7rem;
+  }
+
+  .costs-table tbody td {
+    padding: 0.85rem 0.9rem;
+    font-size: 0.85rem;
+  }
+
+  .event-list {
+    display: grid;
+    gap: 0.7rem;
+  }
+
+  .event-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.75rem;
+    border: 1px solid #edf0f5;
+    border-radius: 10px;
+  }
+
+  .event-icon {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    color: #667eea;
+    background: rgba(102, 126, 234, 0.1);
+    flex: 0 0 auto;
+  }
+
+  @media (max-width: 767px) {
+    .costs-page .header-actions {
+      width: 100%;
+      margin-top: 1rem;
+    }
+
+    .costs-page .header-actions .btn {
+      width: 100%;
+    }
+  }
+</style>
+{% endblock %}
+
+{% block body %}
+<div class="container-fluid costs-page">
+  <nav aria-label="breadcrumb">
+    <ol class="breadcrumb mb-2">
+      <li class="breadcrumb-item"><a href="{{ url_for('main.index') }}">Inicio</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('analytics.dashboard') }}">Analytics</a></li>
+      <li class="breadcrumb-item"><a href="{{ url_for('analytics.ai_costs') }}">Costos de IA</a></li>
+      <li class="breadcrumb-item active" aria-current="page">Detalle</li>
+    </ol>
+  </nav>
+
+  <div class="d-flex flex-wrap justify-content-between align-items-start mb-4">
+    <div>
+      <h1 class="page-title mb-1">Consumo AI - {{ selected_company.nombre if selected_company else 'Sin empresa / Global' }}</h1>
+      <p class="text-muted mb-0">Control de presupuesto, uso actual y costos de inteligencia artificial.</p>
+    </div>
+    <div class="header-actions">
+      <button class="btn btn-outline-primary" type="button" onclick="window.print()">
+        <i class="bi bi-download me-1"></i>Exportar
+      </button>
+    </div>
+  </div>
+
+  <div class="card cost-filter mb-4">
+    <div class="card-body">
+      <form method="get" action="{{ url_for('analytics.ai_cost_detail', scope=scope) }}">
+        <div class="row g-3 align-items-end">
+          <div class="col-lg-3 col-md-6">
+            <label class="form-label" for="period">Periodo</label>
+            <select class="form-select" id="period" name="period">
+              <option value="cycle" {% if period == 'cycle' %}selected{% endif %}>Ciclo actual</option>
+              <option value="7" {% if period == '7' %}selected{% endif %}>Ultimos 7 dias</option>
+              <option value="30" {% if period == '30' %}selected{% endif %}>Ultimos 30 dias</option>
+              <option value="90" {% if period == '90' %}selected{% endif %}>Ultimos 90 dias</option>
+            </select>
+          </div>
+          <div class="col-lg-4 col-md-6">
+            <label class="form-label" for="report_id">Reporte</label>
+            <select class="form-select" id="report_id" name="report_id">
+              <option value="">Todos</option>
+              {% for report in reports %}
+              <option value="{{ report.id }}" {% if report_id == report.id %}selected{% endif %}>{{ report.name }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-lg-3 col-md-6">
+            <label class="form-label" for="event_type">Tipo de evento</label>
+            <select class="form-select" id="event_type" name="event_type">
+              <option value="">Todos</option>
+              {% for item in event_types %}
+              <option value="{{ item }}" {% if event_type == item %}selected{% endif %}>{{ item|replace('_', ' ')|title }}</option>
+              {% endfor %}
+            </select>
+          </div>
+          <div class="col-lg-2">
+            <button class="btn btn-light w-100" type="submit">
+              <i class="bi bi-search me-1"></i>Aplicar
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-xl-3 col-md-6">
+      <div class="card metric-card metric-blue h-100">
+        <div class="card-body">
+          <div class="metric-label">Limite del ciclo</div>
+          <div class="metric-value">{{ 'USD %.2f'|format(limit_usd) if limit_usd is not none else 'Sin limite' }}</div>
+          <div class="metric-foot">{{ start_date.strftime('%d/%m/%Y') }} - {{ end_date.strftime('%d/%m/%Y') }}</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-3 col-md-6">
+      <div class="card metric-card metric-green h-100">
+        <div class="card-body">
+          <div class="metric-label">Consumo actual</div>
+          <div class="metric-value">USD {{ '%.4f'|format(spent_usd) }}</div>
+          <div class="metric-foot">{{ total_events }} eventos en el periodo</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-3 col-md-6">
+      <div class="card metric-card metric-cyan h-100">
+        <div class="card-body">
+          <div class="metric-label">Disponible</div>
+          <div class="metric-value">{{ 'USD %.4f'|format(remaining_usd) if remaining_usd is not none else '--' }}</div>
+          <div class="metric-foot">{{ '{:,}'.format(total_tokens) }} tokens procesados</div>
+        </div>
+      </div>
+    </div>
+    <div class="col-xl-3 col-md-6">
+      <div class="card metric-card metric-yellow h-100">
+        <div class="card-body">
+          <div class="metric-label">Estado</div>
+          <div class="metric-value">{{ consumption_status }} <span class="status-dot"></span></div>
+          <div class="metric-foot">{{ '%.1f'|format(usage_percent) }}% del limite configurado</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-lg-8">
+      <div class="card cost-panel h-100">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-speedometer2 me-2"></i>Consumo del periodo</h5>
+        </div>
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-end mb-3">
+            <div>
+              <div class="text-muted small">Consumido</div>
+              <div class="fs-4 fw-bold">USD {{ '%.4f'|format(spent_usd) }}</div>
+            </div>
+            <div class="fw-bold text-muted">{{ '%.2f'|format(usage_percent) }}%</div>
+          </div>
+          <div class="progress usage-progress mb-3" role="progressbar" aria-valuenow="{{ usage_percent }}" aria-valuemin="0" aria-valuemax="100">
+            <div class="progress-bar" style="width: {{ usage_percent }}%"></div>
+          </div>
+          <div class="small">
+            Estado:
+            <span class="fw-bold {% if consumption_status == 'Normal' %}text-success{% elif consumption_status == 'Atencion' %}text-warning{% elif consumption_status == 'Limite alcanzado' %}text-danger{% else %}text-muted{% endif %}">
+              {{ consumption_status }}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="col-lg-4">
+      <div class="card cost-panel h-100">
+        <div class="card-header">
+          <h5 class="mb-0"><i class="bi bi-activity me-2"></i>Actividad reciente</h5>
+        </div>
+        <div class="card-body">
+          <div class="event-list">
+            {% for event in recent_events[:3] %}
+            <div class="event-item">
+              <div class="event-icon"><i class="bi bi-stars"></i></div>
+              <div class="min-width-0">
+                <div class="fw-semibold text-truncate">{{ event.event_type|replace('_', ' ')|title }}</div>
+                <div class="small text-muted">{{ event.model }} · USD {{ '%.5f'|format(event.total_cost_usd or 0) }}</div>
+              </div>
+            </div>
+            {% else %}
+            <div class="text-center text-muted py-3">No hay actividad en este periodo.</div>
+            {% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card cost-panel">
+    <div class="card-header">
+      <h5 class="mb-0"><i class="bi bi-table me-2"></i>Consumo por reporte</h5>
+    </div>
+    <div class="table-responsive">
+      <table class="table costs-table align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Reporte</th>
+            <th class="text-end">Consumo USD</th>
+            <th class="text-end">Tokens</th>
+            <th class="text-end">Eventos</th>
+            <th>Ultima actividad</th>
+            <th>Estado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in report_rows %}
+          <tr>
+            <td class="fw-semibold">{{ row.report_name }}</td>
+            <td class="text-end">USD {{ '%.5f'|format(row.cost_usd or 0) }}</td>
+            <td class="text-end">{{ '{:,}'.format(row.tokens or 0) }}</td>
+            <td class="text-end">{{ row.events }}</td>
+            <td>{{ row.last_activity.strftime('%d/%m/%Y %H:%M') if row.last_activity else '--' }}</td>
+            <td><span class="badge bg-success-subtle text-success">Normal</span></td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="text-center text-muted py-5">
+              <i class="bi bi-inbox fs-3 d-block mb-2"></i>
+              No hay consumo registrado para los filtros seleccionados.
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
