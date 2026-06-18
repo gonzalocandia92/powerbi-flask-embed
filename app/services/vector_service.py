@@ -69,6 +69,8 @@ def _build_powerbi_credentials(report: Report) -> Dict[str, str]:
     tenant = workspace.tenant if workspace is not None else None
     if tenant is None or not tenant.tenant_id:
         raise RuntimeError(f"Report {report.id} is missing tenant information")
+    if not workspace.workspace_id:
+        raise RuntimeError(f"Report {report.id} is missing workspace information")
 
     client = tenant.client
     client_id = client.client_id if client is not None else None
@@ -76,10 +78,19 @@ def _build_powerbi_credentials(report: Report) -> Dict[str, str]:
     if not client_id or not client_secret:
         raise RuntimeError(f"Report {report.id} is missing Azure client credentials")
 
+    usuario_pbi = report.usuario_pbi
+    username = usuario_pbi.username if usuario_pbi is not None else None
+    password = usuario_pbi.get_password() if usuario_pbi is not None else None
+    if not username or not password:
+        raise RuntimeError(f"Report {report.id} is missing Power BI user credentials")
+
     return {
         "TENANT_ID": str(tenant.tenant_id),
+        "WORKSPACE_ID": str(workspace.workspace_id),
         "CLIENT_ID": str(client_id),
         "CLIENT_SECRET": str(client_secret),
+        "USER": str(username),
+        "PASS": str(password),
     }
 
 
@@ -152,6 +163,7 @@ def _run_embedding_pipeline(report_id: int, dataset_id: str) -> None:
                 db.joinedload(Report.workspace)
                 .joinedload(Workspace.tenant)
                 .joinedload(Tenant.client),
+                db.joinedload(Report.usuario_pbi),
             )
             .first()
         )

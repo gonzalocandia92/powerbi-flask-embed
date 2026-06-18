@@ -259,7 +259,7 @@ class DatasetRefreshLog(db.Model):
 
     __tablename__ = 'dataset_refresh_logs'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False)
     dataset_id = db.Column(db.String(200), nullable=True)
     status = db.Column(db.String(50), nullable=False, default='Unknown')

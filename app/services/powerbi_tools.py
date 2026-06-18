@@ -2,42 +2,46 @@
 import json
 import logging
 from collections import defaultdict
-import os
 from typing import Any, Dict, List
 
-import msal
 import requests
 
 LOG = logging.getLogger(__name__)
-SCOPES = ["https://analysis.windows.net/powerbi/api/.default"]
+POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
 
 
 def _get_access_token(credentials: Dict[str, str]) -> str:
-    """Combine the DB tenant with read-only environment credentials."""
-    tenant_id = credentials["TENANT_ID"]
+    """Obtain a delegated Power BI token using the report's stored user."""
+    required = ("TENANT_ID", "CLIENT_ID", "CLIENT_SECRET", "USER", "PASS")
+    missing = [key for key in required if not str(credentials.get(key) or "").strip()]
+    if missing:
+        raise RuntimeError(f"Faltan credenciales Power BI del reporte: {', '.join(missing)}")
 
-    client_id = os.getenv("POWERBI_TOOL_CLIENT_ID") or os.getenv("CLIENT_ID_MCP")
-    client_secret = os.getenv("POWERBI_TOOL_CLIENT_SECRET") or os.getenv("CLIENT_SECRET_MCP")
+    token_url = f"https://login.microsoftonline.com/{credentials['TENANT_ID']}/oauth2/v2.0/token"
+    payload = {
+        "grant_type": "password",
+        "client_id": credentials["CLIENT_ID"],
+        "client_secret": credentials["CLIENT_SECRET"],
+        "scope": POWERBI_SCOPE,
+        "username": credentials["USER"],
+        "password": credentials["PASS"],
+    }
 
-    if not client_id or not client_secret:
-        raise RuntimeError("Faltan POWERBI_TOOL_CLIENT_ID o POWERBI_TOOL_CLIENT_SECRET en el entorno (.env)")
+    response = requests.post(token_url, data=payload, timeout=30)
+    if not response.ok:
+        LOG.error(
+            "Azure AD token request failed for Power BI chat user - status=%s body=%r",
+            response.status_code,
+            response.text,
+        )
+    response.raise_for_status()
 
-    authority = f"https://login.microsoftonline.com/{tenant_id}"
-    app = msal.ConfidentialClientApplication(
-        client_id,
-        authority=authority,
-        client_credential=client_secret,
-    )
-    result = app.acquire_token_for_client(scopes=SCOPES)
+    token_data = response.json()
+    access_token = token_data.get("access_token")
+    if not access_token:
+        raise RuntimeError(f"Azure AD no devolvio access_token: {token_data}")
 
-    if not isinstance(result, dict):
-        raise RuntimeError(f"Error MSAL: {result}")
-
-    access_token = result.get("access_token")
-    if access_token:
-        return str(access_token)
-
-    raise RuntimeError(f"Error MSAL: {result.get('error_description', result)}")
+    return str(access_token)
 
 
 def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, str]) -> List[Dict[str, Any]]:
@@ -124,7 +128,11 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
 
     try:
         token = _get_access_token(credentials)
-        url = f"https://api.powerbi.com/v1.0/myorg/datasets/{dataset_id}/executeQueries"
+        workspace_id = str(credentials.get("WORKSPACE_ID") or "").strip()
+        if workspace_id:
+            url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/executeQueries"
+        else:
+            url = f"https://api.powerbi.com/v1.0/myorg/datasets/{dataset_id}/executeQueries"
         headers = {
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
@@ -139,7 +147,7 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
         if response.status_code == 404:
             return (
                 f"Error: No se encontro el Dataset ID '{dataset_id}'. "
-                "Verifica que exista y que el Service Principal tenga acceso."
+                "Verifica que exista y que el usuario Power BI del reporte tenga acceso."
             )
 
         response.raise_for_status()

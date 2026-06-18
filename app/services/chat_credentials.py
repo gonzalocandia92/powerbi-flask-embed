@@ -20,6 +20,7 @@ def resolve_powerbi_env_for_report(report: Report) -> Dict[str, str]:
     usuario_pbi = report.usuario_pbi
 
     tenant_id = tenant.tenant_id if tenant else None
+    workspace_id = workspace.workspace_id if workspace else None
     client_id = client.client_id if client else None
     client_secret = client.get_secret() if client else None
     username = usuario_pbi.username if usuario_pbi else None
@@ -28,6 +29,7 @@ def resolve_powerbi_env_for_report(report: Report) -> Dict[str, str]:
     missing: List[str] = []
     values = {
         "TENANT_ID": tenant_id,
+        "WORKSPACE_ID": workspace_id,
         "CLIENT_ID": client_id,
         "CLIENT_SECRET": client_secret,
         "USER": username,
@@ -43,6 +45,7 @@ def resolve_powerbi_env_for_report(report: Report) -> Dict[str, str]:
 
     return {
         "TENANT_ID": str(tenant_id),
+        "WORKSPACE_ID": str(workspace_id),
         "CLIENT_ID": str(client_id),
         "CLIENT_SECRET": str(client_secret),
         "USER": str(username),
