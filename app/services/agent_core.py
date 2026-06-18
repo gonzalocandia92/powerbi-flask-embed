@@ -12,27 +12,28 @@ import json
 import logging
 import os
 import threading
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, cast
 from zoneinfo import ZoneInfo
 
-from .powerbi_tools import execute_dax_query_local, get_tables_and_measures_description
-from .schema_rerank import build_schema_context_json
+from app.models import SchemaEmbedding
+from app.services.observability import hash_identifier, observation_preview, start_observation
+
+from .powerbi_tools import execute_dax_query_local
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_HISTORY_LIMIT = 10
-DEFAULT_MAX_TOOL_ROUNDS = 6
+DEFAULT_MAX_TOOL_ROUNDS = 10
 DEFAULT_DEBUG_ENABLED = True
 DEFAULT_PROMPT_CACHING_ENABLED = True
 DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS = 20
-DEFAULT_SCHEMA_CACHE_TTL_SECONDS = 3600
-DEFAULT_SCHEMA_CACHE_MAX_ENTRIES = 100
+VOYAGE_QUERY_EMBEDDING_MODEL = "voyage-4"
+VOYAGE_QUERY_EMBEDDING_COST_PER_MILLION_USD = 0.06
 
 DATE_TABLE_GUIDANCE = (
     '"Date": ["Date (Date)", "Anio (Integer)", "Mes (Integer)", "Day (Integer)", '
@@ -54,8 +55,6 @@ Usa 'Moneda'[Moneda Campos] = "'Medidas'[Ventas USD]" SOLO si el usuario pide ex
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEBUG_FILE_LOCK = threading.RLock()
 _DEBUG_FILE_DEFAULT = _PROJECT_ROOT / "agent_core_debug.txt"
-_SCHEMA_CACHE_LOCK = threading.RLock()
-_SCHEMA_CACHE: Dict[str, Dict[str, Any]] = {}
 
 
 def _parse_bool(value: Any, default: bool = False) -> bool:
@@ -106,6 +105,48 @@ def _append_debug_to_file(message: str) -> None:
     except Exception as exc:
         logging.exception("Failed to write agent debug output to file: %s", debug_file)
         print(f"[agent_core] debug-file-error: {exc}", flush=True)
+
+
+def _usage_metric(usage: Any, field_name: str) -> int:
+    """Extract a numeric usage field from Anthropic responses."""
+    if usage is None:
+        return 0
+
+    value = getattr(usage, field_name, None)
+    if value is None and isinstance(usage, dict):
+        value = usage.get(field_name)
+
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _new_usage_totals() -> Dict[str, int]:
+    return {"input_tokens": 0, "output_tokens": 0}
+
+
+def _add_usage_totals(usage_totals: Optional[Dict[str, int]], *, input_tokens: int = 0, output_tokens: int = 0) -> None:
+    if usage_totals is None:
+        return
+
+    usage_totals["input_tokens"] = int(usage_totals.get("input_tokens", 0)) + int(input_tokens or 0)
+    usage_totals["output_tokens"] = int(usage_totals.get("output_tokens", 0)) + int(output_tokens or 0)
+
+
+def _anthropic_usage_metrics(usage: Any) -> Dict[str, int]:
+    return {
+        "input_tokens": _usage_metric(usage, "input_tokens"),
+        "output_tokens": _usage_metric(usage, "output_tokens"),
+        "cache_write_tokens": _usage_metric(usage, "cache_creation_input_tokens"),
+        "cache_read_tokens": _usage_metric(usage, "cache_read_input_tokens"),
+    }
+
+
+def _append_ai_usage_event(events: Optional[List[Dict[str, Any]]], **payload: Any) -> None:
+    if events is None:
+        return
+    events.append(payload)
 
 
 @dataclass
@@ -162,130 +203,91 @@ def _debug_enabled() -> bool:
     return _parse_bool(os.getenv("CHAT_DEBUG_ENABLED"), default=DEFAULT_DEBUG_ENABLED)
 
 
-def _parse_int_env(name: str, default: int, minimum: int = 0) -> int:
-    raw_value = os.getenv(name, str(default))
+def _get_voyage_client():
+    api_key = os.getenv("VOYAGE_API_KEY")
+    if not api_key:
+        raise RuntimeError("VOYAGE_API_KEY is required")
+
     try:
-        return max(minimum, int(str(raw_value).strip()))
-    except Exception:
-        return default
+        import voyageai
+    except ImportError as exc:  # pragma: no cover - dependency missing in test env
+        raise RuntimeError("The 'voyageai' package is required to retrieve schema context.") from exc
 
-
-def _get_schema_cache_ttl_seconds() -> int:
-    return _parse_int_env(
-        "CHAT_SCHEMA_CACHE_TTL_SECONDS",
-        DEFAULT_SCHEMA_CACHE_TTL_SECONDS,
-        minimum=0,
-    )
-
-
-def _get_schema_cache_max_entries() -> int:
-    return _parse_int_env(
-        "CHAT_SCHEMA_CACHE_MAX_ENTRIES",
-        DEFAULT_SCHEMA_CACHE_MAX_ENTRIES,
-        minimum=1,
-    )
-
-
-def _build_schema_cache_key(dataset_id: str, powerbi_credentials: Dict[str, Any]) -> str:
-    tenant_id = str(powerbi_credentials.get("TENANT_ID") or "").strip()
-    dataset_key = str(dataset_id).strip()
-    if tenant_id:
-        return f"{tenant_id}:{dataset_key}"
-    return dataset_key
-
-
-def _get_schema_cache_entry(cache_key: str) -> Optional[Dict[str, Any]]:
-    with _SCHEMA_CACHE_LOCK:
-        entry = _SCHEMA_CACHE.get(cache_key)
-        if entry is None:
-            return None
-        return dict(entry)
-
-
-def _get_cached_schema_items(cache_key: str, ttl_seconds: int) -> Optional[List[str]]:
-    if ttl_seconds <= 0:
-        return None
-
-    entry = _get_schema_cache_entry(cache_key)
-    if entry is None:
-        return None
-
-    fetched_at = float(entry.get("fetched_at", 0))
-    if (time.time() - fetched_at) > ttl_seconds:
-        return None
-
-    schema_items = entry.get("schema_items") or []
-    return [str(item) for item in schema_items]
-
-
-def _get_stale_schema_items(cache_key: str) -> Optional[List[str]]:
-    entry = _get_schema_cache_entry(cache_key)
-    if entry is None:
-        return None
-    schema_items = entry.get("schema_items") or []
-    if not schema_items:
-        return None
-    return [str(item) for item in schema_items]
-
-
-def _store_schema_cache_entry(cache_key: str, schema_items: List[str]) -> None:
-    now = time.time()
-    normalized_items = [str(item) for item in schema_items if str(item).strip()]
-    max_entries = _get_schema_cache_max_entries()
-
-    with _SCHEMA_CACHE_LOCK:
-        _SCHEMA_CACHE[cache_key] = {
-            "fetched_at": now,
-            "schema_items": normalized_items,
-        }
-        if len(_SCHEMA_CACHE) <= max_entries:
-            return
-
-        oldest_key = min(
-            _SCHEMA_CACHE,
-            key=lambda key: float(_SCHEMA_CACHE[key].get("fetched_at", 0)),
-        )
-        _SCHEMA_CACHE.pop(oldest_key, None)
+    return voyageai.Client(api_key=api_key)
 
 async def _rewrite_query_for_reranker(
     *,
     user_message: str,
     settings: RuntimeSettings,
     debug_enabled: bool,
+    usage_totals: Optional[Dict[str, int]] = None,
+    ai_usage_events: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
     """Micro-agent that translates a user question into technical keywords."""
-    try:
-        from anthropic import AsyncAnthropic  # type: ignore
-    except ImportError:
-        logging.warning("The 'anthropic' package is not available for query rewriting")
-        return user_message
+    with start_observation(
+        name="rewrite-query-for-reranker",
+        as_type="chain",
+        input={"user_message": user_message},
+    ) as observation:
+        try:
+            from anthropic import AsyncAnthropic  # type: ignore
+        except ImportError:
+            logging.warning("The 'anthropic' package is not available for query rewriting")
+            return user_message
 
-    system_prompt = (
-        "Eres un experto en bases de datos y Power BI. Tu unica tarea es extraer y deducir "
-        "los terminos tecnicos mas probables de la pregunta del usuario. "
-        "Reglas: Devuelve SOLO una lista de 5 a 8 palabras clave separadas por comas. "
-        "No incluyas saludos, explicaciones ni vinietas. "
-        "IMPORTANTE: Si la pregunta involucra ventas, facturación o tickets, INCLUYE SIEMPRE la palabra 'sales_order'. "
-        "Si involucra tiempo, incluye 'Date'."
-    )
+        system_prompt = (
+            "Eres un experto en bases de datos y Power BI. Tu unica tarea es extraer y deducir "
+            "los terminos tecnicos mas probables de la pregunta del usuario. "
+            "Reglas: Devuelve SOLO una lista de 5 a 8 palabras clave separadas por comas. "
+            "No incluyas saludos, explicaciones ni vinietas. "
+            "IMPORTANTE: Si la pregunta involucra ventas, facturación o tickets, INCLUYE SIEMPRE la palabra 'sales_order'. "
+            "Si involucra tiempo, incluye 'Date'."
+        )
 
-    _debug_print("agent:rewriter:start", {"original_query": user_message}, enabled=debug_enabled)
-    try:
-        async with AsyncAnthropic(api_key=settings.anthropic_api_key) as client:
-            response = await client.messages.create(
-                model="claude-haiku-4-5-20251001",
-                max_tokens=100,
-                temperature=0.0,
-                system=system_prompt,
-                messages=[{"role": "user", "content": user_message}],
-            )
-            optimized_query = response.content[0].text.strip()
-            _debug_print("agent:rewriter:success", {"optimized_query": optimized_query}, enabled=debug_enabled)
-            return optimized_query or user_message
-    except Exception as exc:
-        logging.warning("The query rewriter failed. Using original query: %s", exc)
-        _debug_print("agent:rewriter:error", {"error": repr(exc)}, enabled=debug_enabled)
-        return user_message
+        _debug_print("agent:rewriter:start", {"original_query": user_message}, enabled=debug_enabled)
+        try:
+            async with AsyncAnthropic(api_key=settings.anthropic_api_key) as client:
+                response = await client.messages.create(
+                    model="claude-haiku-4-5-20251001",
+                    max_tokens=100,
+                    temperature=0.0,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_message}],
+                )
+                usage = getattr(response, "usage", None)
+                usage_metrics = _anthropic_usage_metrics(usage)
+                _add_usage_totals(
+                    usage_totals,
+                    input_tokens=usage_metrics["input_tokens"],
+                    output_tokens=usage_metrics["output_tokens"],
+                )
+                _append_ai_usage_event(
+                    ai_usage_events,
+                    provider="anthropic",
+                    model="claude-haiku-4-5-20251001",
+                    event_type="generation",
+                    source_type="retrieval",
+                    trigger_type="user_request",
+                    operation_name="rewrite-query-for-reranker",
+                    status="success",
+                    input_tokens=usage_metrics["input_tokens"],
+                    output_tokens=usage_metrics["output_tokens"],
+                    total_tokens=usage_metrics["input_tokens"] + usage_metrics["output_tokens"],
+                    cache_write_tokens=usage_metrics["cache_write_tokens"],
+                    cache_read_tokens=usage_metrics["cache_read_tokens"],
+                    metadata_json={"component": "query_rewriter"},
+                )
+                optimized_query = response.content[0].text.strip()
+                if observation is not None:
+                    observation.update(output={"optimized_query": optimized_query})
+                _debug_print("agent:rewriter:success", {"optimized_query": optimized_query}, enabled=debug_enabled)
+                return optimized_query or user_message
+        except Exception as exc:
+            logging.warning("The query rewriter failed. Using original query: %s", exc)
+            if observation is not None:
+                observation.update(output={"error": observation_preview(repr(exc), max_length=500)})
+            _debug_print("agent:rewriter:error", {"error": repr(exc)}, enabled=debug_enabled)
+            return user_message
 
 
 async def _fetch_schema_context(
@@ -296,82 +298,145 @@ async def _fetch_schema_context(
     settings: RuntimeSettings,
     debug_enabled: bool,
     required: bool,
+    usage_totals: Optional[Dict[str, int]] = None,
+    ai_usage_events: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
-    cache_key = _build_schema_cache_key(dataset_id, powerbi_credentials)
-    cache_ttl_seconds = _get_schema_cache_ttl_seconds()
-
-    _debug_print(
-        "tool:get_schema_context:request",
-        {
-            "dataset_id": dataset_id,
-            "question": question,
-            "cache_key": cache_key,
-            "cache_ttl_seconds": cache_ttl_seconds,
-        },
-        enabled=debug_enabled,
-    )
-    try:
-        esquema_dinamico = _get_cached_schema_items(cache_key, cache_ttl_seconds)
-        if esquema_dinamico is not None:
-            _debug_print(
-                "tool:get_schema_context:cache_hit",
-                {"cache_key": cache_key, "items": len(esquema_dinamico)},
-                enabled=debug_enabled,
-            )
-        else:
-            _debug_print(
-                "tool:get_schema_context:cache_miss",
-                {"cache_key": cache_key},
-                enabled=debug_enabled,
-            )
-            try:
-                esquema_dinamico = await asyncio.to_thread(
-                    get_tables_and_measures_description,
-                    dataset_id,
-                    powerbi_credentials,
-                )
-                _store_schema_cache_entry(cache_key, esquema_dinamico)
-                _debug_print(
-                    "tool:get_schema_context:cache_store",
-                    {"cache_key": cache_key, "items": len(esquema_dinamico)},
-                    enabled=debug_enabled,
-                )
-            except Exception as exc:
-                esquema_dinamico = _get_stale_schema_items(cache_key)
-                if esquema_dinamico is None:
-                    raise
-                logging.warning(
-                    "Failed to refresh schema for %s; using stale cached schema: %s",
-                    cache_key,
-                    exc,
-                )
-                _debug_print(
-                    "tool:get_schema_context:stale_cache_fallback",
-                    {"cache_key": cache_key, "items": len(esquema_dinamico), "error": repr(exc)},
-                    enabled=debug_enabled,
-                )
-
-        fetched_schema_text = await asyncio.wait_for(
-            asyncio.to_thread(build_schema_context_json, question, esquema_dinamico, 3, 5),
-            timeout=max(1, int(settings.schema_context_timeout_seconds)),
-        )
-        _debug_print("tool:get_schema_context:response", fetched_schema_text, enabled=debug_enabled)
-        return fetched_schema_text.strip()
-    except asyncio.TimeoutError:
-        logging.warning(
-            "Timed out fetching reranked schema context locally after %s seconds",
-            settings.schema_context_timeout_seconds,
-        )
+    with start_observation(
+        name="fetch-schema-context",
+        as_type="retriever",
+        input={"question": question},
+    ) as observation:
+        if observation is not None:
+            observation.update(metadata={"datasethash": hash_identifier(dataset_id, prefix="dataset")})
         _debug_print(
-            "tool:get_schema_context:timeout",
-            {"seconds": settings.schema_context_timeout_seconds},
+            "tool:get_schema_context:request",
+            {
+                "dataset_id": dataset_id,
+                "question": question,
+            },
             enabled=debug_enabled,
         )
-        return ""
-    except Exception as exc:
-        logging.exception("Failed to fetch reranked schema context locally")
-        _debug_print("tool:get_schema_context:error", repr(exc), enabled=debug_enabled)
-        return ""
+        try:
+            voyage_client = _get_voyage_client()
+            with start_observation(
+                name="voyage-query-embedding",
+                as_type="embedding",
+                input=[question],
+            ) as embedding_observation:
+                if embedding_observation is not None:
+                    embedding_observation.update(
+                        model=VOYAGE_QUERY_EMBEDDING_MODEL,
+                        metadata={
+                            "provider": "voyageai",
+                            "inputtype": "query",
+                        },
+                    )
+
+                embedding_response = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        lambda: voyage_client.embed(
+                            [question],
+                            model=VOYAGE_QUERY_EMBEDDING_MODEL,
+                            input_type="query",
+                        )
+                    ),
+                    timeout=max(1, int(settings.schema_context_timeout_seconds)),
+                )
+                query_vector = embedding_response.embeddings[0]
+                query_vector_list = list(query_vector)
+                total_tokens = getattr(embedding_response, "total_tokens", None)
+                _add_usage_totals(usage_totals, input_tokens=int(total_tokens or 0))
+                _append_ai_usage_event(
+                    ai_usage_events,
+                    provider="voyageai",
+                    model=VOYAGE_QUERY_EMBEDDING_MODEL,
+                    event_type="embedding",
+                    source_type="retrieval",
+                    trigger_type="user_request",
+                    operation_name="voyage-query-embedding",
+                    status="success",
+                    input_tokens=int(total_tokens or 0),
+                    output_tokens=0,
+                    total_tokens=int(total_tokens or 0),
+                    metadata_json={"input_type": "query"},
+                )
+                if embedding_observation is not None:
+                    update_payload = {
+                        "output": {
+                            "embedding_dimensions": len(query_vector_list),
+                            "vector_count": 1,
+                        }
+                    }
+                    if total_tokens is not None:
+                        update_payload["usage_details"] = {"input": int(total_tokens)}
+                        update_payload["cost_details"] = {
+                            "input": (
+                                int(total_tokens)
+                                * VOYAGE_QUERY_EMBEDDING_COST_PER_MILLION_USD
+                                / 1_000_000
+                            )
+                        }
+                    embedding_observation.update(**update_payload)
+            _debug_print(
+                "tool:get_schema_context:query_vector_ready",
+                {"dataset_id": dataset_id, "dimensions": len(query_vector_list)},
+                enabled=debug_enabled,
+            )
+
+            table_results = (
+                SchemaEmbedding.query
+                .filter(
+                    SchemaEmbedding.dataset_id == dataset_id,
+                    SchemaEmbedding.item_type == "table",
+                )
+                .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
+                .limit(3)
+                .all()
+            )
+            measure_results = (
+                SchemaEmbedding.query
+                .filter(
+                    SchemaEmbedding.dataset_id == dataset_id,
+                    SchemaEmbedding.item_type == "measure",
+                )
+                .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
+                .limit(5)
+                .all()
+            )
+
+            payload = {
+                "tables": [row.content_text for row in table_results],
+                "measures": [row.content_text for row in measure_results],
+            }
+            fetched_schema_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+            if observation is not None:
+                observation.update(
+                    output={
+                        "table_matches": len(table_results),
+                        "measure_matches": len(measure_results),
+                    }
+                )
+            _debug_print("tool:get_schema_context:response", fetched_schema_text, enabled=debug_enabled)
+            return fetched_schema_text.strip()
+        except asyncio.TimeoutError:
+            logging.warning(
+                "Timed out fetching vector schema context after %s seconds",
+                settings.schema_context_timeout_seconds,
+            )
+            if observation is not None:
+                observation.update(output={"timeout_seconds": settings.schema_context_timeout_seconds})
+            _debug_print(
+                "tool:get_schema_context:timeout",
+                {"seconds": settings.schema_context_timeout_seconds},
+                enabled=debug_enabled,
+            )
+            return ""
+        except Exception as exc:
+            logging.exception("Failed to fetch vector schema context")
+            if observation is not None:
+                observation.update(output={"error": observation_preview(repr(exc), max_length=500)})
+            _debug_print("tool:get_schema_context:error", repr(exc), enabled=debug_enabled)
+            return ""
 
 
 def _minify_schema_text(schema_text: str) -> str:
@@ -586,11 +651,15 @@ class ToolRegistry:
         user_message: str,
         settings: RuntimeSettings,
         debug_enabled: bool,
+        usage_totals: Optional[Dict[str, int]] = None,
+        ai_usage_events: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         return await _rewrite_query_for_reranker(
             user_message=user_message,
             settings=settings,
             debug_enabled=debug_enabled,
+            usage_totals=usage_totals,
+            ai_usage_events=ai_usage_events,
         )
 
     async def _execute_dax_query_local_async(self, tool_input: Dict[str, Any], context: Dict[str, Any]) -> str:
@@ -603,12 +672,27 @@ class ToolRegistry:
             raise RuntimeError("Tool execute_dax_query requires a non-empty dax_query")
 
         powerbi_credentials = context.get("powerbi_credentials") or {}
-        return await asyncio.to_thread(
-            execute_dax_query_local,
-            dataset_id,
-            str(dax_query),
-            powerbi_credentials,
-        )
+        with start_observation(
+            name="execute-dax-query",
+            as_type="tool",
+            input={"dax_query": str(dax_query)},
+        ) as observation:
+            if observation is not None:
+                observation.update(metadata={"datasethash": hash_identifier(str(dataset_id), prefix="dataset")})
+            result = await asyncio.to_thread(
+                execute_dax_query_local,
+                dataset_id,
+                str(dax_query),
+                powerbi_credentials,
+            )
+            if observation is not None:
+                observation.update(
+                    output={
+                        "result_preview": observation_preview(result, max_length=1200),
+                        "result_length": len(str(result)),
+                    }
+                )
+            return result
 
     async def execute_tool(self, tool_name: str, tool_input: Dict[str, Any], context: Dict[str, Any]) -> str:
         if tool_name == "get_schema_context":
@@ -623,11 +707,16 @@ class ToolRegistry:
             if not dataset_id:
                 raise RuntimeError("dataset_id is required to fetch schema context")
 
-            optimized_question = await self.rewrite_query_for_reranker(
-                user_message=str(question),
-                settings=settings,
-                debug_enabled=debug_enabled,
-            )
+            question_is_rewritten = bool(tool_input.get("question_is_rewritten"))
+            optimized_question = str(question)
+            if not question_is_rewritten:
+                optimized_question = await self.rewrite_query_for_reranker(
+                    user_message=str(question),
+                    settings=settings,
+                    debug_enabled=debug_enabled,
+                    usage_totals=context.get("usage_totals"),
+                    ai_usage_events=context.get("ai_usage_events"),
+                )
             return await _fetch_schema_context(
                 dataset_id=dataset_id,
                 powerbi_credentials=powerbi_credentials,
@@ -635,6 +724,8 @@ class ToolRegistry:
                 settings=settings,
                 debug_enabled=debug_enabled,
                 required=False,
+                usage_totals=context.get("usage_totals"),
+                ai_usage_events=context.get("ai_usage_events"),
             )
 
         if tool_name == "execute_dax_query":
@@ -669,6 +760,8 @@ class AgentOrchestrator:
             "report_id": report_id,
             "user_message": user_message,
             "debug_enabled": debug_enabled,
+            "usage_totals": _new_usage_totals(),
+            "ai_usage_events": [],
         }
 
     async def estimate_tokens(
@@ -767,21 +860,16 @@ class AgentOrchestrator:
             debug_enabled=settings_debug_enabled,
         )
 
-        search_query = user_message
         if not schema_text:
-            search_query = await self.tool_registry.rewrite_query_for_reranker(
-                user_message=user_message,
-                settings=self.settings,
-                debug_enabled=settings_debug_enabled,
+            # We call the tool directly to ensure only one rewrite happens.
+            # execute_tool will handle the rewrite if question_is_rewritten is not passed.
+            fetched_schema_text = await self.tool_registry.execute_tool(
+                "get_schema_context",
+                {"question": user_message}, # No question_is_rewritten passed -> execute_tool will rewrite it
+                context,
             )
-
-        fetched_schema_text = await self.tool_registry.execute_tool(
-            "get_schema_context",
-            {"question": search_query},
-            context,
-        )
-        if fetched_schema_text:
-            schema_text = fetched_schema_text
+            if fetched_schema_text:
+                schema_text = fetched_schema_text
 
         system_prompt = self.prompt_manager.get_system_prompt(schema_text)
         tools: Any = self.tool_registry.get_all_tools()
@@ -805,7 +893,8 @@ class AgentOrchestrator:
         tool_rounds = 0
         tools_called: List[Dict[str, Any]] = []
         dax_query_used: Optional[str] = None
-        output_tokens: Optional[int] = None
+        usage_totals = cast(Dict[str, int], context["usage_totals"])
+        ai_usage_events = cast(List[Dict[str, Any]], context["ai_usage_events"])
         messages = cast(Any, turn_history)
         system_payload = cast(Any, system_prompt)
 
@@ -834,10 +923,28 @@ class AgentOrchestrator:
                 )
 
                 usage = getattr(response, "usage", None)
-                if usage is not None:
-                    output_tokens = getattr(usage, "output_tokens", output_tokens)
-                    if output_tokens is None and isinstance(usage, dict):
-                        output_tokens = usage.get("output_tokens", output_tokens)
+                usage_metrics = _anthropic_usage_metrics(usage)
+                _add_usage_totals(
+                    usage_totals,
+                    input_tokens=usage_metrics["input_tokens"],
+                    output_tokens=usage_metrics["output_tokens"],
+                )
+                _append_ai_usage_event(
+                    ai_usage_events,
+                    provider="anthropic",
+                    model=self.settings.anthropic_model,
+                    event_type="generation",
+                    source_type="chat",
+                    trigger_type="user_request",
+                    operation_name="chat-response",
+                    status="success",
+                    input_tokens=usage_metrics["input_tokens"],
+                    output_tokens=usage_metrics["output_tokens"],
+                    total_tokens=usage_metrics["input_tokens"] + usage_metrics["output_tokens"],
+                    cache_write_tokens=usage_metrics["cache_write_tokens"],
+                    cache_read_tokens=usage_metrics["cache_read_tokens"],
+                    metadata_json={"tool_round": tool_rounds},
+                )
 
                 _debug_print(
                     "anthropic:response:raw",
@@ -873,12 +980,13 @@ class AgentOrchestrator:
                         "conversation_id": conv_id,
                         "report_id": report_id,
                         "tool_rounds": tool_rounds,
-                        "input_tokens": token_count,
-                        "output_tokens": output_tokens,
+                        "input_tokens": usage_totals["input_tokens"],
+                        "output_tokens": usage_totals["output_tokens"],
                         "model": self.settings.anthropic_model,
                         "mcp_used": bool(tools_called),
                         "tools_called": tools_called,
                         "dax_query": dax_query_used,
+                        "ai_usage_events": ai_usage_events,
                     }
 
                 tool_result_blocks: List[Dict[str, Any]] = []
@@ -1012,12 +1120,39 @@ async def run_chat_turn(
     prompt_manager = PromptManager(history_limit=settings.history_limit)
     tool_registry = ToolRegistry()
     orchestrator = AgentOrchestrator(settings, prompt_manager, tool_registry)
-    return await orchestrator.generate_response(
-        user_message=user_message,
-        history=history,
-        dataset_id=dataset_id,
-        powerbi_credentials=powerbi_credentials,
-        schema_text=schema_text,
-        conversation_id=conversation_id,
-        report_id=report_id,
-    )
+    with start_observation(
+        name="powerbi-chat-agent",
+        as_type="agent",
+        input={"user_message": user_message},
+    ) as observation:
+        if observation is not None:
+            observation.update(
+                metadata={
+                    "conversationid": str(conversation_id) if conversation_id is not None else None,
+                    "reportid": str(report_id) if report_id is not None else None,
+                    "datasethash": hash_identifier(dataset_id, prefix="dataset"),
+                    "historycount": str(len(history)),
+                    "schemaloaded": str(bool(schema_text)).lower(),
+                }
+            )
+
+        result = await orchestrator.generate_response(
+            user_message=user_message,
+            history=history,
+            dataset_id=dataset_id,
+            powerbi_credentials=powerbi_credentials,
+            schema_text=schema_text,
+            conversation_id=conversation_id,
+            report_id=report_id,
+        )
+
+        if observation is not None:
+            observation.update(
+                output={
+                    "answer": observation_preview(result.get("answer", ""), max_length=1200),
+                    "tool_rounds": result.get("tool_rounds", 0),
+                    "input_tokens": result.get("input_tokens"),
+                    "output_tokens": result.get("output_tokens"),
+                }
+            )
+        return result

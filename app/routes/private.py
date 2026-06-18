@@ -120,7 +120,7 @@ def report_config():
     try:
         embed_token, embed_url, rid = get_embed_for_report(report)
 
-        # Apply Power BI URL filter if the report supports it and a value was provided
+        # Apply a Power BI URL filter when the report is configured for private filtering.
         filter_value = request.args.get('filter')
         if filter_value and report.filter_enabled and report.filter_table and report.filter_column:
             pbi_filter = f"{report.filter_table}/{report.filter_column} eq {filter_value}"

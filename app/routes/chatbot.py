@@ -57,6 +57,8 @@ async def chat():
         )
     except chatbot_service.ChatbotNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
+    except chatbot_service.ChatbotLimitExceededError as exc:
+        return jsonify({"error": str(exc)}), 403
     except Exception as exc:
         logging.exception("[Chatbot] Failed to process /chat request")
         return jsonify({"error": f"Error al procesar la consulta: {str(exc)}"}), 500

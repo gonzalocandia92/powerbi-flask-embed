@@ -1,0 +1,297 @@
+"""Administration routes for AI limits and model pricing."""
+from datetime import datetime, time
+
+from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask_login import login_required
+
+from app import db
+from app.forms import AIModelPricingForm, BillingLimitForm
+from app.models import AIModelPricing, BillingLimit, Empresa
+from app.utils.decorators import retry_on_db_error
+
+
+bp = Blueprint('ai_config', __name__, url_prefix='/admin/ai-config')
+
+
+def _date_start(value):
+    return datetime.combine(value, time.min) if value else None
+
+
+def _date_end(value):
+    return datetime.combine(value, time.max) if value else None
+
+
+def _as_float(value):
+    return float(value) if value is not None else 0.0
+
+
+def _active_limits_by_scope():
+    limits = (
+        BillingLimit.query
+        .filter(BillingLimit.period_type == 'monthly_anniversary')
+        .order_by(BillingLimit.id.desc())
+        .all()
+    )
+    result = {}
+    for limit_item in limits:
+        key = (limit_item.scope_type, limit_item.scope_id)
+        if key not in result:
+            result[key] = limit_item
+    return result
+
+
+@bp.route('/')
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def index():
+    """AI configuration overview."""
+    active_tab = request.args.get('tab', 'limits')
+    if active_tab not in {'limits', 'pricing'}:
+        active_tab = 'limits'
+
+    limits_by_scope = _active_limits_by_scope()
+    global_limit = limits_by_scope.get(('global', None))
+    companies = Empresa.query.order_by(Empresa.nombre).all()
+    company_limits = [
+        {
+            'company': company,
+            'limit': limits_by_scope.get(('empresa', str(company.id))),
+        }
+        for company in companies
+    ]
+    pricings = (
+        AIModelPricing.query
+        .order_by(
+            AIModelPricing.is_active.desc(),
+            AIModelPricing.provider,
+            AIModelPricing.model,
+            AIModelPricing.effective_from.desc(),
+        )
+        .all()
+    )
+    return render_template(
+        'admin/ai_config/index.html',
+        active_tab=active_tab,
+        global_limit=global_limit,
+        company_limits=company_limits,
+        pricings=pricings,
+    )
+
+
+@bp.route('/limits/global', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def global_limit():
+    """Create or edit the default global limit."""
+    limit_item = (
+        BillingLimit.query
+        .filter(
+            BillingLimit.scope_type == 'global',
+            BillingLimit.scope_id.is_(None),
+            BillingLimit.period_type == 'monthly_anniversary',
+        )
+        .order_by(BillingLimit.id.desc())
+        .first()
+    )
+    form = BillingLimitForm(obj=limit_item)
+    if request.method == 'GET' and limit_item:
+        form.starts_at.data = limit_item.starts_at.date() if limit_item.starts_at else None
+        form.ends_at.data = limit_item.ends_at.date() if limit_item.ends_at else None
+
+    if form.validate_on_submit():
+        if form.starts_at.data and form.ends_at.data and form.ends_at.data < form.starts_at.data:
+            form.ends_at.errors.append("La fecha final no puede ser anterior a la inicial.")
+        else:
+            if limit_item is None:
+                limit_item = BillingLimit(
+                    scope_type='global',
+                    scope_id=None,
+                    period_type='monthly_anniversary',
+                    currency='USD',
+                )
+                db.session.add(limit_item)
+            limit_item.limit_usd = _as_float(form.limit_usd.data)
+            limit_item.cycle_anchor_day = form.cycle_anchor_day.data
+            limit_item.starts_at = _date_start(form.starts_at.data)
+            limit_item.ends_at = _date_end(form.ends_at.data)
+            limit_item.is_active = form.is_active.data
+            db.session.commit()
+            flash("Default global actualizado.", "success")
+            return redirect(url_for('ai_config.index', tab='limits'))
+
+    return render_template(
+        'admin/ai_config/limit_form.html',
+        form=form,
+        title='Editar default global',
+        scope_label='Default Global',
+    )
+
+
+@bp.route('/limits/company/<int:empresa_id>', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def company_limit(empresa_id):
+    """Create or edit the limit assigned to a company."""
+    company = Empresa.query.get_or_404(empresa_id)
+    limit_item = (
+        BillingLimit.query
+        .filter(
+            BillingLimit.scope_type == 'empresa',
+            BillingLimit.scope_id == str(company.id),
+            BillingLimit.period_type == 'monthly_anniversary',
+        )
+        .order_by(BillingLimit.id.desc())
+        .first()
+    )
+    form = BillingLimitForm(obj=limit_item)
+    if request.method == 'GET':
+        if limit_item:
+            form.starts_at.data = limit_item.starts_at.date() if limit_item.starts_at else None
+            form.ends_at.data = limit_item.ends_at.date() if limit_item.ends_at else None
+        else:
+            form.is_active.data = True
+            form.cycle_anchor_day.data = 1
+
+    if form.validate_on_submit():
+        if form.starts_at.data and form.ends_at.data and form.ends_at.data < form.starts_at.data:
+            form.ends_at.errors.append("La fecha final no puede ser anterior a la inicial.")
+        else:
+            if limit_item is None:
+                limit_item = BillingLimit(
+                    scope_type='empresa',
+                    scope_id=str(company.id),
+                    period_type='monthly_anniversary',
+                    currency='USD',
+                )
+                db.session.add(limit_item)
+            limit_item.limit_usd = _as_float(form.limit_usd.data)
+            limit_item.cycle_anchor_day = form.cycle_anchor_day.data
+            limit_item.starts_at = _date_start(form.starts_at.data)
+            limit_item.ends_at = _date_end(form.ends_at.data)
+            limit_item.is_active = form.is_active.data
+            db.session.commit()
+            flash(f"Limite de {company.nombre} actualizado.", "success")
+            return redirect(url_for('ai_config.index', tab='limits'))
+
+    return render_template(
+        'admin/ai_config/limit_form.html',
+        form=form,
+        title=f'Limite de {company.nombre}',
+        scope_label=company.nombre,
+    )
+
+
+@bp.route('/pricing/new', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def pricing_new():
+    """Create a model pricing record."""
+    form = AIModelPricingForm()
+    if request.method == 'GET':
+        form.effective_from.data = datetime.utcnow().date()
+        form.is_active.data = True
+
+    if form.validate_on_submit():
+        duplicate = AIModelPricing.query.filter(
+            AIModelPricing.provider == form.provider.data.strip().lower(),
+            AIModelPricing.model == form.model.data.strip(),
+            AIModelPricing.event_type == form.event_type.data,
+            AIModelPricing.is_active.is_(True),
+        ).first()
+        if duplicate and form.is_active.data:
+            form.model.errors.append("Ya existe un pricing activo para esta combinacion.")
+        elif form.effective_to.data and form.effective_to.data < form.effective_from.data:
+            form.effective_to.errors.append("La fecha final no puede ser anterior a la inicial.")
+        else:
+            pricing = AIModelPricing(
+                provider=form.provider.data.strip().lower(),
+                model=form.model.data.strip(),
+                event_type=form.event_type.data,
+                currency='USD',
+                input_cost_per_million_usd=_as_float(form.input_cost_per_million_usd.data),
+                output_cost_per_million_usd=_as_float(form.output_cost_per_million_usd.data),
+                cache_write_cost_per_million_usd=_as_float(form.cache_write_cost_per_million_usd.data),
+                cache_read_cost_per_million_usd=_as_float(form.cache_read_cost_per_million_usd.data),
+                effective_from=_date_start(form.effective_from.data),
+                effective_to=_date_end(form.effective_to.data),
+                is_active=form.is_active.data,
+            )
+            db.session.add(pricing)
+            db.session.commit()
+            flash("Pricing creado.", "success")
+            return redirect(url_for('ai_config.index', tab='pricing'))
+
+    return render_template(
+        'admin/ai_config/pricing_form.html',
+        form=form,
+        title='Nuevo pricing',
+    )
+
+
+@bp.route('/pricing/<int:pricing_id>/edit', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def pricing_edit(pricing_id):
+    """Edit a model pricing record."""
+    pricing = AIModelPricing.query.get_or_404(pricing_id)
+    form = AIModelPricingForm(obj=pricing)
+    if request.method == 'GET':
+        form.effective_from.data = pricing.effective_from.date()
+        form.effective_to.data = pricing.effective_to.date() if pricing.effective_to else None
+
+    if form.validate_on_submit():
+        duplicate = AIModelPricing.query.filter(
+            AIModelPricing.id != pricing.id,
+            AIModelPricing.provider == form.provider.data.strip().lower(),
+            AIModelPricing.model == form.model.data.strip(),
+            AIModelPricing.event_type == form.event_type.data,
+            AIModelPricing.is_active.is_(True),
+        ).first()
+        if duplicate and form.is_active.data:
+            form.model.errors.append("Ya existe otro pricing activo para esta combinacion.")
+        elif form.effective_to.data and form.effective_to.data < form.effective_from.data:
+            form.effective_to.errors.append("La fecha final no puede ser anterior a la inicial.")
+        else:
+            pricing.provider = form.provider.data.strip().lower()
+            pricing.model = form.model.data.strip()
+            pricing.event_type = form.event_type.data
+            pricing.input_cost_per_million_usd = _as_float(form.input_cost_per_million_usd.data)
+            pricing.output_cost_per_million_usd = _as_float(form.output_cost_per_million_usd.data)
+            pricing.cache_write_cost_per_million_usd = _as_float(form.cache_write_cost_per_million_usd.data)
+            pricing.cache_read_cost_per_million_usd = _as_float(form.cache_read_cost_per_million_usd.data)
+            pricing.effective_from = _date_start(form.effective_from.data)
+            pricing.effective_to = _date_end(form.effective_to.data)
+            pricing.is_active = form.is_active.data
+            db.session.commit()
+            flash("Pricing actualizado.", "success")
+            return redirect(url_for('ai_config.index', tab='pricing'))
+
+    return render_template(
+        'admin/ai_config/pricing_form.html',
+        form=form,
+        title=f'Editar pricing: {pricing.model}',
+    )
+
+
+@bp.route('/pricing/<int:pricing_id>/toggle', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def pricing_toggle(pricing_id):
+    """Activate or deactivate model pricing."""
+    pricing = AIModelPricing.query.get_or_404(pricing_id)
+    if not pricing.is_active:
+        duplicate = AIModelPricing.query.filter(
+            AIModelPricing.id != pricing.id,
+            AIModelPricing.provider == pricing.provider,
+            AIModelPricing.model == pricing.model,
+            AIModelPricing.event_type == pricing.event_type,
+            AIModelPricing.is_active.is_(True),
+        ).first()
+        if duplicate:
+            flash("Ya existe otro pricing activo para esta combinacion.", "danger")
+            return redirect(url_for('ai_config.index', tab='pricing'))
+
+    pricing.is_active = not pricing.is_active
+    db.session.commit()
+    flash("Estado del pricing actualizado.", "success")
+    return redirect(url_for('ai_config.index', tab='pricing'))
