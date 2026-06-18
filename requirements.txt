@@ -14,7 +14,9 @@ geoip2>=4.7
 PyJWT>=2.7.0
 APScheduler>=3.10
 anthropic>=0.40.0
+langfuse
 mcp>=1.0.0
 msal>=1.30.0
+opentelemetry-instrumentation-anthropic
 voyageai
 pgvector

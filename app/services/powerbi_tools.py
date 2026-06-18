@@ -1,8 +1,8 @@
 """Native Power BI helpers for the chat flow."""
 import json
 import logging
-import os
 from collections import defaultdict
+import os
 from typing import Any, Dict, List
 
 import msal

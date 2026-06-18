@@ -507,7 +507,7 @@
             margin-top: 3px; line-height: 1;
         }
         .klara-msg.user .klara-msg-time { text-align: right; }
-        .klara-msg.bot  .klara-msg-time { text-align: left; }
+        .klara-msg.bot .klara-msg-time { text-align: left; }
 
         /* Date separator between days */
         .klara-date-sep {
@@ -1065,34 +1065,35 @@
             var counter  = document.getElementById("klara-sidebar-counter");
             var suggestions = document.querySelectorAll(".klara-sidebar-suggestion");
             var isExpanded = false, isTyping = false, klaraSessionId = null;
-            var lastMsgDate = null, _thinkingEl = null, _thinkingTimers = [];
+            var lastMsgDate = null, thinkingEl = null, thinkingTimers = [];
 
-            /* ── Date/time helpers ── */
-            function _fmt2(n) { return String(n).padStart(2, '0'); }
+            function fmt2(n) {
+                return String(n).padStart(2, "0");
+            }
 
             function formatTime(date) {
-                return _fmt2(date.getHours()) + ':' + _fmt2(date.getMinutes());
+                return fmt2(date.getHours()) + ":" + fmt2(date.getMinutes());
             }
 
             function formatDateSep(date) {
                 var now = new Date();
                 var diffDays = Math.floor((now - date) / 86400000);
                 if (diffDays < 7) {
-                    var days = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+                    var days = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
                     return days[date.getDay()];
                 }
-                return _fmt2(date.getDate()) + '/' + _fmt2(date.getMonth() + 1) + '/' + date.getFullYear();
+                return fmt2(date.getDate()) + "/" + fmt2(date.getMonth() + 1) + "/" + date.getFullYear();
             }
 
             function isSameDay(d1, d2) {
                 return d1.getFullYear() === d2.getFullYear() &&
-                       d1.getMonth()    === d2.getMonth()    &&
-                       d1.getDate()     === d2.getDate();
+                       d1.getMonth() === d2.getMonth() &&
+                       d1.getDate() === d2.getDate();
             }
 
             function insertDateSep(date) {
-                var sep = document.createElement('div');
-                sep.className = 'klara-date-sep';
+                var sep = document.createElement("div");
+                sep.className = "klara-date-sep";
                 sep.textContent = formatDateSep(date);
                 messages.appendChild(sep);
             }
@@ -1146,7 +1147,7 @@
 
                 var wrapper = document.createElement("div");
                 var bubble  = document.createElement("div");
-                var time    = document.createElement("span");
+                var time = document.createElement("span");
                 wrapper.className = "klara-msg " + type;
                 bubble.className  = "klara-bubble";
                 bubble.innerHTML  = sanitize(text).replace(/\n/g, "<br>");
@@ -1164,9 +1165,9 @@
                 messages.scrollTop = messages.scrollHeight;
             }
 
-            var _thinkingSteps = [
-                { delay: 3000,  text: "Estoy analizando los datos..." },
-                { delay: 8000,  text: "Ahora estoy preparando la respuesta..." },
+            var thinkingSteps = [
+                { delay: 3000, text: "Estoy analizando los datos..." },
+                { delay: 8000, text: "Ahora estoy preparando la respuesta..." },
                 { delay: 16000, text: "Ya casi está..." }
             ];
 
@@ -1177,24 +1178,27 @@
                 el.innerHTML = "<span></span><span></span><span></span>";
                 messages.appendChild(el);
                 messages.scrollTop = messages.scrollHeight;
-                _thinkingEl = el;
+                thinkingEl = el;
 
-                _thinkingSteps.forEach(function(step) {
-                    var t = setTimeout(function() {
-                        if (!_thinkingEl) return;
-                        _thinkingEl.className = "klara-thinking-text";
-                        _thinkingEl.textContent = step.text;
+                thinkingSteps.forEach(function(step) {
+                    var timer = setTimeout(function() {
+                        if (!thinkingEl) return;
+                        thinkingEl.className = "klara-thinking-text";
+                        thinkingEl.textContent = step.text;
                         messages.scrollTop = messages.scrollHeight;
                     }, step.delay);
-                    _thinkingTimers.push(t);
+                    thinkingTimers.push(timer);
                 });
             }
 
             function hideThinking() {
                 isTyping = false; sendBtn.disabled = false;
-                _thinkingTimers.forEach(clearTimeout);
-                _thinkingTimers = [];
-                if (_thinkingEl) { _thinkingEl.remove(); _thinkingEl = null; }
+                thinkingTimers.forEach(clearTimeout);
+                thinkingTimers = [];
+                if (thinkingEl) {
+                    thinkingEl.remove();
+                    thinkingEl = null;
+                }
             }
 
             async function sendQuestion(pregunta) {

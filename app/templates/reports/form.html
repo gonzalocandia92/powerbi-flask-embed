@@ -105,6 +105,22 @@
 
                 <hr class="my-3">
 
+                <div class="mb-3">
+                  {{ form.empresa_facturadora_id.label(class="form-label") }}
+                  {{ form.empresa_facturadora_id(class="form-select" + (" is-invalid" if form.empresa_facturadora_id.errors else "")) }}
+                  {% if form.empresa_facturadora_id.errors %}
+                    <div class="invalid-feedback">
+                      {% for error in form.empresa_facturadora_id.errors %}{{ error }}{% endfor %}
+                    </div>
+                  {% endif %}
+                  <div class="form-text">
+                    Define a que limite se imputa el consumo de KLARA y embeddings.
+                    Si se deja en Default global y el reporte tiene una sola empresa asociada, se usara esa empresa automaticamente.
+                  </div>
+                </div>
+
+                <hr class="my-3">
+
                 <div class="form-check mb-3">
                   {{ form.filter_enabled(class="form-check-input") }}
                   {{ form.filter_enabled.label(class="form-check-label") }}

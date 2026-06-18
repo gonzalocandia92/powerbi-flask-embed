@@ -106,9 +106,10 @@ def new():
     form = ReportForm()
     form.workspace.choices = [(w.id, f"{w.name} ({w.workspace_id[:8]}...)") for w in Workspace.query.order_by(Workspace.name).all()]
     form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]
-    form.empresas.choices = [
-        (e.id, e.nombre) for e in Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
-    ]
+    active_companies = Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
+    company_choices = [(e.id, e.nombre) for e in active_companies]
+    form.empresas.choices = company_choices
+    form.empresa_facturadora_id.choices = [(0, "Default global")] + company_choices
     
     if form.validate_on_submit():
         es_publico = form.es_publico.data
@@ -126,6 +127,9 @@ def new():
             usuario_pbi_id=form.usuario_pbi.data,
             es_publico=es_publico,
             es_privado=es_privado,
+            chatbot_enabled=form.chatbot_enabled.data,
+            show_dax_query=form.show_dax_query.data,
+            empresa_facturadora_id=form.empresa_facturadora_id.data or None,
             filter_enabled=form.filter_enabled.data,
             filter_table=form.filter_table.data or None,
             filter_column=form.filter_column.data or None,
@@ -148,14 +152,15 @@ def edit(report_id):
     form = ReportForm(obj=report)
     form.workspace.choices = [(w.id, f"{w.name} ({w.workspace_id[:8]}...)") for w in Workspace.query.order_by(Workspace.name).all()]
     form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]
-    form.empresas.choices = [
-        (e.id, e.nombre) for e in Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
-    ]
     all_empresas = Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
+    company_choices = [(e.id, e.nombre) for e in all_empresas]
+    form.empresas.choices = company_choices
+    form.empresa_facturadora_id.choices = [(0, "Default global")] + company_choices
     
     if request.method == 'GET':
         form.workspace.data = report.workspace_id_fk
         form.usuario_pbi.data = report.usuario_pbi_id
+        form.empresa_facturadora_id.data = report.empresa_facturadora_id or 0
     
     if request.method == 'POST':
         if not form.validate_on_submit():
@@ -179,6 +184,7 @@ def edit(report_id):
         report.es_privado = es_privado
         report.chatbot_enabled = form.chatbot_enabled.data
         report.show_dax_query = form.show_dax_query.data
+        report.empresa_facturadora_id = form.empresa_facturadora_id.data or None
         report.filter_enabled = form.filter_enabled.data
         report.filter_table = form.filter_table.data or None
         report.filter_column = form.filter_column.data or None
