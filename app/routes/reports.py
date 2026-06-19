@@ -18,7 +18,7 @@ from app.forms import (
 )
 from app.services.vector_service import trigger_schema_embedding_update
 from app.utils.decorators import retry_on_db_error
-from app.utils.powerbi import get_embed_for_report, refresh_dataset
+from app.utils.powerbi import get_current_dataset_id, get_embed_for_report, refresh_dataset
 
 bp = Blueprint('reports', __name__, url_prefix='/reports')
 
@@ -56,14 +56,21 @@ def _get_latest_successful_dataset_id(report_id):
 
 
 def _queue_embeddings_if_available(report):
-    """Trigger background embeddings when a completed dataset refresh exists."""
+    """Trigger background embeddings using a known or freshly resolved dataset."""
     dataset_id = _get_latest_successful_dataset_id(report.id)
     if not dataset_id:
-        flash(
-            "Chatbot habilitado, pero aun no hay un refresh completado para generar embeddings.",
-            "warning",
-        )
-        return
+        try:
+            dataset_id = get_current_dataset_id(report)
+        except Exception:
+            logging.exception(
+                "Could not resolve dataset_id for report %s while enabling chatbot",
+                report.id,
+            )
+            flash(
+                "Chatbot habilitado, pero no se pudo resolver el dataset para generar embeddings.",
+                "warning",
+            )
+            return
 
     trigger_schema_embedding_update(report.id, dataset_id)
     flash(
