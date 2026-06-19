@@ -515,10 +515,9 @@ def _build_system_prompt(schema_text: str) -> List[Dict[str, Any]]:
                 "- 9.!CRITICO! PROTECCIÓN DE VOLUMEN (TOPN): Si la consulta agrupa por dimensiones descriptivas (ej. productos, clientes, sucursales), ESTÁS OBLIGADO a envolver SUMMARIZECOLUMNS con la función TOPN para devolver un máximo de 15 resultados, a menos que el usuario pida un número distinto.\n"
                 "  Ejemplo de sintaxis estricta: EVALUATE TOPN(15, SUMMARIZECOLUMNS('Tabla'[Dimension], \"Metrica\", [Medida Existente]), [Metrica], DESC)\n"
                 "- 10. FORMATO DE RESPUESTA: Responde en español y sé preciso. Nunca uses markdown (asteriscos, almohadillas, guiones bajos) en tu respuesta final.\n"
-                "- 11. MANEJO DE ERRORES Y SEGURIDAD (CRÍTICO): Si ocurre cualquier tipo de fallo técnico (ej. error al ejecutar la consulta DAX, imposibilidad de recuperar el dataset_id o errores de conexión), "
-                "tu respuesta al usuario debe ser extremadamente corta, concisa y en un tono de disculpa genérico. "
-                "ESTÁ ESTRICTAMENTE PROHIBIDO exponer en el mensaje de error cualquier detalle interno del modelo o la arquitectura. "
-                "Nunca menciones el 'dataset_id', el 'workspace_id', el código DAX generado, ni reveles nombres de tablas, columnas o medidas."
+                "- 11. AUTOCORRECCIÓN DAX (CRÍTICO): Si recibes un error al ejecutar una consulta DAX (ej. '400 Client Error', error de sintaxis, o columna no encontrada), ESTÁS OBLIGADO a analizar el error, revisar el esquema disponible en tu contexto, corregir la consulta DAX y volver a intentarlo usando la herramienta execute_dax_query. Puedes intentar corregir la consulta hasta 3 veces antes de rendirte."
+                "- 12. MANEJO DE ERRORES IRRECUPERABLES Y SEGURIDAD: Si ocurre un fallo técnico irrecuperable (ej. 'No se encontró el Dataset ID', errores de autenticación, o si fallas 3 veces seguidas al corregir un DAX), tu respuesta al usuario debe ser extremadamente corta, concisa y en un tono de disculpa genérico (ej. 'Disculpa, me encontré con un inconveniente técnico al procesar los datos. Por favor, intenta nuevamente más tarde.'). ESTÁ ESTRICTAMENTE PROHIBIDO exponer el 'dataset_id', el 'workspace_id', el código DAX generado, o el mensaje de error interno (stack trace) al usuario."
+                "- 13. ANTI-ALUCINACIÓN DE COLUMNAS: Antes de usar funciones iteradoras (como SUMX o AVERAGEX), verifica ESTRICTAMENTE que los nombres de las columnas que vas a usar existan exactamente así en el 'Contexto del modelo semántico actual'. Si la columna no está en tu contexto, usa la herramienta get_schema_context para buscarla antes de adivinar su nombre."
                 f"{temporal_context_line}"
             ),
         },
