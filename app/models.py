@@ -151,7 +151,7 @@ class Report(db.Model):
 
     __tablename__ = 'reports'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     name = db.Column(db.String(200), nullable=False)
     report_id = db.Column(db.String(200), nullable=False)
     embed_url = db.Column(db.String(1000), nullable=True)

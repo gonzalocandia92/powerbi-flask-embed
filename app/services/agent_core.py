@@ -34,6 +34,11 @@ DEFAULT_PROMPT_CACHING_ENABLED = True
 DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS = 20
 VOYAGE_QUERY_EMBEDDING_MODEL = "voyage-4"
 VOYAGE_QUERY_EMBEDDING_COST_PER_MILLION_USD = 0.06
+SAFE_TECHNICAL_ERROR_ANSWER = (
+    "Disculpa, me encontre con un inconveniente tecnico al procesar los datos. "
+    "Por favor, intenta nuevamente mas tarde."
+)
+DAX_ERROR_ATTEMPT_LIMIT = 3
 
 DATE_TABLE_GUIDANCE = (
     '"Date": ["Date (Date)", "Anio (Integer)", "Mes (Integer)", "Day (Integer)", '
@@ -147,6 +152,18 @@ def _append_ai_usage_event(events: Optional[List[Dict[str, Any]]], **payload: An
     if events is None:
         return
     events.append(payload)
+
+
+def _tool_output_is_error(output: Any) -> bool:
+    text = str(output or "").strip().lower()
+    if not text:
+        return False
+    return (
+        text.startswith("error:")
+        or text.startswith("error tecnico")
+        or text.startswith("error interno")
+        or text.startswith("error obteniendo")
+    )
 
 
 @dataclass
@@ -863,16 +880,26 @@ class AgentOrchestrator:
             debug_enabled=settings_debug_enabled,
         )
 
+        initial_failure_reason: Optional[str] = None
+        initial_error_message: Optional[str] = None
         if not schema_text:
             # We call the tool directly to ensure only one rewrite happens.
             # execute_tool will handle the rewrite if question_is_rewritten is not passed.
-            fetched_schema_text = await self.tool_registry.execute_tool(
-                "get_schema_context",
-                {"question": user_message}, # No question_is_rewritten passed -> execute_tool will rewrite it
-                context,
-            )
+            try:
+                fetched_schema_text = await self.tool_registry.execute_tool(
+                    "get_schema_context",
+                    {"question": user_message}, # No question_is_rewritten passed -> execute_tool will rewrite it
+                    context,
+                )
+            except Exception:
+                fetched_schema_text = ""
+                initial_failure_reason = "semantic_model_unavailable"
+                initial_error_message = "Semantic model context could not be retrieved"
             if fetched_schema_text:
                 schema_text = fetched_schema_text
+            if _tool_output_is_error(fetched_schema_text):
+                initial_failure_reason = "semantic_model_unavailable"
+                initial_error_message = "Semantic model context could not be retrieved"
 
         system_prompt = self.prompt_manager.get_system_prompt(schema_text)
         tools: Any = self.tool_registry.get_all_tools()
@@ -896,10 +923,43 @@ class AgentOrchestrator:
         tool_rounds = 0
         tools_called: List[Dict[str, Any]] = []
         dax_query_used: Optional[str] = None
+        dax_error_attempts = 0
+        had_error = False
+        error_message: Optional[str] = None
+        failure_reason: Optional[str] = None
         usage_totals = cast(Dict[str, int], context["usage_totals"])
         ai_usage_events = cast(List[Dict[str, Any]], context["ai_usage_events"])
         messages = cast(Any, turn_history)
         system_payload = cast(Any, system_prompt)
+
+        def mark_functional_failure(reason: str, message: str) -> None:
+            nonlocal had_error, error_message, failure_reason
+            had_error = True
+            if error_message is None:
+                error_message = message
+            if failure_reason is None:
+                failure_reason = reason
+
+        def build_turn_result(answer: str) -> Dict[str, Any]:
+            return {
+                "answer": answer,
+                "conversation_id": conv_id,
+                "report_id": report_id,
+                "tool_rounds": tool_rounds,
+                "input_tokens": usage_totals["input_tokens"],
+                "output_tokens": usage_totals["output_tokens"],
+                "model": self.settings.anthropic_model,
+                "mcp_used": bool(tools_called),
+                "tools_called": tools_called,
+                "dax_query": dax_query_used,
+                "ai_usage_events": ai_usage_events,
+                "had_error": had_error,
+                "error_message": error_message,
+                "failure_reason": failure_reason,
+            }
+
+        if initial_failure_reason and initial_error_message:
+            mark_functional_failure(initial_failure_reason, initial_error_message)
 
         async with AsyncAnthropic(api_key=self.settings.anthropic_api_key) as client:
             anthropic_messages = client.messages
@@ -978,19 +1038,7 @@ class AgentOrchestrator:
                         },
                         enabled=settings_debug_enabled,
                     )
-                    return {
-                        "answer": answer,
-                        "conversation_id": conv_id,
-                        "report_id": report_id,
-                        "tool_rounds": tool_rounds,
-                        "input_tokens": usage_totals["input_tokens"],
-                        "output_tokens": usage_totals["output_tokens"],
-                        "model": self.settings.anthropic_model,
-                        "mcp_used": bool(tools_called),
-                        "tools_called": tools_called,
-                        "dax_query": dax_query_used,
-                        "ai_usage_events": ai_usage_events,
-                    }
+                    return build_turn_result(answer)
 
                 tool_result_blocks: List[Dict[str, Any]] = []
                 for tool_use in tool_uses:
@@ -1008,7 +1056,8 @@ class AgentOrchestrator:
 
                         tool_rounds += 1
                         if tool_rounds > self.settings.max_tool_rounds:
-                            raise RuntimeError("Maximum tool round limit reached")
+                            mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
+                            return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
                         _debug_print(
                             "tool:get_schema_context:tool_request",
@@ -1020,11 +1069,23 @@ class AgentOrchestrator:
                             },
                             enabled=settings_debug_enabled,
                         )
-                        tool_output = await self.tool_registry.execute_tool(
-                            tool_name,
-                            {"question": str(raw_question)},
-                            context,
-                        )
+                        try:
+                            tool_output = await self.tool_registry.execute_tool(
+                                tool_name,
+                                {"question": str(raw_question)},
+                                context,
+                            )
+                        except Exception:
+                            tool_output = "Error obteniendo el esquema del modelo semantico."
+                            mark_functional_failure(
+                                "semantic_model_unavailable",
+                                "Semantic model context could not be retrieved",
+                            )
+                        if _tool_output_is_error(tool_output):
+                            mark_functional_failure(
+                                "semantic_model_unavailable",
+                                "Semantic model context could not be retrieved",
+                            )
                         _debug_print(
                             "tool:get_schema_context:tool_response",
                             {
@@ -1043,6 +1104,8 @@ class AgentOrchestrator:
 
                     dax_query = tool_input.get("dax_query")
                     if not dax_query or not str(dax_query).strip():
+                        dax_error_attempts += 1
+                        mark_functional_failure("dax_query_empty", "DAX query was empty")
                         tool_result_blocks.append(
                             {
                                 "type": "tool_result",
@@ -1050,11 +1113,14 @@ class AgentOrchestrator:
                                 "content": "Error interno: El dax_query llegó vacío. Probablemente te quedaste sin tokens o la sintaxis JSON falló. Por favor, sé más conciso.",
                             }
                         )
+                        if dax_error_attempts >= DAX_ERROR_ATTEMPT_LIMIT:
+                            return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
                         continue
 
                     tool_rounds += 1
                     if tool_rounds > self.settings.max_tool_rounds:
-                        raise RuntimeError("Maximum tool round limit reached")
+                        mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
+                        return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
                     if dax_query_used is None:
                         dax_query_used = str(dax_query)
@@ -1074,6 +1140,9 @@ class AgentOrchestrator:
                         {"dax_query": str(dax_query)},
                         context,
                     )
+                    if _tool_output_is_error(tool_output):
+                        dax_error_attempts += 1
+                        mark_functional_failure("dax_generation_failed", "DAX query execution failed")
                     _debug_print(
                         "tool:execute_dax_query:response",
                         {
@@ -1085,6 +1154,8 @@ class AgentOrchestrator:
                     tool_result_blocks.append(
                         {"type": "tool_result", "tool_use_id": tool_use["id"], "content": tool_output}
                     )
+                    if dax_error_attempts >= DAX_ERROR_ATTEMPT_LIMIT:
+                        return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
                 turn_history.append({"role": "user", "content": tool_result_blocks})
                 _debug_print("anthropic:tool_results:appended", turn_history, enabled=settings_debug_enabled)
