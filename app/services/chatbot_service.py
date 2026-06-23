@@ -220,6 +220,7 @@ def _persist_success_sync(
     if session is None:
         raise ChatbotServiceError(f"Chat session not found: {session_id}")
 
+    had_error = bool(result.get("had_error"))
     assistant_message = ChatMessage(
         session_id=session.id,
         role="assistant",
@@ -232,7 +233,8 @@ def _persist_success_sync(
         mcp_used=bool(result.get("tools_called")),
         tools_called=result.get("tools_called") or None,
         dax_query=result.get("dax_query"),
-        had_error=False,
+        had_error=had_error,
+        error_message=result.get("error_message") if had_error else None,
     )
     _prepare_sqlite_id(assistant_message, ChatMessage)
     db.session.add(assistant_message)
@@ -256,7 +258,7 @@ def _persist_success_sync(
 
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
-    session.had_errors = bool(session.had_errors)
+    session.had_errors = bool(session.had_errors or had_error)
 
     db.session.commit()
 
@@ -272,6 +274,9 @@ def _persist_success_sync(
         "mcp_used": bool(result.get("tools_called")),
         "tools_called": result.get("tools_called") or [],
         "dax_query": result.get("dax_query"),
+        "had_error": had_error,
+        "error_message": result.get("error_message") if had_error else None,
+        "failure_reason": result.get("failure_reason") if had_error else None,
         "total_cost_usd": assistant_message.total_cost_usd or 0.0,
     }
 

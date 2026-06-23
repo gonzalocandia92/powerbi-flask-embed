@@ -61,6 +61,38 @@ def _queue_embeddings_if_available(report):
     if not dataset_id:
         try:
             dataset_id = get_current_dataset_id(report)
+        except KeyError:
+            logging.exception(
+                "Power BI report response did not include datasetId for report %s",
+                report.id,
+            )
+            flash(
+                "Chatbot habilitado, pero Power BI no devolvio el dataset del reporte.",
+                "warning",
+            )
+            return False
+        except _requests_lib.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code in (401, 403):
+                message = (
+                    "Chatbot habilitado, pero el usuario Power BI no tiene permisos "
+                    "para leer el reporte/dataset."
+                )
+            elif status_code == 404:
+                message = (
+                    "Chatbot habilitado, pero no se encontro el reporte o dataset en Power BI."
+                )
+            else:
+                message = (
+                    "Chatbot habilitado, pero Power BI devolvio un error al resolver el dataset."
+                )
+            logging.exception(
+                "Power BI dataset resolution failed for report %s with status %s",
+                report.id,
+                status_code,
+            )
+            flash(message, "warning")
+            return False
         except Exception:
             logging.exception(
                 "Could not resolve dataset_id for report %s while enabling chatbot",
@@ -70,13 +102,26 @@ def _queue_embeddings_if_available(report):
                 "Chatbot habilitado, pero no se pudo resolver el dataset para generar embeddings.",
                 "warning",
             )
-            return
+            return False
 
-    trigger_schema_embedding_update(report.id, dataset_id)
+    try:
+        trigger_schema_embedding_update(report.id, dataset_id)
+    except Exception:
+        logging.exception(
+            "Could not queue schema embeddings for report %s dataset %s",
+            report.id,
+            dataset_id,
+        )
+        flash(
+            "Chatbot habilitado, pero no se pudo iniciar la generacion de embeddings.",
+            "warning",
+        )
+        return False
     flash(
         "Se inicio la generacion de embeddings del esquema en segundo plano.",
         "info",
     )
+    return True
 
 
 @bp.route('/')
@@ -143,6 +188,8 @@ def new():
         )
         db.session.add(report)
         db.session.commit()
+        if report.chatbot_enabled:
+            _queue_embeddings_if_available(report)
         
         flash("Report creado", "success")
         return redirect(url_for('reports.detail', report_id=report.id))
