@@ -8,6 +8,20 @@ import requests
 
 LOG = logging.getLogger(__name__)
 POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
+MAX_DAX_RESULT_ROWS_FOR_LLM = 30
+MAX_POWERBI_ERROR_BODY_CHARS = 3_000
+
+
+def _preview_response_body(response: requests.Response) -> str:
+    body = (response.text or "").strip()
+    if len(body) <= MAX_POWERBI_ERROR_BODY_CHARS:
+        return body
+
+    omitted_chars = len(body) - MAX_POWERBI_ERROR_BODY_CHARS
+    return (
+        f"{body[:MAX_POWERBI_ERROR_BODY_CHARS]}\n"
+        f"[Power BI error body truncado: se omitieron {omitted_chars} caracteres.]"
+    )
 
 
 def _get_access_token(credentials: Dict[str, str]) -> str:
@@ -150,6 +164,17 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
                 "Verifica que exista y que el usuario Power BI del reporte tenga acceso."
             )
 
+        if not response.ok:
+            body_preview = _preview_response_body(response)
+            LOG.error(
+                "Power BI executeQueries failed - status=%s reason=%s body=%r",
+                response.status_code,
+                response.reason,
+                body_preview,
+            )
+            detail = f" Body: {body_preview}" if body_preview else ""
+            return f"Error tecnico ejecutando DAX: Power BI {response.status_code} {response.reason}.{detail}"
+
         response.raise_for_status()
         data = response.json()
 
@@ -157,6 +182,21 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
         for result in data.get("results", []):
             for table in result.get("tables", []):
                 rows.extend(table.get("rows", []))
+
+        if len(rows) > MAX_DAX_RESULT_ROWS_FOR_LLM:
+            truncated_rows = rows[:MAX_DAX_RESULT_ROWS_FOR_LLM]
+            truncated_payload = {
+                "warning": (
+                    f"La consulta devolvio {len(rows)} filas. "
+                    f"Mostrando solo las primeras {MAX_DAX_RESULT_ROWS_FOR_LLM}. "
+                    "Agrega filtros o TOPN en DAX si necesitas un resultado mas acotado."
+                ),
+                "truncated": True,
+                "total_rows": len(rows),
+                "returned_rows": len(truncated_rows),
+                "rows": truncated_rows,
+            }
+            return json.dumps(truncated_payload, ensure_ascii=False)
 
         return json.dumps(rows, ensure_ascii=False)
     except Exception as exc:

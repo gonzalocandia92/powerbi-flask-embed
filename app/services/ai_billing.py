@@ -45,6 +45,21 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _using_sqlite() -> bool:
+    bind = db.session.get_bind()
+    return bool(bind and bind.dialect.name == "sqlite")
+
+
+def _next_integer_id(model) -> int:
+    current_max = db.session.query(func.max(model.id)).scalar()
+    return int(current_max or 0) + 1
+
+
+def _prepare_sqlite_id(instance, model) -> None:
+    if _using_sqlite() and getattr(instance, "id", None) is None:
+        setattr(instance, "id", _next_integer_id(model))
+
+
 def _days_in_month(year: int, month: int) -> int:
     return int(calendar.monthrange(year, month)[1])
 
@@ -367,6 +382,7 @@ def record_ai_usage_event(
         observation_id=observation_id,
         metadata_json=metadata_json or None,
     )
+    _prepare_sqlite_id(event, AIUsageEvent)
     db.session.add(event)
     db.session.flush()
     return event

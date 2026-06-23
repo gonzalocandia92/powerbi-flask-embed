@@ -12,7 +12,7 @@ Contract:
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from app import db
 from app.models import ChatMessage, ChatSession
@@ -94,6 +94,9 @@ def test_agent_log():
     Úsalo para verificar que las tablas de log capturan todos los campos correctamente.
     ELIMINA este endpoint antes de ir a producción.
     """
+    if not current_app.config.get("TESTING"):
+        return jsonify({"error": "Not available"}), 404
+
     slug = request.get_json(silent=True, force=True) or {}
     slug = slug.get("slug", "test-slug")
     tools_called = [

@@ -25,6 +25,21 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _using_sqlite() -> bool:
+    bind = db.session.get_bind()
+    return bool(bind and bind.dialect.name == "sqlite")
+
+
+def _next_integer_id(model) -> int:
+    current_max = db.session.query(db.func.max(model.id)).scalar()
+    return int(current_max or 0) + 1
+
+
+def _prepare_sqlite_id(instance, model) -> None:
+    if _using_sqlite() and getattr(instance, "id", None) is None:
+        setattr(instance, "id", _next_integer_id(model))
+
+
 def _get_voyage_client():
     api_key = os.getenv("VOYAGE_API_KEY")
     if not api_key:
@@ -62,6 +77,11 @@ def _normalize_chunks(raw_chunks: List[Dict[str, Any]]) -> List[Dict[str, str]]:
             }
         )
     return normalized
+
+
+def _estimate_voyage_tokens(texts: List[str]) -> int:
+    combined = "".join(texts)
+    return max(1, len(combined) // 5)
 
 
 def _build_powerbi_credentials(report: Report) -> Dict[str, str]:
@@ -232,11 +252,43 @@ def _run_embedding_pipeline(report_id: int, dataset_id: str) -> None:
                         },
                     )
 
-                response = voyage_client.embed(
-                    texts=texts,
-                    model=VOYAGE_MODEL,
-                    input_type="document",
-                )
+                try:
+                    response = voyage_client.embed(
+                        texts=texts,
+                        model=VOYAGE_MODEL,
+                        input_type="document",
+                    )
+                except Exception as exc:
+                    estimated_input_tokens = _estimate_voyage_tokens(texts)
+                    ai_billing.record_ai_usage_event(
+                        report=report,
+                        provider="voyageai",
+                        model=VOYAGE_MODEL,
+                        event_type="embedding",
+                        source_type="schema_indexing",
+                        trigger_type="background_pipeline",
+                        operation_name="voyage-document-embedding",
+                        status="error",
+                        input_tokens=estimated_input_tokens,
+                        output_tokens=0,
+                        total_tokens=estimated_input_tokens,
+                        metadata_json={
+                            "input_type": "document",
+                            "batch_index": batch_index,
+                            "chunk_count": len(texts),
+                            "dataset_hash": hash_identifier(dataset_id, prefix="dataset"),
+                            "estimated_usage": True,
+                            "error_type": "voyage_provider_error",
+                        },
+                    )
+                    db.session.commit()
+                    LOG.exception(
+                        "[VectorPipeline] Voyage embedding failed after request construction for report_id=%s dataset_id=%s batch=%s. Cost was persisted as estimated usage.",
+                        report_id,
+                        dataset_id,
+                        batch_index,
+                    )
+                    raise exc
                 embeddings = list(response.embeddings)
                 total_tokens = getattr(response, "total_tokens", None)
                 if embedding_observation is not None:
@@ -279,17 +331,17 @@ def _run_embedding_pipeline(report_id: int, dataset_id: str) -> None:
 
             now = _utcnow()
             for item, embedding in zip(batch, embeddings):
-                all_rows.append(
-                    SchemaEmbedding(
-                        report_id_fk=report.id,
-                        dataset_id=dataset_id,
-                        item_type=item["item_type"],
-                        item_name=item["item_name"],
-                        content_text=item["content_text"],
-                        embedding=list(embedding),
-                        last_updated=now,
-                    )
+                row = SchemaEmbedding(
+                    report_id_fk=report.id,
+                    dataset_id=dataset_id,
+                    item_type=item["item_type"],
+                    item_name=item["item_name"],
+                    content_text=item["content_text"],
+                    embedding=list(embedding),
+                    last_updated=now,
                 )
+                _prepare_sqlite_id(row, SchemaEmbedding)
+                all_rows.append(row)
 
         try:
             deleted = SchemaEmbedding.query.filter_by(report_id_fk=report.id).delete(synchronize_session=False)
