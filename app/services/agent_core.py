@@ -1,4 +1,4 @@
-"""
+﻿"""
 Core agent orchestration for Power BI chat.
 
 This module contains the prompt manager, tool registry and async agent
@@ -27,13 +27,17 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_TOKENS = 4096
-DEFAULT_HISTORY_LIMIT = 10
+DEFAULT_HISTORY_LIMIT = 4
 DEFAULT_MAX_TOOL_ROUNDS = 10
 DEFAULT_DEBUG_ENABLED = True
 DEFAULT_PROMPT_CACHING_ENABLED = True
 DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS = 20
 VOYAGE_QUERY_EMBEDDING_MODEL = "voyage-4"
 VOYAGE_QUERY_EMBEDDING_COST_PER_MILLION_USD = 0.06
+ANTHROPIC_PROMPT_TOKEN_LIMIT = 200_000
+TOOL_ERROR_RESULT_MAX_CHARS = 3_000
+TOOL_ERROR_RESULT_HEAD_CHARS = 1_800
+TOOL_ERROR_RESULT_TAIL_CHARS = 800
 SAFE_TECHNICAL_ERROR_ANSWER = (
     "Disculpa, me encontre con un inconveniente tecnico al procesar los datos. "
     "Por favor, intenta nuevamente mas tarde."
@@ -154,6 +158,15 @@ def _append_ai_usage_event(events: Optional[List[Dict[str, Any]]], **payload: An
     events.append(payload)
 
 
+def _is_prompt_too_long_error(exc: Exception) -> bool:
+    text = str(exc or "").strip().lower()
+    return "prompt is too long" in text or "maximum" in text and "tokens" in text
+
+
+def _estimate_text_tokens(text: str, *, chars_per_token: int) -> int:
+    return max(1, len(text or "") // max(1, int(chars_per_token)))
+
+
 def _tool_output_is_error(output: Any) -> bool:
     text = str(output or "").strip().lower()
     if not text:
@@ -163,6 +176,22 @@ def _tool_output_is_error(output: Any) -> bool:
         or text.startswith("error tecnico")
         or text.startswith("error interno")
         or text.startswith("error obteniendo")
+    )
+
+
+def _compact_tool_result_for_model(output: Any) -> str:
+    text = str(output or "")
+    if not _tool_output_is_error(text) or len(text) <= TOOL_ERROR_RESULT_MAX_CHARS:
+        return text
+
+    omitted_chars = len(text) - TOOL_ERROR_RESULT_HEAD_CHARS - TOOL_ERROR_RESULT_TAIL_CHARS
+    if omitted_chars <= 0:
+        return text[:TOOL_ERROR_RESULT_MAX_CHARS]
+
+    return (
+        f"{text[:TOOL_ERROR_RESULT_HEAD_CHARS]}\n\n"
+        f"[Tool result compactado: se omitieron {omitted_chars} caracteres del error para controlar el contexto.]\n\n"
+        f"{text[-TOOL_ERROR_RESULT_TAIL_CHARS:]}"
     )
 
 
@@ -301,6 +330,33 @@ async def _rewrite_query_for_reranker(
                 return optimized_query or user_message
         except Exception as exc:
             logging.warning("The query rewriter failed. Using original query: %s", exc)
+            estimated_input_tokens = _estimate_text_tokens(
+                system_prompt + user_message,
+                chars_per_token=4,
+            )
+            _add_usage_totals(
+                usage_totals,
+                input_tokens=estimated_input_tokens,
+                output_tokens=0,
+            )
+            _append_ai_usage_event(
+                ai_usage_events,
+                provider="anthropic",
+                model="claude-haiku-4-5-20251001",
+                event_type="generation",
+                source_type="retrieval",
+                trigger_type="user_request",
+                operation_name="rewrite-query-for-reranker",
+                status="error",
+                input_tokens=estimated_input_tokens,
+                output_tokens=0,
+                total_tokens=estimated_input_tokens,
+                metadata_json={
+                    "component": "query_rewriter",
+                    "estimated_usage": True,
+                    "error_type": "anthropic_provider_error",
+                },
+            )
             if observation is not None:
                 observation.update(output={"error": observation_preview(repr(exc), max_length=500)})
             _debug_print("agent:rewriter:error", {"error": repr(exc)}, enabled=debug_enabled)
@@ -349,16 +405,43 @@ async def _fetch_schema_context(
                         },
                     )
 
-                embedding_response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        lambda: voyage_client.embed(
-                            [question],
-                            model=VOYAGE_QUERY_EMBEDDING_MODEL,
-                            input_type="query",
-                        )
-                    ),
-                    timeout=max(1, int(settings.schema_context_timeout_seconds)),
-                )
+                try:
+                    embedding_response = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            lambda: voyage_client.embed(
+                                [question],
+                                model=VOYAGE_QUERY_EMBEDDING_MODEL,
+                                input_type="query",
+                            )
+                        ),
+                        timeout=max(1, int(settings.schema_context_timeout_seconds)),
+                    )
+                except Exception as exc:
+                    estimated_input_tokens = _estimate_text_tokens(question, chars_per_token=5)
+                    _add_usage_totals(
+                        usage_totals,
+                        input_tokens=estimated_input_tokens,
+                        output_tokens=0,
+                    )
+                    _append_ai_usage_event(
+                        ai_usage_events,
+                        provider="voyageai",
+                        model=VOYAGE_QUERY_EMBEDDING_MODEL,
+                        event_type="embedding",
+                        source_type="retrieval",
+                        trigger_type="user_request",
+                        operation_name="voyage-query-embedding",
+                        status="error",
+                        input_tokens=estimated_input_tokens,
+                        output_tokens=0,
+                        total_tokens=estimated_input_tokens,
+                        metadata_json={
+                            "input_type": "query",
+                            "estimated_usage": True,
+                            "error_type": "voyage_provider_error",
+                        },
+                    )
+                    raise exc
                 query_vector = embedding_response.embeddings[0]
                 query_vector_list = list(query_vector)
                 total_tokens = getattr(embedding_response, "total_tokens", None)
@@ -527,14 +610,14 @@ def _build_system_prompt(schema_text: str) -> List[Dict[str, Any]]:
                 "  d. Texto: Usa CONTAINSSTRING() en lugar de LIKE.\n"
                 "  e. Concatenación: Usa '&', nunca '||'.\n"
                 "  f. Relaciones: Confía en las relaciones del modelo. Usa RELATED() si iteras, no intentes forzar JOINs manuales.\n"
-                "- 8. TABLAS Y EVOLUCIÓN: Si el usuario pide una evolución temporal, tendencias, o agrupaciones, NUNCA uses ADDCOLUMNS(SUMMARIZE(...)). Usa SIEMPRE la función SUMMARIZECOLUMNS.\n"
+                "- 8. TABLAS Y AGRUPACIONES: Prefiere usar SUMMARIZECOLUMNS para agrupaciones simples. SIN EMBARGO, si necesitas calcular expresiones complejas al vuelo (como Time Intelligence, crecimientos MoM o variaciones), ESTÁS AUTORIZADO a usar ADDCOLUMNS envolviendo la función SUMMARIZECOLUMNS o SUMMARIZE para evitar errores de sintaxis en cálculos iterativos.\n"
                 "  Ejemplo: EVALUATE SUMMARIZECOLUMNS('Date'[Anio], 'Date'[Mes], \"Filtro\", FILTER('Date', ...), \"Ticket ARS\", CALCULATE([Medida Existente])) ORDER BY 'Date'[Anio], 'Date'[Mes]\n"
                 "- 9.!CRITICO! PROTECCIÓN DE VOLUMEN (TOPN): Si la consulta agrupa por dimensiones descriptivas (ej. productos, clientes, sucursales), ESTÁS OBLIGADO a envolver SUMMARIZECOLUMNS con la función TOPN para devolver un máximo de 15 resultados, a menos que el usuario pida un número distinto.\n"
                 "  Ejemplo de sintaxis estricta: EVALUATE TOPN(15, SUMMARIZECOLUMNS('Tabla'[Dimension], \"Metrica\", [Medida Existente]), [Metrica], DESC)\n"
                 "- 10. FORMATO DE RESPUESTA: Responde en español y sé preciso. Nunca uses markdown (asteriscos, almohadillas, guiones bajos) en tu respuesta final.\n"
-                "- 11. AUTOCORRECCIÓN DAX (CRÍTICO): Si recibes un error al ejecutar una consulta DAX (ej. '400 Client Error', error de sintaxis, o columna no encontrada), ESTÁS OBLIGADO a analizar el error, revisar el esquema disponible en tu contexto, corregir la consulta DAX y volver a intentarlo usando la herramienta execute_dax_query. Puedes intentar corregir la consulta hasta 3 veces antes de rendirte."
-                "- 12. MANEJO DE ERRORES IRRECUPERABLES Y SEGURIDAD: Si ocurre un fallo técnico irrecuperable (ej. 'No se encontró el Dataset ID', errores de autenticación, o si fallas 3 veces seguidas al corregir un DAX), tu respuesta al usuario debe ser extremadamente corta, concisa y en un tono de disculpa genérico (ej. 'Disculpa, me encontré con un inconveniente técnico al procesar los datos. Por favor, intenta nuevamente más tarde.'). ESTÁ ESTRICTAMENTE PROHIBIDO exponer el 'dataset_id', el 'workspace_id', el código DAX generado, o el mensaje de error interno (stack trace) al usuario."
-                "- 13. ANTI-ALUCINACIÓN DE COLUMNAS: Antes de usar funciones iteradoras (como SUMX o AVERAGEX), verifica ESTRICTAMENTE que los nombres de las columnas que vas a usar existan exactamente así en el 'Contexto del modelo semántico actual'. Si la columna no está en tu contexto, usa la herramienta get_schema_context para buscarla antes de adivinar su nombre."
+                "- 11. AUTOCORRECCIÓN DAX (CRÍTICO): Si recibes un error al ejecutar una consulta DAX (ej. '400 Client Error', error de sintaxis, o columna no encontrada), ESTÁS OBLIGADO a analizar el error, revisar el esquema disponible en tu contexto, corregir la consulta DAX y volver a intentarlo usando la herramienta execute_dax_query. Puedes intentar corregir la consulta hasta 3 veces antes de rendirte.\n"
+                "- 12. MANEJO DE ERRORES IRRECUPERABLES Y SEGURIDAD: Si ocurre un fallo técnico irrecuperable (ej. 'No se encontró el Dataset ID', errores de autenticación, o si fallas 3 veces seguidas al corregir un DAX), tu respuesta al usuario debe ser extremadamente corta, concisa y en un tono de disculpa genérico (ej. 'Disculpa, me encontré con un inconveniente técnico al procesar los datos. Por favor, intenta nuevamente más tarde.'). ESTÁ ESTRICTAMENTE PROHIBIDO exponer el 'dataset_id', el 'workspace_id', el código DAX generado, o el mensaje de error interno (stack trace) al usuario.\n"
+                "- 13. ANTI-ALUCINACIÓN (CRÍTICO): NUNCA inventes o asumas el nombre de una tabla, columna o medida. Antes de escribir cualquier consulta DAX, verifica ESTRICTAMENTE que las tablas y columnas que vas a usar en SUMMARIZECOLUMNS, FILTER, RELATED o agregaciones (SUM, COUNT) existan textualmente en el 'Contexto del modelo semántico actual'. Si te falta la tabla de productos, fechas, o cualquier otra dimensión clave, ESTÁS OBLIGADO a usar primero la herramienta get_schema_context para descubrir sus nombres reales antes de invocar execute_dax_query.\n"
                 f"{temporal_context_line}"
             ),
         },
@@ -829,6 +912,46 @@ class AgentOrchestrator:
             )
             return max(1, len(texto_completo) // 4)
 
+    async def estimate_request_tokens_payload(
+        self,
+        *,
+        system_prompt: Any,
+        messages: List[Dict[str, Any]],
+        tools: Any,
+    ) -> int:
+        try:
+            from anthropic import AsyncAnthropic  # type: ignore
+        except ImportError as exc:  # pragma: no cover - dependency missing in test env
+            raise RuntimeError("El paquete 'anthropic' es requerido.") from exc
+
+        try:
+            async with AsyncAnthropic(api_key=self.settings.anthropic_api_key) as client:
+                anthropic_messages = client.messages
+                count_method = getattr(anthropic_messages, "count_tokens", None)
+                if count_method is None:
+                    raise AttributeError("AsyncAnthropic.messages.count_tokens no está disponible")
+
+                respuesta = await count_method(
+                    model=self.settings.anthropic_model,
+                    system=cast(Any, system_prompt),
+                    messages=messages,
+                    tools=tools,
+                )
+                input_tokens = getattr(respuesta, "input_tokens", None)
+                if input_tokens is None and isinstance(respuesta, dict):
+                    input_tokens = respuesta.get("input_tokens")
+                if input_tokens is None:
+                    raise RuntimeError("La respuesta de conteo no incluye input_tokens")
+                return int(cast(Any, input_tokens))
+        except Exception as exc:
+            logging.warning("Error al consultar API de tokens del payload actual, usando estimación local: %s", exc)
+            texto_completo = (
+                json.dumps(system_prompt, ensure_ascii=False, default=str)
+                + json.dumps(messages, ensure_ascii=False, default=str)
+                + json.dumps(tools, ensure_ascii=False, default=str)
+            )
+            return max(1, len(texto_completo) // 4)
+
     async def generate_response(
         self,
         *,
@@ -909,11 +1032,20 @@ class AgentOrchestrator:
             enabled=settings_debug_enabled,
         )
 
-        token_count = await self.estimate_tokens(
-            user_message=user_message,
-            history=history,
-            schema_text=schema_text,
-        )
+        try:
+            token_count = await self.estimate_tokens(
+                user_message=user_message,
+                history=history,
+                schema_text=schema_text,
+            )
+        except Exception as exc:
+            logging.warning("Falling back to local token estimate after token counting failure: %s", exc)
+            token_count = _estimate_text_tokens(
+                json.dumps(system_prompt, ensure_ascii=False, default=str)
+                + json.dumps(turn_history, ensure_ascii=False, default=str)
+                + json.dumps(tools, ensure_ascii=False, default=str),
+                chars_per_token=4,
+            )
         _debug_print(
             "anthropic:token_count",
             {"tokens": token_count, "conversation_id": conv_id, "report_id": report_id},
@@ -958,6 +1090,45 @@ class AgentOrchestrator:
                 "failure_reason": failure_reason,
             }
 
+        async def build_anthropic_error_result(
+            *,
+            reason: str,
+            exc: Exception,
+            operation_name: str = "chat-response",
+            preflight_blocked: bool = False,
+        ) -> Dict[str, Any]:
+            estimated_input_tokens = await self.estimate_request_tokens_payload(
+                system_prompt=system_payload,
+                messages=cast(List[Dict[str, Any]], messages),
+                tools=tools,
+            )
+            _add_usage_totals(
+                usage_totals,
+                input_tokens=estimated_input_tokens,
+                output_tokens=0,
+            )
+            _append_ai_usage_event(
+                ai_usage_events,
+                provider="anthropic",
+                model=self.settings.anthropic_model,
+                event_type="generation",
+                source_type="chat",
+                trigger_type="user_request",
+                operation_name=operation_name,
+                status="error",
+                input_tokens=estimated_input_tokens,
+                output_tokens=0,
+                total_tokens=estimated_input_tokens,
+                metadata_json={
+                    "tool_round": tool_rounds,
+                    "error_type": reason,
+                    "estimated_usage": True,
+                    "preflight_blocked": preflight_blocked,
+                },
+            )
+            mark_functional_failure(reason, str(exc))
+            return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+
         if initial_failure_reason and initial_error_message:
             mark_functional_failure(initial_failure_reason, initial_error_message)
 
@@ -977,13 +1148,55 @@ class AgentOrchestrator:
                     },
                     enabled=settings_debug_enabled,
                 )
-                response = await anthropic_messages.create(
-                    model=self.settings.anthropic_model,
-                    max_tokens=self.settings.anthropic_max_tokens,
-                    system=system_payload,
-                    messages=messages,
-                    tools=tools,
-                )
+                if tool_rounds > 0:
+                    estimated_input_tokens = await self.estimate_request_tokens_payload(
+                        system_prompt=system_payload,
+                        messages=cast(List[Dict[str, Any]], messages),
+                        tools=tools,
+                    )
+                    if estimated_input_tokens > ANTHROPIC_PROMPT_TOKEN_LIMIT:
+                        _debug_print(
+                            "anthropic:request:blocked",
+                            {
+                                "estimated_input_tokens": estimated_input_tokens,
+                                "tool_rounds": tool_rounds,
+                            },
+                            enabled=settings_debug_enabled,
+                        )
+                        return await build_anthropic_error_result(
+                            reason="anthropic_prompt_too_long",
+                            exc=RuntimeError(
+                                f"Prompt too long: {estimated_input_tokens} tokens > "
+                                f"{ANTHROPIC_PROMPT_TOKEN_LIMIT} maximum"
+                            ),
+                            preflight_blocked=True,
+                        )
+                try:
+                    response = await anthropic_messages.create(
+                        model=self.settings.anthropic_model,
+                        max_tokens=self.settings.anthropic_max_tokens,
+                        system=system_payload,
+                        messages=messages,
+                        tools=tools,
+                    )
+                except Exception as exc:
+                    if _is_prompt_too_long_error(exc):
+                        _debug_print(
+                            "anthropic:response:error",
+                            {
+                                "error": repr(exc),
+                                "tool_rounds": tool_rounds,
+                            },
+                            enabled=settings_debug_enabled,
+                        )
+                        return await build_anthropic_error_result(
+                            reason="anthropic_prompt_too_long",
+                            exc=exc,
+                        )
+                    return await build_anthropic_error_result(
+                        reason="anthropic_provider_error",
+                        exc=exc,
+                    )
 
                 usage = getattr(response, "usage", None)
                 usage_metrics = _anthropic_usage_metrics(usage)
@@ -1018,53 +1231,128 @@ class AgentOrchestrator:
                     enabled=settings_debug_enabled,
                 )
 
-                assistant_blocks = [_block_to_dict(block) for block in response.content]
-                _debug_print("anthropic:response:assistant_blocks", assistant_blocks, enabled=settings_debug_enabled)
-                turn_history.append({"role": "assistant", "content": assistant_blocks})
+                try:
+                    assistant_blocks = [_block_to_dict(block) for block in response.content]
+                    _debug_print("anthropic:response:assistant_blocks", assistant_blocks, enabled=settings_debug_enabled)
+                    turn_history.append({"role": "assistant", "content": assistant_blocks})
 
-                tool_uses = [block for block in assistant_blocks if block.get("type") == "tool_use"]
-                _debug_print("anthropic:response:tool_uses", tool_uses, enabled=settings_debug_enabled)
-                if not tool_uses:
-                    answer = _text_from_blocks(assistant_blocks)
-                    _debug_print(
-                        "anthropic:final",
-                        {
-                            "answer": answer,
-                            "conversation_id": conv_id,
-                            "report_id": report_id,
-                            "tool_rounds": tool_rounds,
-                            "token_count": token_count,
-                            "history": turn_history,
-                        },
-                        enabled=settings_debug_enabled,
-                    )
-                    return build_turn_result(answer)
+                    tool_uses = [block for block in assistant_blocks if block.get("type") == "tool_use"]
+                    _debug_print("anthropic:response:tool_uses", tool_uses, enabled=settings_debug_enabled)
+                    if not tool_uses:
+                        answer = _text_from_blocks(assistant_blocks)
+                        _debug_print(
+                            "anthropic:final",
+                            {
+                                "answer": answer,
+                                "conversation_id": conv_id,
+                                "report_id": report_id,
+                                "tool_rounds": tool_rounds,
+                                "token_count": token_count,
+                                "history": turn_history,
+                            },
+                            enabled=settings_debug_enabled,
+                        )
+                        return build_turn_result(answer)
 
-                tool_result_blocks: List[Dict[str, Any]] = []
-                for tool_use in tool_uses:
-                    tool_name = tool_use.get("name")
-                    tool_input = tool_use.get("input") or {}
-                    if not isinstance(tool_input, dict):
-                        tool_input = {}
+                    tool_result_blocks: List[Dict[str, Any]] = []
+                    for tool_use in tool_uses:
+                        tool_name = tool_use.get("name")
+                        tool_input = tool_use.get("input") or {}
+                        if not isinstance(tool_input, dict):
+                            tool_input = {}
 
-                    tools_called.append({"name": tool_name, "input": tool_input})
+                        tools_called.append({"name": tool_name, "input": tool_input})
 
-                    if tool_name == "get_schema_context":
-                        raw_question = tool_input.get("question") or user_message
-                        if not str(raw_question).strip():
-                            raise RuntimeError("Tool get_schema_context requires a non-empty question")
+                        if tool_name == "get_schema_context":
+                            raw_question = tool_input.get("question") or user_message
+                            if not str(raw_question).strip():
+                                raise RuntimeError("Tool get_schema_context requires a non-empty question")
+
+                            tool_rounds += 1
+                            if tool_rounds > self.settings.max_tool_rounds:
+                                mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
+                                return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+
+                            _debug_print(
+                                "tool:get_schema_context:tool_request",
+                                {
+                                    "tool_use_id": tool_use.get("id"),
+                                    "dataset_id": dataset_id,
+                                    "question": str(raw_question),
+                                    "tool_round": tool_rounds,
+                                },
+                                enabled=settings_debug_enabled,
+                            )
+                            try:
+                                tool_output = await self.tool_registry.execute_tool(
+                                    tool_name,
+                                    {"question": str(raw_question)},
+                                    context,
+                                )
+                            except Exception:
+                                tool_output = "Error obteniendo el esquema del modelo semantico."
+                                mark_functional_failure(
+                                    "semantic_model_unavailable",
+                                    "Semantic model context could not be retrieved",
+                                )
+                            if _tool_output_is_error(tool_output):
+                                mark_functional_failure(
+                                    "semantic_model_unavailable",
+                                    "Semantic model context could not be retrieved",
+                                )
+                            _debug_print(
+                                "tool:get_schema_context:tool_response",
+                                {
+                                    "tool_use_id": tool_use.get("id"),
+                                    "tool_output": tool_output,
+                                },
+                                enabled=settings_debug_enabled,
+                            )
+                            tool_result_blocks.append(
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use["id"],
+                                    "content": _compact_tool_result_for_model(tool_output),
+                                }
+                            )
+                            continue
+
+                        if tool_name != "execute_dax_query":
+                            mark_functional_failure(
+                                "unsupported_tool",
+                                f"Unsupported tool requested by the model: {tool_name}",
+                            )
+                            return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+
+                        dax_query = tool_input.get("dax_query")
+                        if not dax_query or not str(dax_query).strip():
+                            dax_error_attempts += 1
+                            mark_functional_failure("dax_query_empty", "DAX query was empty")
+                            tool_result_blocks.append(
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use["id"],
+                                    "content": "Error interno: El dax_query llego vacio. Probablemente te quedaste sin tokens o la sintaxis JSON fallo. Por favor, se mas conciso.",
+                                }
+                            )
+                            if dax_error_attempts >= DAX_ERROR_ATTEMPT_LIMIT:
+                                return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+                            continue
 
                         tool_rounds += 1
                         if tool_rounds > self.settings.max_tool_rounds:
                             mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
                             return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
+                        if dax_query_used is None:
+                            dax_query_used = str(dax_query)
+
                         _debug_print(
-                            "tool:get_schema_context:tool_request",
+                            "tool:execute_dax_query:request",
                             {
                                 "tool_use_id": tool_use.get("id"),
                                 "dataset_id": dataset_id,
-                                "question": str(raw_question),
+                                "dax_query": str(dax_query),
                                 "tool_round": tool_rounds,
                             },
                             enabled=settings_debug_enabled,
@@ -1072,22 +1360,21 @@ class AgentOrchestrator:
                         try:
                             tool_output = await self.tool_registry.execute_tool(
                                 tool_name,
-                                {"question": str(raw_question)},
+                                {"dax_query": str(dax_query)},
                                 context,
                             )
-                        except Exception:
-                            tool_output = "Error obteniendo el esquema del modelo semantico."
-                            mark_functional_failure(
-                                "semantic_model_unavailable",
-                                "Semantic model context could not be retrieved",
-                            )
+                        except Exception as exc:
+                            dax_error_attempts += 1
+                            mark_functional_failure("dax_execution_exception", str(exc))
+                            tool_output = f"Error tecnico ejecutando DAX: {exc}"
+
                         if _tool_output_is_error(tool_output):
-                            mark_functional_failure(
-                                "semantic_model_unavailable",
-                                "Semantic model context could not be retrieved",
-                            )
+                            dax_error_attempts += 1
+                            if failure_reason is None:
+                                mark_functional_failure("dax_generation_failed", "DAX query execution failed")
+
                         _debug_print(
-                            "tool:get_schema_context:tool_response",
+                            "tool:execute_dax_query:response",
                             {
                                 "tool_use_id": tool_use.get("id"),
                                 "tool_output": tool_output,
@@ -1095,70 +1382,21 @@ class AgentOrchestrator:
                             enabled=settings_debug_enabled,
                         )
                         tool_result_blocks.append(
-                            {"type": "tool_result", "tool_use_id": tool_use["id"], "content": tool_output}
-                        )
-                        continue
-
-                    if tool_name != "execute_dax_query":
-                        raise RuntimeError(f"Unsupported tool requested by the model: {tool_name}")
-
-                    dax_query = tool_input.get("dax_query")
-                    if not dax_query or not str(dax_query).strip():
-                        dax_error_attempts += 1
-                        mark_functional_failure("dax_query_empty", "DAX query was empty")
-                        tool_result_blocks.append(
                             {
                                 "type": "tool_result",
                                 "tool_use_id": tool_use["id"],
-                                "content": "Error interno: El dax_query llegó vacío. Probablemente te quedaste sin tokens o la sintaxis JSON falló. Por favor, sé más conciso.",
+                                "content": _compact_tool_result_for_model(tool_output),
                             }
                         )
                         if dax_error_attempts >= DAX_ERROR_ATTEMPT_LIMIT:
                             return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
-                        continue
 
-                    tool_rounds += 1
-                    if tool_rounds > self.settings.max_tool_rounds:
-                        mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
-                        return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
-
-                    if dax_query_used is None:
-                        dax_query_used = str(dax_query)
-
-                    _debug_print(
-                        "tool:execute_dax_query:request",
-                        {
-                            "tool_use_id": tool_use.get("id"),
-                            "dataset_id": dataset_id,
-                            "dax_query": str(dax_query),
-                            "tool_round": tool_rounds,
-                        },
-                        enabled=settings_debug_enabled,
-                    )
-                    tool_output = await self.tool_registry.execute_tool(
-                        tool_name,
-                        {"dax_query": str(dax_query)},
-                        context,
-                    )
-                    if _tool_output_is_error(tool_output):
-                        dax_error_attempts += 1
-                        mark_functional_failure("dax_generation_failed", "DAX query execution failed")
-                    _debug_print(
-                        "tool:execute_dax_query:response",
-                        {
-                            "tool_use_id": tool_use.get("id"),
-                            "tool_output": tool_output,
-                        },
-                        enabled=settings_debug_enabled,
-                    )
-                    tool_result_blocks.append(
-                        {"type": "tool_result", "tool_use_id": tool_use["id"], "content": tool_output}
-                    )
-                    if dax_error_attempts >= DAX_ERROR_ATTEMPT_LIMIT:
-                        return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
-
-                turn_history.append({"role": "user", "content": tool_result_blocks})
-                _debug_print("anthropic:tool_results:appended", turn_history, enabled=settings_debug_enabled)
+                    turn_history.append({"role": "user", "content": tool_result_blocks})
+                    messages = cast(Any, turn_history)
+                    _debug_print("anthropic:tool_results:appended", turn_history, enabled=settings_debug_enabled)
+                except Exception as exc:
+                    mark_functional_failure("agent_execution_exception", str(exc))
+                    return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
 
 async def calcular_tokens_turno(
@@ -1230,3 +1468,4 @@ async def run_chat_turn(
                 }
             )
         return result
+
