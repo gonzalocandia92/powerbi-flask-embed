@@ -40,3 +40,9 @@ instance/
 .idea/
 
 .github/
+
+.evolution-manager/
+.evolution-api/
+.evolution-db/
+.evolution-redis/
+.evolution-redis/
