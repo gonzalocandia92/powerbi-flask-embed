@@ -400,11 +400,21 @@ def update_message_usage_totals(message_id: int) -> ChatMessage:
             func.coalesce(func.sum(AIUsageEvent.total_cost_usd), 0.0),
             func.coalesce(func.sum(AIUsageEvent.input_tokens), 0),
             func.coalesce(func.sum(AIUsageEvent.output_tokens), 0),
+            func.coalesce(func.sum(AIUsageEvent.total_tokens), 0),
         )
         .first()
     )
+    summed_input_tokens = int(totals[1] or 0)
+    summed_output_tokens = int(totals[2] or 0)
+    summed_total_tokens = int(totals[3] or 0)
+    total_input_tokens = summed_input_tokens
+    if summed_total_tokens and summed_total_tokens != summed_input_tokens + summed_output_tokens:
+        total_input_tokens = max(0, summed_total_tokens - summed_output_tokens)
+
     message.total_cost_usd = float(totals[0] or 0.0)
-    message.total_input_tokens = int(totals[1] or 0)
-    message.total_output_tokens = int(totals[2] or 0)
+    message.total_input_tokens = total_input_tokens
+    message.total_output_tokens = summed_output_tokens
+    message.input_tokens = total_input_tokens
+    message.output_tokens = summed_output_tokens
     db.session.flush()
     return message

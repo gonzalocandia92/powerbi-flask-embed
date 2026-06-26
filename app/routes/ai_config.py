@@ -1,12 +1,12 @@
-"""Administration routes for AI limits and model pricing."""
+"""Administration routes for AI limits, prompts and model pricing."""
 from datetime import datetime, time
 
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import login_required
 
 from app import db
-from app.forms import AIModelPricingForm, BillingLimitForm
-from app.models import AIModelPricing, BillingLimit, Empresa
+from app.forms import AgentPromptConfigForm, AIModelPricingForm, BillingLimitForm
+from app.models import AgentPromptConfig, AIModelPricing, BillingLimit, Empresa, Report
 from app.utils.decorators import retry_on_db_error
 
 
@@ -40,24 +40,51 @@ def _active_limits_by_scope():
     return result
 
 
+def _active_prompts_by_scope():
+    prompts = AgentPromptConfig.query.order_by(AgentPromptConfig.id.desc()).all()
+    result = {}
+    for prompt in prompts:
+        key = (prompt.scope_type, prompt.scope_id)
+        if key not in result:
+            result[key] = prompt
+    return result
+
+
 @bp.route('/')
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
 def index():
     """AI configuration overview."""
     active_tab = request.args.get('tab', 'limits')
-    if active_tab not in {'limits', 'pricing'}:
+    if active_tab not in {'limits', 'pricing', 'prompts'}:
         active_tab = 'limits'
 
     limits_by_scope = _active_limits_by_scope()
+    prompts_by_scope = _active_prompts_by_scope()
     global_limit = limits_by_scope.get(('global', None))
+    global_prompt = prompts_by_scope.get(('global', None))
     companies = Empresa.query.order_by(Empresa.nombre).all()
+    reports = Report.query.order_by(Report.name).all()
     company_limits = [
         {
             'company': company,
             'limit': limits_by_scope.get(('empresa', str(company.id))),
         }
         for company in companies
+    ]
+    company_prompts = [
+        {
+            'company': company,
+            'prompt': prompts_by_scope.get(('empresa', str(company.id))),
+        }
+        for company in companies
+    ]
+    report_prompts = [
+        {
+            'report': report,
+            'prompt': prompts_by_scope.get(('report', str(report.id))),
+        }
+        for report in reports
     ]
     pricings = (
         AIModelPricing.query
@@ -73,8 +100,171 @@ def index():
         'admin/ai_config/index.html',
         active_tab=active_tab,
         global_limit=global_limit,
+        global_prompt=global_prompt,
         company_limits=company_limits,
+        company_prompts=company_prompts,
+        report_prompts=report_prompts,
         pricings=pricings,
+    )
+
+
+def _prompt_config(scope_type, scope_id):
+    query = AgentPromptConfig.query.filter(AgentPromptConfig.scope_type == scope_type)
+    if scope_id is None:
+        query = query.filter(AgentPromptConfig.scope_id.is_(None))
+    else:
+        query = query.filter(AgentPromptConfig.scope_id == str(scope_id))
+    return query.order_by(AgentPromptConfig.id.desc()).first()
+
+
+def _populate_prompt_form_dates(form, prompt_item):
+    if prompt_item:
+        form.starts_at.data = prompt_item.starts_at.date() if prompt_item.starts_at else None
+        form.ends_at.data = prompt_item.ends_at.date() if prompt_item.ends_at else None
+
+
+def _populate_report_retrieval_form(form, report):
+    form.schema_retrieval_prompt.data = report.schema_retrieval_prompt
+    form.schema_table_context_limit.data = report.schema_table_context_limit
+    form.schema_measure_context_limit.data = report.schema_measure_context_limit
+
+
+def _save_report_retrieval_form(form, report):
+    report.schema_retrieval_prompt = (form.schema_retrieval_prompt.data or '').strip() or None
+    report.schema_table_context_limit = form.schema_table_context_limit.data
+    report.schema_measure_context_limit = form.schema_measure_context_limit.data
+
+
+def _save_prompt_form(form, prompt_item, *, scope_type, scope_id, default_title):
+    if prompt_item is None:
+        prompt_item = AgentPromptConfig(
+            scope_type=scope_type,
+            scope_id=str(scope_id) if scope_id is not None else None,
+            title=default_title,
+        )
+        db.session.add(prompt_item)
+
+    prompt_item.title = form.title.data.strip()
+    prompt_item.instructions = form.instructions.data.strip()
+    prompt_item.starts_at = _date_start(form.starts_at.data)
+    prompt_item.ends_at = _date_end(form.ends_at.data)
+    prompt_item.is_active = form.is_active.data
+    return prompt_item
+
+
+@bp.route('/prompts/global', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def global_prompt():
+    """Create or edit the global agent prompt instructions."""
+    prompt_item = _prompt_config('global', None)
+    form = AgentPromptConfigForm(obj=prompt_item)
+    if request.method == 'GET':
+        if prompt_item:
+            _populate_prompt_form_dates(form, prompt_item)
+        else:
+            form.title.data = 'Default global'
+            form.is_active.data = True
+
+    if form.validate_on_submit():
+        if form.starts_at.data and form.ends_at.data and form.ends_at.data < form.starts_at.data:
+            form.ends_at.errors.append("La fecha final no puede ser anterior a la inicial.")
+        else:
+            _save_prompt_form(
+                form,
+                prompt_item,
+                scope_type='global',
+                scope_id=None,
+                default_title='Default global',
+            )
+            db.session.commit()
+            flash("Prompt global actualizado.", "success")
+            return redirect(url_for('ai_config.index', tab='prompts'))
+
+    return render_template(
+        'admin/ai_config/prompt_form.html',
+        form=form,
+        title='Prompt global del agente',
+        scope_label='Default Global',
+    )
+
+
+@bp.route('/prompts/company/<int:empresa_id>', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def company_prompt(empresa_id):
+    """Create or edit company-specific agent prompt instructions."""
+    company = Empresa.query.get_or_404(empresa_id)
+    prompt_item = _prompt_config('empresa', company.id)
+    form = AgentPromptConfigForm(obj=prompt_item)
+    if request.method == 'GET':
+        if prompt_item:
+            _populate_prompt_form_dates(form, prompt_item)
+        else:
+            form.title.data = f'Prompt de {company.nombre}'
+            form.is_active.data = True
+
+    if form.validate_on_submit():
+        if form.starts_at.data and form.ends_at.data and form.ends_at.data < form.starts_at.data:
+            form.ends_at.errors.append("La fecha final no puede ser anterior a la inicial.")
+        else:
+            _save_prompt_form(
+                form,
+                prompt_item,
+                scope_type='empresa',
+                scope_id=company.id,
+                default_title=f'Prompt de {company.nombre}',
+            )
+            db.session.commit()
+            flash(f"Prompt de {company.nombre} actualizado.", "success")
+            return redirect(url_for('ai_config.index', tab='prompts'))
+
+    return render_template(
+        'admin/ai_config/prompt_form.html',
+        form=form,
+        title=f'Prompt de {company.nombre}',
+        scope_label=company.nombre,
+    )
+
+
+@bp.route('/prompts/report/<int:report_id>', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def report_prompt(report_id):
+    """Create or edit report-specific agent prompt instructions."""
+    report = Report.query.get_or_404(report_id)
+    prompt_item = _prompt_config('report', report.id)
+    form = AgentPromptConfigForm(obj=prompt_item)
+    if request.method == 'GET':
+        if prompt_item:
+            _populate_prompt_form_dates(form, prompt_item)
+        else:
+            form.title.data = f'Prompt de {report.name}'
+            form.is_active.data = True
+        _populate_report_retrieval_form(form, report)
+
+    if form.validate_on_submit():
+        if form.starts_at.data and form.ends_at.data and form.ends_at.data < form.starts_at.data:
+            form.ends_at.errors.append("La fecha final no puede ser anterior a la inicial.")
+        else:
+            _save_prompt_form(
+                form,
+                prompt_item,
+                scope_type='report',
+                scope_id=report.id,
+                default_title=f'Prompt de {report.name}',
+            )
+            _save_report_retrieval_form(form, report)
+            db.session.commit()
+            flash(f"Prompt de {report.name} actualizado.", "success")
+            return redirect(url_for('ai_config.index', tab='prompts'))
+
+    return render_template(
+        'admin/ai_config/prompt_form.html',
+        form=form,
+        title=f'Prompt de {report.name}',
+        scope_label=report.name,
+        retrieval_form_enabled=True,
     )
 
 

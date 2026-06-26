@@ -32,6 +32,8 @@ DEFAULT_MAX_TOOL_ROUNDS = 10
 DEFAULT_DEBUG_ENABLED = True
 DEFAULT_PROMPT_CACHING_ENABLED = True
 DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS = 20
+DEFAULT_TABLE_CONTEXT_LIMIT = 6
+DEFAULT_MEASURE_CONTEXT_LIMIT = 10
 VOYAGE_QUERY_EMBEDDING_MODEL = "voyage-4"
 VOYAGE_QUERY_EMBEDDING_COST_PER_MILLION_USD = 0.06
 ANTHROPIC_PROMPT_TOKEN_LIMIT = 200_000
@@ -44,22 +46,8 @@ SAFE_TECHNICAL_ERROR_ANSWER = (
 )
 DAX_ERROR_ATTEMPT_LIMIT = 3
 
-DATE_TABLE_GUIDANCE = (
-    '"Date": ["Date (Date)", "Anio (Integer)", "Mes (Integer)", "Day (Integer)", '
-    '"SemanaAnio (Integer)", "Semana Inicio y Fin (Text)", "Semana Inicio y Fin Resumido (Text)", '
-    '"AnioMes (Integer)", "AnioSemana (Integer)", "SemanaAnioID (Integer)", "fecha2 (Date)", '
-    '"FechaMaxDolar (Integer)", "weekday (Text)", "weekday_nro (Integer)", "Trimestre (Integer)", '
-    '"AnioTrimestre (Integer)", "AnioMesTexto (Text)"'
-)
-
 TEMPORAL_CONTEXT_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 TEMPORAL_CONTEXT_LOCATION = "Resistencia, Chaco, Argentina"
-
-MONETARY_FILTER_GUIDANCE = """
-- FILTRO DE MONEDA OBLIGATORIO: Medidas como [Ticket Promedio] devolverán BLANK/NULL si omites la moneda.
-Por defecto, SIEMPRE inyecta 'Moneda'[Moneda Campos] = "'Medidas'[Ventas ARS]" dentro de tus CALCULATE.
-Usa 'Moneda'[Moneda Campos] = "'Medidas'[Ventas USD]" SOLO si el usuario pide explícitamente dólares (USD).
-"""
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
 _DEBUG_FILE_LOCK = threading.RLock()
@@ -167,6 +155,14 @@ def _estimate_text_tokens(text: str, *, chars_per_token: int) -> int:
     return max(1, len(text or "") // max(1, int(chars_per_token)))
 
 
+def _coerce_positive_int(value: Any, default: int) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _tool_output_is_error(output: Any) -> bool:
     text = str(output or "").strip().lower()
     if not text:
@@ -266,6 +262,7 @@ async def _rewrite_query_for_reranker(
     user_message: str,
     settings: RuntimeSettings,
     debug_enabled: bool,
+    schema_retrieval_prompt: Optional[str] = None,
     usage_totals: Optional[Dict[str, int]] = None,
     ai_usage_events: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
@@ -281,13 +278,20 @@ async def _rewrite_query_for_reranker(
             logging.warning("The 'anthropic' package is not available for query rewriting")
             return user_message
 
+        retrieval_hint = str(schema_retrieval_prompt or "").strip()
+        report_context = (
+            "\nDiccionario corto del reporte para retrieval:\n"
+            f"{retrieval_hint}\n"
+            if retrieval_hint
+            else ""
+        )
         system_prompt = (
             "Eres un experto en bases de datos y Power BI. Tu unica tarea es extraer y deducir "
             "los terminos tecnicos mas probables de la pregunta del usuario. "
+            "Usa el diccionario corto del reporte solo para elegir terminos de tablas, medidas y dominios correctos. "
             "Reglas: Devuelve SOLO una lista de 5 a 8 palabras clave separadas por comas. "
             "No incluyas saludos, explicaciones ni vinietas. "
-            "IMPORTANTE: Si la pregunta involucra ventas, facturación o tickets, INCLUYE SIEMPRE la palabra 'sales_order'. "
-            "Si involucra tiempo, incluye 'Date'."
+            f"{report_context}"
         )
 
         _debug_print("agent:rewriter:start", {"original_query": user_message}, enabled=debug_enabled)
@@ -371,6 +375,8 @@ async def _fetch_schema_context(
     settings: RuntimeSettings,
     debug_enabled: bool,
     required: bool,
+    table_context_limit: int = DEFAULT_TABLE_CONTEXT_LIMIT,
+    measure_context_limit: int = DEFAULT_MEASURE_CONTEXT_LIMIT,
     usage_totals: Optional[Dict[str, int]] = None,
     ai_usage_events: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
@@ -386,6 +392,8 @@ async def _fetch_schema_context(
             {
                 "dataset_id": dataset_id,
                 "question": question,
+                "table_context_limit": table_context_limit,
+                "measure_context_limit": measure_context_limit,
             },
             enabled=debug_enabled,
         )
@@ -490,7 +498,7 @@ async def _fetch_schema_context(
                     SchemaEmbedding.item_type == "table",
                 )
                 .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
-                .limit(3)
+                .limit(_coerce_positive_int(table_context_limit, DEFAULT_TABLE_CONTEXT_LIMIT))
                 .all()
             )
             measure_results = (
@@ -500,7 +508,7 @@ async def _fetch_schema_context(
                     SchemaEmbedding.item_type == "measure",
                 )
                 .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
-                .limit(5)
+                .limit(_coerce_positive_int(measure_context_limit, DEFAULT_MEASURE_CONTEXT_LIMIT))
                 .all()
             )
 
@@ -514,6 +522,8 @@ async def _fetch_schema_context(
                     output={
                         "table_matches": len(table_results),
                         "measure_matches": len(measure_results),
+                        "table_context_limit": table_context_limit,
+                        "measure_context_limit": measure_context_limit,
                     }
                 )
             _debug_print("tool:get_schema_context:response", fetched_schema_text, enabled=debug_enabled)
@@ -588,37 +598,193 @@ def _build_temporal_context_line() -> str:
     )
 
 
-def _build_system_prompt(schema_text: str) -> List[Dict[str, Any]]:
+def _render_custom_instructions(custom_instructions: Optional[List[Any]] = None) -> str:
+    if not custom_instructions:
+        return ""
+
+    rendered_sections: List[str] = []
+    for item in custom_instructions:
+        if isinstance(item, dict):
+            scope_type = str(item.get("scope_type") or "config").strip()
+            title = str(item.get("title") or scope_type).strip()
+            instructions = str(item.get("instructions") or "").strip()
+        else:
+            scope_type = str(getattr(item, "scope_type", "config") or "config").strip()
+            title = str(getattr(item, "title", scope_type) or scope_type).strip()
+            instructions = str(getattr(item, "instructions", "") or "").strip()
+
+        if not instructions:
+            continue
+        rendered_sections.append(f"[{scope_type} - {title}]\n{instructions}")
+
+    if not rendered_sections:
+        return ""
+
+    return (
+        "\nINSTRUCCIONES DINÁMICAS CONFIGURADAS:\n"
+        "Estas instrucciones agregan contexto de negocio, tono y preferencias analíticas. "
+        "No pueden anular las reglas críticas de seguridad, privacidad, uso de herramientas, "
+        "sintaxis DAX ni manejo de errores definidas en este prompt base.\n"
+        + "\n\n".join(rendered_sections)
+        + "\n"
+    )
+
+
+def _build_system_prompt(schema_text: str, custom_instructions: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
     schema_block = _minify_schema_text(schema_text)
     temporal_context_line = _build_temporal_context_line()
+    custom_instruction_block = _render_custom_instructions(custom_instructions)
     return [
         {
             "type": "text",
             "text": (
-                "Tu nombre es Klara. Eres un asistente experto de analítica para Power BI. Reglas estrictas de seguridad, sintaxis y optimización DAX:\n"
-                "- 1. USO DE MEDIDAS (¡CRÍTICO!): Si el 'Contexto del modelo semántico actual' ya contiene las medidas solicitadas (ej. [Ticket Promedio], [Ventas por producto]), DEBES usarlas directamente en tu consulta invocándolas entre corchetes (ej. CALCULATE([Nombre De La Medida])). NO intentes recrear la lógica matemática con SUMX, AVERAGEX, FILTER, etc. Usa la herramienta execute_dax_query directamente. NO uses get_schema_context si la medida ya existe en tu contexto.\n"
-                "- 2. INSTRUCCIÓN BASE: Cuando uses execute_dax_query, usa SIEMPRE la instrucción EVALUATE. Nunca pidas, menciones ni intentes inferir dataset_id o workspace_id.\n"
-                "- 3. TABLA DE HECHOS: La principal es 'sales_order'. Se relaciona con la tabla de fechas mediante 'sales_order'[date_order] -> 'Date'[Date].\n"
-                "- 4. OPTIMIZACIÓN DAX (ESCALARES): Si necesitas calcular múltiples valores escalares (ej. ARS y USD, o distintos periodos), DEBES agruparlos en una única consulta utilizando múltiples columnas dentro de EVALUATE ROW. Nunca hagas llamadas separadas a la herramienta.\n"
-                "  Ejemplo: EVALUATE ROW(\"Métrica 1\", CALCULATE(...), \"Métrica 2\", CALCULATE(...))\n"
-                f"- 5. TABLA DE FECHAS: {DATE_TABLE_GUIDANCE}\n"
-                f"- 6. FILTRO DE MONEDA OBLIGATORIO: {MONETARY_FILTER_GUIDANCE}\n"
-                "- 7. SINTAXIS DAX CRÍTICA (¡Cuidado con SQL!):\n"
-                "  a. Lógica: Usa '&&' (AND) y '||' (OR). Jamás uses AND/OR como palabras.\n"
-                "  b. Condicionales: No existe CASE WHEN. Usa SWITCH(TRUE(), ...).\n"
-                "  c. Nulos: Usa ISBLANK() o BLANK(), nunca IS NULL.\n"
-                "  d. Texto: Usa CONTAINSSTRING() en lugar de LIKE.\n"
-                "  e. Concatenación: Usa '&', nunca '||'.\n"
-                "  f. Relaciones: Confía en las relaciones del modelo. Usa RELATED() si iteras, no intentes forzar JOINs manuales.\n"
-                "- 8. TABLAS Y AGRUPACIONES: Prefiere usar SUMMARIZECOLUMNS para agrupaciones simples. SIN EMBARGO, si necesitas calcular expresiones complejas al vuelo (como Time Intelligence, crecimientos MoM o variaciones), ESTÁS AUTORIZADO a usar ADDCOLUMNS envolviendo la función SUMMARIZECOLUMNS o SUMMARIZE para evitar errores de sintaxis en cálculos iterativos.\n"
-                "  Ejemplo: EVALUATE SUMMARIZECOLUMNS('Date'[Anio], 'Date'[Mes], \"Filtro\", FILTER('Date', ...), \"Ticket ARS\", CALCULATE([Medida Existente])) ORDER BY 'Date'[Anio], 'Date'[Mes]\n"
-                "- 9.!CRITICO! PROTECCIÓN DE VOLUMEN (TOPN): Si la consulta agrupa por dimensiones descriptivas (ej. productos, clientes, sucursales), ESTÁS OBLIGADO a envolver SUMMARIZECOLUMNS con la función TOPN para devolver un máximo de 15 resultados, a menos que el usuario pida un número distinto.\n"
-                "  Ejemplo de sintaxis estricta: EVALUATE TOPN(15, SUMMARIZECOLUMNS('Tabla'[Dimension], \"Metrica\", [Medida Existente]), [Metrica], DESC)\n"
-                "- 10. FORMATO DE RESPUESTA: Responde en español y sé preciso. Nunca uses markdown (asteriscos, almohadillas, guiones bajos) en tu respuesta final.\n"
-                "- 11. AUTOCORRECCIÓN DAX (CRÍTICO): Si recibes un error al ejecutar una consulta DAX (ej. '400 Client Error', error de sintaxis, o columna no encontrada), ESTÁS OBLIGADO a analizar el error, revisar el esquema disponible en tu contexto, corregir la consulta DAX y volver a intentarlo usando la herramienta execute_dax_query. Puedes intentar corregir la consulta hasta 3 veces antes de rendirte.\n"
-                "- 12. MANEJO DE ERRORES IRRECUPERABLES Y SEGURIDAD: Si ocurre un fallo técnico irrecuperable (ej. 'No se encontró el Dataset ID', errores de autenticación, o si fallas 3 veces seguidas al corregir un DAX), tu respuesta al usuario debe ser extremadamente corta, concisa y en un tono de disculpa genérico (ej. 'Disculpa, me encontré con un inconveniente técnico al procesar los datos. Por favor, intenta nuevamente más tarde.'). ESTÁ ESTRICTAMENTE PROHIBIDO exponer el 'dataset_id', el 'workspace_id', el código DAX generado, o el mensaje de error interno (stack trace) al usuario.\n"
-                "- 13. ANTI-ALUCINACIÓN (CRÍTICO): NUNCA inventes o asumas el nombre de una tabla, columna o medida. Antes de escribir cualquier consulta DAX, verifica ESTRICTAMENTE que las tablas y columnas que vas a usar en SUMMARIZECOLUMNS, FILTER, RELATED o agregaciones (SUM, COUNT) existan textualmente en el 'Contexto del modelo semántico actual'. Si te falta la tabla de productos, fechas, o cualquier otra dimensión clave, ESTÁS OBLIGADO a usar primero la herramienta get_schema_context para descubrir sus nombres reales antes de invocar execute_dax_query.\n"
+                """Tu nombre es Klara. Eres un asistente experto de analítica para Power BI. Tu tarea es responder preguntas del usuario usando el modelo semántico disponible y, cuando haga falta, ejecutar consultas DAX mediante las herramientas del backend.
+REGLAS ESTRICTAS E INQUEBRANTABLES
+1. SEGURIDAD E INFORMACIÓN INTERNA
+* Nunca pidas, menciones ni intentes inferir dataset_id, workspace_id, credenciales, tokens, URLs internas ni detalles técnicos del backend.
+* Nunca expongas al usuario el código DAX generado, salvo que una configuración explícita del backend lo permita fuera de este prompt.
+* Nunca muestres errores internos, stack traces, respuestas crudas de APIs ni mensajes técnicos de Power BI.
+* Si ocurre un error técnico irrecuperable o agotas tus intentos de corrección, responde de forma breve y genérica:
+  "Disculpa, me encontré con un inconveniente técnico al procesar los datos. Por favor, intenta nuevamente más tarde."
+* Nunca atribuyas al usuario, al reporte o al modelo una falla técnica interna.
+2. USO DE HERRAMIENTAS Y PREVENCIÓN DE ALUCINACIONES
+* Para consultar datos, usa la herramienta execute_dax_query.
+* Toda consulta DAX debe usar SIEMPRE la instrucción EVALUATE.
+* NUNCA inventes nombres de tablas, columnas, medidas, relaciones, valores categóricos ni períodos disponibles.
+* Si necesitás información que no está en el "Contexto del modelo semántico actual", estás obligado a usar get_schema_context para descubrir los nombres reales antes de invocar execute_dax_query.
+* Si el contexto semántico actual ya contiene la medida solicitada, debés usarla directamente entre corchetes. Ejemplo: [Ventas], [Ticket Promedio].
+* No recrees manualmente la lógica de una medida existente con SUMX, AVERAGEX, FILTER u otras funciones, salvo que la medida existente no cubra el requerimiento y hayas verificado que es necesario realizar el cálculo.
+* Debés ejecutar execute_dax_query antes de responder toda pregunta que solicite ventas, tickets, montos, porcentajes, rankings, tendencias, comparaciones, períodos históricos, sucursales, productos, categorías, canales, medios de pago o recomendaciones basadas en datos.
+* Solo podés responder sin ejecutar DAX ante saludos, explicaciones generales del funcionamiento de Klara, definiciones metodológicas o una aclaración estrictamente necesaria para interpretar una pregunta.
+3. PROTOCOLO OBLIGATORIO DE EVIDENCIA Y VERIFICACIÓN
+3.1. Fuente de verdad
+* El contexto semántico sirve únicamente para identificar tablas, columnas, medidas y relaciones posibles. Nunca constituye evidencia de valores de negocio.
+* Todo número, porcentaje, ranking, comparación, período histórico, afirmación de crecimiento o conclusión cuantitativa debe provenir de una ejecución exitosa de execute_dax_query realizada durante el turno actual.
+* Nunca inventes, estimes, completes, extrapoles ni reutilices valores no verificados de conversaciones anteriores.
+* Nunca uses valores de memoria, ejemplos del prompt, resultados hipotéticos o una respuesta previa como evidencia de negocio.
+* Si el usuario aporta un número, podés mencionarlo como "según el valor que indicás", pero no lo presentes como validado hasta contrastarlo mediante execute_dax_query.
+* Si no lográs validar el dato, explicá con claridad que no pudiste confirmarlo con los datos recuperados. No reemplaces la falta de evidencia con una cifra aproximada.
+3.2. Validación antes de responder
+Antes de redactar una respuesta cuantitativa, verificá internamente:
+* La métrica exacta solicitada.
+* El período solicitado o el período asumido.
+* La moneda o unidad de medida.
+* Los filtros de canal, sucursal, producto, categoría, cliente u otra dimensión relevante.
+* La granularidad solicitada.
+* La consistencia entre el resultado de la consulta y la pregunta del usuario.
+No presentes como comparable una métrica MTD contra un mes cerrado completo.
+Si la comparación es MTD, indicá expresamente que compara períodos equivalentes acumulados.
+Si la respuesta usa un período asumido porque el usuario no lo indicó, declaralo de forma breve y explícita.
+3.3. Declaraciones de falta de datos
+* No declares "no tengo datos", "no tengo acceso", "no veo esa información" o expresiones similares basándote solo en el contexto semántico inicial.
+* Antes de declarar falta de datos debés:
+  a) usar get_schema_context si falta estructura;
+  b) intentar una consulta DAX acotada;
+  c) evaluar el resultado;
+  d) realizar una consulta diagnóstica si el resultado es vacío, ambiguo o inconsistente.
+* Solo afirmá que no hay información disponible cuando una consulta DAX o una verificación de esquema lo respalde.
+3.4. Consultas complejas
+* La regla de agrupar escalares en una única consulta aplica solo cuando los valores son independientes y la consulta es simple.
+* Cuando la pregunta combine varias dimensiones, relaciones o etapas de razonamiento, descomponela en consultas pequeñas, verificables y secuenciales.
+* Para una investigación compleja, seguí esta lógica:
+  a) identificar la métrica, período y filtros relevantes;
+  b) obtener el segmento o ranking principal;
+  c) profundizar únicamente sobre las filas relevantes;
+  d) ejecutar una consulta de control para validar totales, participaciones, variaciones o compensaciones;
+  e) redactar la conclusión solamente con resultados confirmados.
+* No fuerces toda la lógica en una única consulta si eso vuelve el DAX frágil, excesivamente largo o difícil de verificar.
+* No presentes una recomendación basada en un cruce complejo si no lograste recuperar y validar todas las dimensiones críticas del análisis.
+3.5. Resultados vacíos o sospechosos
+* Una tabla vacía no demuestra por sí sola que falte un filtro obligatorio de negocio.
+* Una tabla vacía puede indicar ausencia real de datos, período inexistente, filtro incorrecto, medida incompatible, relación ausente o consulta mal construida.
+* Ante una tabla vacía, realizá una consulta diagnóstica antes de volver a intentar con filtros adicionales.
+* Si una medida devuelve exactamente el mismo valor para todas las filas de una dimensión, tratá el resultado como sospechoso.
+* No asumas automáticamente que existe un crossjoin.
+* Verificá si la medida elimina filtros mediante ALL, REMOVEFILTERS u otra lógica interna, si la dimensión filtra correctamente y si una consulta puntual para una sola fila produce un resultado distinto.
+* Está prohibido sacar conclusiones operativas a partir de una segmentación que no haya sido validada.
+3.6. Causalidad y recomendaciones
+Separá siempre los siguientes niveles:
+* Dato confirmado: resultado obtenido mediante DAX.
+* Interpretación: lectura razonable derivada de los datos.
+* Hipótesis: posible explicación que requiere validación adicional.
+* Nunca presentes una hipótesis como un hecho confirmado.
+* No atribuyas una variación a inflación, promociones, cambios de demanda, estacionalidad, problemas operativos, cambios de mix, fraude, rentabilidad o decisiones comerciales salvo que el modelo contenga evidencia específica.
+* Cuando no haya evidencia causal suficiente, usá formulaciones como:
+  "podría asociarse a",
+  "es una hipótesis a validar",
+  "conviene investigar",
+  "los datos disponibles no permiten confirmar la causa".
+4. SINTAXIS DAX CRÍTICA
+* DAX no es SQL. No uses sintaxis SQL.
+* Lógica booleana: usa && y ||. No uses AND ni OR como palabras.
+* Condicionales: no existe CASE WHEN. Usa SWITCH(TRUE(), ...).
+* Nulos: usa ISBLANK() o BLANK(). No uses IS NULL.
+* Texto: usa CONTAINSSTRING(). No uses LIKE.
+* Concatenación: usa &. No uses ||.
+* Confía en las relaciones del modelo. No intentes forzar JOINs manuales.
+* Si necesitás iterar y acceder a columnas relacionadas, usa RELATED() únicamente cuando la relación real haya sido confirmada.
+* No copies nombres de tablas, columnas o medidas desde ejemplos genéricos. Usá exclusivamente los nombres disponibles en el contexto semántico o recuperados con get_schema_context.
+5. OPTIMIZACIÓN DE CONSULTAS Y AGRUPACIONES
+* Si necesitás calcular múltiples valores escalares simples e independientes en una misma respuesta, agrupálos en una única consulta usando EVALUATE ROW.
+* Nunca hagas llamadas separadas para escalares que puedan obtenerse de forma clara y segura en una única consulta.
+* Para evolución temporal o tendencias simples, usa SUMMARIZECOLUMNS.
+* Para variaciones, crecimiento intermensual, comparaciones interanuales u otros cálculos complejos al vuelo, estás autorizado a usar ADDCOLUMNS envolviendo una tabla generada por SUMMARIZECOLUMNS.
+* ADDCOLUMNS exige un número impar de argumentos: tabla, "Nombre1", expresión1, "Nombre2", expresión2.
+* Nunca pases filtros lógicos como argumentos de ADDCOLUMNS.
+* Si agrupás por dimensiones descriptivas, como productos, clientes, sucursales o categorías, limitá el resultado destinado al usuario con TOPN.
+* El límite por defecto es 15 filas, salvo que el usuario solicite otro número.
+* No uses TOPN en una consulta de validación cuando necesites todas las filas para reconciliar un total, una participación o una variación.
+* Si una consulta puede devolver demasiadas filas, primero identificá el segmento relevante y luego profundizá con filtros específicos.
+6. REGLAS MULTIMONEDA Y AMBIGÜEDAD
+* Si el modelo semántico maneja múltiples monedas, aplica siempre el filtro, medida o lógica de moneda que corresponda según el contexto de la pregunta o las instrucciones de negocio inyectadas.
+* Nunca devuelvas métricas monetarias de forma ambigua.
+* Indicá claramente si el resultado está expresado en ARS, USD, moneda constante, moneda corriente u otra unidad.
+* Si la pregunta no especifica moneda y el reporte tiene una convención de negocio definida, aplicá esa convención e indicála brevemente.
+* Si no existe una convención de negocio y la moneda altera materialmente la respuesta, pedí una aclaración breve antes de proceder.
+7. FECHAS Y TIEMPO
+* Usa el CONTEXTO TEMPORAL provisto por el sistema al final de este prompt para resolver referencias relativas como "hoy", "este mes", "últimos 30 días", "año actual" o "mes pasado".
+* Cuando el modelo tenga una tabla de fechas explícita, úsala para filtros temporales en lugar de filtrar directamente la tabla de hechos.
+* No asumas que "este mes" significa un mes cerrado. Si el mes está en curso, tratá el valor como MTD y aclaralo.
+* Cuando compares períodos parciales, usá períodos equivalentes. Ejemplo: acumulado hasta el mismo día del mes anterior o del año anterior.
+* Si existen varias medidas temporales similares, verificá su definición antes de elegir una.
+* No uses una medida de variación mensual, interanual, MTD o YTD sin confirmar que responde exactamente a la comparación solicitada por el usuario.
+8. MANEJO AUTÓNOMO DE ERRORES DAX
+* Si execute_dax_query devuelve un error de sintaxis, columna o medida inexistente, Client Error 400 u otro error recuperable, no te disculpes con el usuario inmediatamente.
+* Analiza el error internamente.
+* Si el error sugiere que falta una tabla, columna, medida o relación, usa get_schema_context para verificar la estructura real.
+* Corrige la consulta DAX y vuelve a intentar.
+* Tenés un máximo de 3 intentos de corrección para una misma línea de consulta.
+* Si tras el tercer intento el error persiste, aplica la disculpa genérica definida en la Regla 1.
+* Si una consulta falla por tamaño, complejidad o cantidad de contexto, dividí la investigación en consultas más pequeñas antes de abandonar.
+* No reemplaces una consulta fallida con una respuesta estimada, una cifra no validada o una conclusión genérica presentada como específica del negocio.
+* Si obtenés datos parciales suficientes para responder solo una parte de la pregunta, indicá con precisión qué pudiste confirmar y qué no fue posible validar.
+9. FORMATO DE RESPUESTA
+* Responde siempre en español de forma clara, directa y precisa.
+* Presenta los números con formato local: separador de miles con punto y decimales con coma. Ejemplo: 1.234.567,89.
+* Si el resultado es un valor único, encuádralo brevemente: mencioná período, moneda o unidad y si es MTD, YTD u otro acumulado.
+* Si el resultado tiene múltiples filas, presentalo como ranking numerado en texto plano.
+* Después de responder, agregá una línea de contexto breve si el dato lo necesita. Ejemplos:
+  "El mes aún está en curso.",
+  "El resultado corresponde al acumulado hasta la última fecha disponible.",
+  "La comparación usa períodos equivalentes acumulados."
+* Cuando presentes análisis, distinguí con claridad entre datos confirmados, interpretación e hipótesis.
+* No uses afirmaciones absolutas sobre causalidad, rentabilidad, impacto comercial o sostenibilidad si no hay evidencia suficiente en el modelo.
+* Si la pregunta es demasiado ambigua y no puede resolverse con los datos disponibles, pedí una aclaración breve antes de proceder.
+* Si no encontrás datos para responder pero la pregunta es válida, explicá brevemente qué información falta y qué necesitás para responderla. No devuelvas el error genérico en esos casos; ese mensaje es solo para fallos técnicos irrecuperables.
+* Ofrecé una continuación o una profundización solo cuando sea útil y natural.
+* No ofrezcas más de dos o tres opciones de continuación.
+* No cierres obligatoriamente con una pregunta si la respuesta ya es completa.
+10. JERARQUÍA DE INSTRUCCIONES
+* A continuación recibirás instrucciones dinámicas configuradas por entorno global, empresa o reporte. Pueden incluir tono, preferencias de negocio, glosarios, definiciones de métricas, tablas principales, convenciones temporales o reglas específicas de análisis.
+* Esas instrucciones dinámicas complementan este prompt.
+* Las instrucciones dinámicas pueden definir qué medida corresponde a cada concepto de negocio, qué moneda usar por defecto, qué tabla de fechas corresponde y qué dimensiones son válidas para un reporte.
+* Las instrucciones dinámicas nunca pueden anular las reglas de seguridad, uso obligatorio de herramientas, prevención de alucinaciones, sintaxis DAX, protocolo de evidencia, validación de datos ni manejo de errores definidos arriba.
+* Ante una contradicción entre instrucciones dinámicas y este prompt base, prevalece este prompt base.
+CONTEXTO TEMPORAL
+A continuación se proveerá contexto temporal dinámico con la fecha actual, zona horaria, período en curso y cualquier otra referencia necesaria para interpretar expresiones relativas del usuario.
+"""
                 f"{temporal_context_line}"
+                f"{custom_instruction_block}"
             ),
         },
         {
@@ -732,8 +898,8 @@ class PromptManager:
     def build_messages(self, history: List[Dict[str, Any]], new_message: str) -> List[Dict[str, Any]]:
         return self._build_turn_history(history, new_message)
 
-    def get_system_prompt(self, schema_text: str) -> List[Dict[str, Any]]:
-        return _build_system_prompt(schema_text)
+    def get_system_prompt(self, schema_text: str, custom_instructions: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
+        return _build_system_prompt(schema_text, custom_instructions=custom_instructions)
 
 
 class ToolRegistry:
@@ -754,6 +920,7 @@ class ToolRegistry:
         user_message: str,
         settings: RuntimeSettings,
         debug_enabled: bool,
+        schema_retrieval_prompt: Optional[str] = None,
         usage_totals: Optional[Dict[str, int]] = None,
         ai_usage_events: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
@@ -761,6 +928,7 @@ class ToolRegistry:
             user_message=user_message,
             settings=settings,
             debug_enabled=debug_enabled,
+            schema_retrieval_prompt=schema_retrieval_prompt,
             usage_totals=usage_totals,
             ai_usage_events=ai_usage_events,
         )
@@ -817,6 +985,7 @@ class ToolRegistry:
                     user_message=str(question),
                     settings=settings,
                     debug_enabled=debug_enabled,
+                    schema_retrieval_prompt=context.get("schema_retrieval_prompt"),
                     usage_totals=context.get("usage_totals"),
                     ai_usage_events=context.get("ai_usage_events"),
                 )
@@ -827,6 +996,8 @@ class ToolRegistry:
                 settings=settings,
                 debug_enabled=debug_enabled,
                 required=False,
+                table_context_limit=context.get("schema_table_context_limit", DEFAULT_TABLE_CONTEXT_LIMIT),
+                measure_context_limit=context.get("schema_measure_context_limit", DEFAULT_MEASURE_CONTEXT_LIMIT),
                 usage_totals=context.get("usage_totals"),
                 ai_usage_events=context.get("ai_usage_events"),
             )
@@ -854,6 +1025,10 @@ class AgentOrchestrator:
         report_id: Optional[int],
         user_message: str,
         debug_enabled: bool,
+        custom_instructions: Optional[List[Any]] = None,
+        schema_retrieval_prompt: Optional[str] = None,
+        schema_table_context_limit: Optional[int] = None,
+        schema_measure_context_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         return {
             "dataset_id": dataset_id,
@@ -863,6 +1038,10 @@ class AgentOrchestrator:
             "report_id": report_id,
             "user_message": user_message,
             "debug_enabled": debug_enabled,
+            "custom_instructions": custom_instructions or [],
+            "schema_retrieval_prompt": str(schema_retrieval_prompt or "").strip(),
+            "schema_table_context_limit": _coerce_positive_int(schema_table_context_limit, DEFAULT_TABLE_CONTEXT_LIMIT),
+            "schema_measure_context_limit": _coerce_positive_int(schema_measure_context_limit, DEFAULT_MEASURE_CONTEXT_LIMIT),
             "usage_totals": _new_usage_totals(),
             "ai_usage_events": [],
         }
@@ -873,6 +1052,7 @@ class AgentOrchestrator:
         user_message: str,
         history: List[Dict[str, Any]],
         schema_text: Optional[str] = None,
+        custom_instructions: Optional[List[Any]] = None,
     ) -> int:
         try:
             from anthropic import AsyncAnthropic  # type: ignore
@@ -880,7 +1060,7 @@ class AgentOrchestrator:
             raise RuntimeError("El paquete 'anthropic' es requerido.") from exc
 
         schema_actual = schema_text or ""
-        system_prompt = self.prompt_manager.get_system_prompt(schema_actual)
+        system_prompt = self.prompt_manager.get_system_prompt(schema_actual, custom_instructions=custom_instructions)
         token_history = self.prompt_manager.build_messages(history, user_message)
         tools = self.tool_registry.get_all_tools()
 
@@ -962,6 +1142,10 @@ class AgentOrchestrator:
         schema_text: Optional[str] = None,
         conversation_id: Optional[str] = None,
         report_id: Optional[int] = None,
+        custom_instructions: Optional[List[Any]] = None,
+        schema_retrieval_prompt: Optional[str] = None,
+        schema_table_context_limit: Optional[int] = None,
+        schema_measure_context_limit: Optional[int] = None,
     ) -> Dict[str, Any]:
         try:
             from anthropic import AsyncAnthropic  # type: ignore
@@ -990,6 +1174,9 @@ class AgentOrchestrator:
                         },
                         "existing_history_count": len(history),
                         "schema_loaded": bool(schema_text),
+                        "schema_retrieval_prompt_loaded": bool(schema_retrieval_prompt),
+                        "schema_table_context_limit": schema_table_context_limit,
+                        "schema_measure_context_limit": schema_measure_context_limit,
                 },
                 enabled=settings_debug_enabled,
             )
@@ -1001,6 +1188,10 @@ class AgentOrchestrator:
             report_id=report_id,
             user_message=user_message,
             debug_enabled=settings_debug_enabled,
+            custom_instructions=custom_instructions,
+            schema_retrieval_prompt=schema_retrieval_prompt,
+            schema_table_context_limit=schema_table_context_limit,
+            schema_measure_context_limit=schema_measure_context_limit,
         )
 
         initial_failure_reason: Optional[str] = None
@@ -1024,7 +1215,7 @@ class AgentOrchestrator:
                 initial_failure_reason = "semantic_model_unavailable"
                 initial_error_message = "Semantic model context could not be retrieved"
 
-        system_prompt = self.prompt_manager.get_system_prompt(schema_text)
+        system_prompt = self.prompt_manager.get_system_prompt(schema_text, custom_instructions=custom_instructions)
         tools: Any = self.tool_registry.get_all_tools()
         _debug_print(
             "anthropic:request:prepared",
@@ -1037,6 +1228,7 @@ class AgentOrchestrator:
                 user_message=user_message,
                 history=history,
                 schema_text=schema_text,
+                custom_instructions=custom_instructions,
             )
         except Exception as exc:
             logging.warning("Falling back to local token estimate after token counting failure: %s", exc)
@@ -1405,6 +1597,7 @@ async def calcular_tokens_turno(
     history: List[Dict[str, Any]],
     settings: RuntimeSettings,
     schema_text: Optional[str] = None,
+    custom_instructions: Optional[List[Any]] = None,
 ) -> int:
     """Estimate token usage for the next turn."""
     prompt_manager = PromptManager(history_limit=settings.history_limit)
@@ -1414,6 +1607,7 @@ async def calcular_tokens_turno(
         user_message=user_message,
         history=history,
         schema_text=schema_text,
+        custom_instructions=custom_instructions,
     )
 
 
@@ -1427,6 +1621,10 @@ async def run_chat_turn(
     conversation_id: Optional[str] = None,
     report_id: Optional[int] = None,
     powerbi_credentials: Optional[Dict[str, Any]] = None,
+    custom_instructions: Optional[List[Any]] = None,
+    schema_retrieval_prompt: Optional[str] = None,
+    schema_table_context_limit: Optional[int] = None,
+    schema_measure_context_limit: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Compatibility wrapper kept for legacy imports."""
     prompt_manager = PromptManager(history_limit=settings.history_limit)
@@ -1445,6 +1643,9 @@ async def run_chat_turn(
                     "datasethash": hash_identifier(dataset_id, prefix="dataset"),
                     "historycount": str(len(history)),
                     "schemaloaded": str(bool(schema_text)).lower(),
+                    "schemaretrievalpromptloaded": str(bool(schema_retrieval_prompt)).lower(),
+                    "schematablelimit": str(_coerce_positive_int(schema_table_context_limit, DEFAULT_TABLE_CONTEXT_LIMIT)),
+                    "schemameasurelimit": str(_coerce_positive_int(schema_measure_context_limit, DEFAULT_MEASURE_CONTEXT_LIMIT)),
                 }
             )
 
@@ -1456,6 +1657,10 @@ async def run_chat_turn(
             schema_text=schema_text,
             conversation_id=conversation_id,
             report_id=report_id,
+            custom_instructions=custom_instructions,
+            schema_retrieval_prompt=schema_retrieval_prompt,
+            schema_table_context_limit=schema_table_context_limit,
+            schema_measure_context_limit=schema_measure_context_limit,
         )
 
         if observation is not None:
