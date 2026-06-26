@@ -228,22 +228,7 @@
     </div>
   </div>
 
-  <div class="row g-4 mb-4">
-    <div class="col-lg-7">
-      <div class="card overview-panel h-100">
-        <div class="card-header"><h5 class="mb-0"><i class="bi bi-graph-up-arrow me-2"></i>Tendencia diaria de costo</h5></div>
-        <div class="card-body"><div class="chart-box"><canvas id="dailyCostChart"></canvas></div></div>
-      </div>
-    </div>
-    <div class="col-lg-5">
-      <div class="card overview-panel h-100">
-        <div class="card-header"><h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Consumo por tipo de evento</h5></div>
-        <div class="card-body"><div class="chart-box"><canvas id="eventTypeChart"></canvas></div></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="card overview-panel">
+  <div class="card overview-panel mb-4">
     <div class="card-header"><h5 class="mb-0"><i class="bi bi-buildings me-2"></i>Consumo por empresa</h5></div>
     <div class="table-responsive">
       <table class="table scope-table align-middle mb-0">
@@ -290,6 +275,21 @@
           {% endfor %}
         </tbody>
       </table>
+    </div>
+  </div>
+
+  <div class="row g-4 mb-4">
+    <div class="col-lg-7">
+      <div class="card overview-panel h-100">
+        <div class="card-header"><h5 class="mb-0"><i class="bi bi-graph-up-arrow me-2"></i>Tendencia diaria de costo</h5></div>
+        <div class="card-body"><div class="chart-box"><canvas id="dailyCostChart"></canvas></div></div>
+      </div>
+    </div>
+    <div class="col-lg-5">
+      <div class="card overview-panel h-100">
+        <div class="card-header"><h5 class="mb-0"><i class="bi bi-pie-chart me-2"></i>Consumo por tipo de evento</h5></div>
+        <div class="card-body"><div class="chart-box"><canvas id="eventTypeChart"></canvas></div></div>
+      </div>
     </div>
   </div>
 </div>

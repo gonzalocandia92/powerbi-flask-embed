@@ -19,7 +19,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink, Report
-from app.services import ai_billing
+from app.services import agent_prompts, ai_billing
 from app.services.chat_credentials import resolve_powerbi_env_for_report
 from app.services.agent_core import DEFAULT_MODEL
 from app.services.observability import (
@@ -469,6 +469,7 @@ async def procesar_interaccion_completa(
         try:
             report, dataset_id, powerbi_credentials = await asyncio.to_thread(_resolve_report_and_dataset_sync, slug)
             billing_context = ai_billing.resolve_report_billing_context(report)
+            custom_instructions = await asyncio.to_thread(agent_prompts.resolve_agent_prompt_instructions, report)
             await asyncio.to_thread(_validate_chat_pricing_sync, report, settings)
             session_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
@@ -506,6 +507,10 @@ async def procesar_interaccion_completa(
                     conversation_id=str(session_id),
                     report_id=report.id,
                     powerbi_credentials=powerbi_credentials,
+                    custom_instructions=custom_instructions,
+                    schema_retrieval_prompt=report.schema_retrieval_prompt,
+                    schema_table_context_limit=report.schema_table_context_limit,
+                    schema_measure_context_limit=report.schema_measure_context_limit,
                 )
 
             latency_ms = int((time.monotonic() - start) * 1000)

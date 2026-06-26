@@ -178,6 +178,35 @@ class BillingLimitForm(FlaskForm):
     submit = SubmitField("Guardar limite")
 
 
+class AgentPromptConfigForm(FlaskForm):
+    """Form for persisted agent prompt instructions."""
+
+    title = StringField(
+        "Titulo",
+        validators=[DataRequired(), Length(max=200)],
+    )
+    instructions = TextAreaField(
+        "Instrucciones adicionales",
+        validators=[DataRequired()],
+    )
+    starts_at = DateField("Vigente desde", validators=[Optional()])
+    ends_at = DateField("Vigente hasta", validators=[Optional()])
+    is_active = BooleanField("Prompt activo", default=True)
+    schema_retrieval_prompt = TextAreaField(
+        "Mini prompt para embedding",
+        validators=[Optional()],
+    )
+    schema_table_context_limit = IntegerField(
+        "Tablas recuperadas",
+        validators=[Optional(), NumberRange(min=1, max=20)],
+    )
+    schema_measure_context_limit = IntegerField(
+        "Medidas recuperadas",
+        validators=[Optional(), NumberRange(min=1, max=40)],
+    )
+    submit = SubmitField("Guardar prompt")
+
+
 class AIModelPricingForm(FlaskForm):
     """Form for provider/model AI pricing records."""
 
