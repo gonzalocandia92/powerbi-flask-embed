@@ -1,0 +1,114 @@
+{% extends "layout.html" %}
+
+{% block title %}{% if is_new %}Nuevo Usuario{% else %}Editar Usuario{% endif %} - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-lg-8 mx-auto">
+      <div class="d-flex align-items-center mb-4">
+        <a href="{{ url_for('users.list_users') }}" class="btn btn-link text-decoration-none me-2">
+          <i class="bi bi-arrow-left me-1"></i>Volver
+        </a>
+        <h2 class="mb-0"><i class="bi bi-person-plus me-2"></i>{{ title }}</h2>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <form method="POST" novalidate>
+            {{ form.hidden_tag() }}
+
+            <!-- Username Field -->
+            <div class="mb-3">
+              <label class="form-label" for="username">Usuario</label>
+              {% if form.username.errors %}
+                {{ form.username(class="form-control is-invalid", id="username", autocomplete="off") }}
+                <div class="invalid-feedback d-block">
+                  {% for error in form.username.errors %}
+                  {{ error }}
+                  {% endfor %}
+                </div>
+              {% else %}
+                {{ form.username(class="form-control", id="username", autocomplete="off") }}
+              {% endif %}
+              <small class="form-text text-muted">Min. 3 caracteres, máx. 120</small>
+            </div>
+
+            <!-- Password Fields -->
+            <div class="row">
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label class="form-label" for="password">
+                    Contraseña
+                    {% if not is_new %}<span class="text-muted small">(Dejar en blanco para no cambiar)</span>{% endif %}
+                  </label>
+                  {% if form.password.errors %}
+                    {{ form.password(class="form-control is-invalid", id="password", autocomplete="off") }}
+                    <div class="invalid-feedback d-block">
+                      {% for error in form.password.errors %}
+                      {{ error }}
+                      {% endfor %}
+                    </div>
+                  {% else %}
+                    {{ form.password(class="form-control", id="password", autocomplete="off") }}
+                  {% endif %}
+                  <small class="form-text text-muted">Min. 6 caracteres</small>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <label class="form-label" for="password_confirm">Confirmar Contraseña</label>
+                  {% if form.password_confirm.errors %}
+                    {{ form.password_confirm(class="form-control is-invalid", id="password_confirm", autocomplete="off") }}
+                    <div class="invalid-feedback d-block">
+                      {% for error in form.password_confirm.errors %}
+                      {{ error }}
+                      {% endfor %}
+                    </div>
+                  {% else %}
+                    {{ form.password_confirm(class="form-control", id="password_confirm", autocomplete="off") }}
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+
+            <!-- Checkboxes -->
+            <div class="row">
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <div class="form-check">
+                    {{ form.is_admin(class="form-check-input", id="is_admin") }}
+                    <label class="form-check-label" for="is_admin">
+                      Es Administrador
+                    </label>
+                  </div>
+                  <small class="form-text text-muted">Los administradores tienen acceso total</small>
+                </div>
+              </div>
+              <div class="col-md-6">
+                <div class="mb-3">
+                  <div class="form-check">
+                    {{ form.is_active(class="form-check-input", id="is_active") }}
+                    <label class="form-check-label" for="is_active">
+                      Activo
+                    </label>
+                  </div>
+                  <small class="form-text text-muted">Los usuarios inactivos no pueden acceder</small>
+                </div>
+              </div>
+            </div>
+
+            <!-- Submit Button -->
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+              <a href="{{ url_for('users.list_users') }}" class="btn btn-outline-secondary">
+                Cancelar
+              </a>
+              {{ form.submit(class="btn btn-primary") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

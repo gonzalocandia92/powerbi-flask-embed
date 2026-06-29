@@ -135,3 +135,44 @@ class ClientePrivadoForm(FlaskForm):
 
     nombre = StringField("Nombre del Cliente", validators=[DataRequired(), Length(max=200)])
     submit = SubmitField("Guardar")
+
+
+class UserForm(FlaskForm):
+    """Form for creating/editing application users."""
+
+    username = StringField("Usuario", validators=[DataRequired(), Length(min=3, max=120)])
+    password = PasswordField("Contraseña", validators=[Optional(), Length(min=6)])
+    password_confirm = PasswordField("Confirmar Contraseña", validators=[Optional()])
+    is_admin = BooleanField("Es Administrador")
+    is_active = BooleanField("Activo", default=True)
+    submit = SubmitField("Guardar")
+
+
+class UserRoleForm(FlaskForm):
+    """Form for assigning roles to users."""
+
+    roles = SelectMultipleField("Roles", coerce=int, validators=[])
+    submit = SubmitField("Asignar Roles")
+
+
+class RoleForm(FlaskForm):
+    """Form for creating/editing roles."""
+
+    name = StringField("Nombre del Rol", validators=[DataRequired(), Length(min=3, max=120)])
+    description = StringField("Descripción", validators=[Optional(), Length(max=500)])
+    submit = SubmitField("Guardar")
+
+
+class PermissionForm(FlaskForm):
+    """Form for creating/editing permissions."""
+
+    name = StringField("Nombre del Permiso", validators=[DataRequired(), Length(min=3, max=120)])
+    description = StringField("Descripción", validators=[Optional(), Length(max=500)])
+    submit = SubmitField("Guardar")
+
+
+class RolePermissionForm(FlaskForm):
+    """Form for assigning permissions to roles."""
+
+    permissions = SelectMultipleField("Permisos", coerce=int, validators=[])
+    submit = SubmitField("Asignar Permisos")

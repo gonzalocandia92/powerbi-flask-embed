@@ -25,6 +25,60 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
+# Association table for many-to-many relationship between User and Role
+user_role = db.Table(
+    'user_role',
+    db.Column('user_id', db.BigInteger, db.ForeignKey('users.id'), primary_key=True),
+    db.Column('role_id', db.BigInteger, db.ForeignKey('roles.id'), primary_key=True),
+)
+
+# Association table for many-to-many relationship between Role and Permission
+role_permission = db.Table(
+    'role_permission',
+    db.Column('role_id', db.BigInteger, db.ForeignKey('roles.id'), primary_key=True),
+    db.Column('permission_id', db.BigInteger, db.ForeignKey('permissions.id'), primary_key=True),
+)
+
+
+class Permission(db.Model):
+    """Permission model for role-based access control."""
+
+    __tablename__ = 'permissions'
+
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    description = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    # Relationships
+    roles = db.relationship('Role', secondary='role_permission', back_populates='permissions')
+
+    def __repr__(self):
+        return f'<Permission {self.name}>'
+
+
+class Role(db.Model):
+    """Role model for grouping permissions."""
+
+    __tablename__ = 'roles'
+
+    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    name = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    description = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    # Relationships
+    users = db.relationship('User', secondary='user_role', back_populates='roles')
+    permissions = db.relationship('Permission', secondary='role_permission', back_populates='roles')
+
+    def __repr__(self):
+        return f'<Role {self.name}>'
+
+    def has_permission(self, permission_name):
+        """Check if role has a specific permission."""
+        return any(p.name == permission_name for p in self.permissions)
+
+
 class User(db.Model, UserMixin):
     """Application user model for authentication."""
 
@@ -33,7 +87,13 @@ class User(db.Model, UserMixin):
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     username = db.Column(db.String(120), unique=True, nullable=False)
     password_hash = db.Column(db.String(256), nullable=False)
-    is_admin = db.Column(db.Boolean, default=True)
+    is_admin = db.Column(db.Boolean, default=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    # Relationships
+    roles = db.relationship('Role', secondary='user_role', back_populates='users')
 
     def set_password(self, password):
         """Hash and store the password."""
@@ -42,6 +102,21 @@ class User(db.Model, UserMixin):
     def check_password(self, password):
         """Verify the password against the stored hash."""
         return check_password_hash(self.password_hash, password)
+
+    def has_permission(self, permission_name):
+        """Check if user has a specific permission through their roles."""
+        if self.is_admin:
+            return True
+        return any(role.has_permission(permission_name) for role in self.roles)
+
+    def has_role(self, role_name):
+        """Check if user has a specific role."""
+        if self.is_admin:
+            return True
+        return any(role.name == role_name for role in self.roles)
+
+    def __repr__(self):
+        return f'<User {self.username}>'
 
 
 class Client(db.Model):

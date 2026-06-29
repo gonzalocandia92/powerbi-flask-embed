@@ -1,0 +1,75 @@
+{% extends "layout.html" %}
+
+{% block title %}{% if is_new %}Nuevo Permiso{% else %}Editar Permiso{% endif %} - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-lg-8 mx-auto">
+      <div class="d-flex align-items-center mb-4">
+        <a href="{{ url_for('users.list_permissions') }}" class="btn btn-link text-decoration-none me-2">
+          <i class="bi bi-arrow-left me-1"></i>Volver
+        </a>
+        <h2 class="mb-0"><i class="bi bi-lock me-2"></i>{{ title }}</h2>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <form method="POST" novalidate>
+            {{ form.hidden_tag() }}
+
+            <!-- Name Field -->
+            <div class="mb-3">
+              <label class="form-label" for="name">Nombre del Permiso</label>
+              {% if form.name.errors %}
+                {{ form.name(class="form-control is-invalid", id="name", autocomplete="off") }}
+                <div class="invalid-feedback d-block">
+                  {% for error in form.name.errors %}
+                  {{ error }}
+                  {% endfor %}
+                </div>
+              {% else %}
+                {{ form.name(class="form-control", id="name", autocomplete="off") }}
+              {% endif %}
+              <small class="form-text text-muted">
+                Min. 3 caracteres, máx. 120. 
+                Ejemplos: "can_edit_users", "can_view_reports", "can_manage_empresas"
+              </small>
+            </div>
+
+            <!-- Description Field -->
+            <div class="mb-3">
+              <label class="form-label" for="description">Descripción</label>
+              {% if form.description.errors %}
+                {{ form.description(class="form-control is-invalid", id="description", rows=4) }}
+                <div class="invalid-feedback d-block">
+                  {% for error in form.description.errors %}
+                  {{ error }}
+                  {% endfor %}
+                </div>
+              {% else %}
+                {{ form.description(class="form-control", id="description", rows=4, placeholder="Descripción de qué permite este permiso") }}
+              {% endif %}
+              <small class="form-text text-muted">Máx. 500 caracteres</small>
+            </div>
+
+            <!-- Info Alert -->
+            <div class="alert alert-info">
+              <i class="bi bi-info-circle me-2"></i>
+              <strong>Nota:</strong> Los permisos se asignan a roles, y los usuarios adquieren permisos a través de sus roles asignados.
+            </div>
+
+            <!-- Submit Button -->
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+              <a href="{{ url_for('users.list_permissions') }}" class="btn btn-outline-secondary">
+                Cancelar
+              </a>
+              {{ form.submit(class="btn btn-primary") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

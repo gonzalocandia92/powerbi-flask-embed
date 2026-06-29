@@ -5,6 +5,8 @@ import time
 import logging
 from functools import wraps
 from sqlalchemy.exc import OperationalError, DBAPIError
+from flask import redirect, url_for, flash
+from flask_login import current_user
 
 from app import db
 
@@ -52,4 +54,45 @@ def retry_on_db_error(max_retries=3, delay=1):
         
         return wrapper
     
+    return decorator
+
+
+def admin_required(f):
+    """
+    Decorator to require admin privileges.
+    
+    Redirects non-admin users to login page with a warning message.
+    """
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if not current_user.is_authenticated or not current_user.is_admin:
+            flash('Acceso denegado. Se requieren permisos de administrador.', 'danger')
+            return redirect(url_for('auth.login'))
+        return f(*args, **kwargs)
+    return decorated_function
+
+
+def permission_required(permission_name):
+    """
+    Decorator to require a specific permission.
+    
+    Args:
+        permission_name: Name of the permission required
+    
+    Returns:
+        Decorated function that checks for permission
+    """
+    def decorator(f):
+        @wraps(f)
+        def decorated_function(*args, **kwargs):
+            if not current_user.is_authenticated:
+                flash('Debe iniciar sesión.', 'danger')
+                return redirect(url_for('auth.login'))
+            
+            if not current_user.has_permission(permission_name):
+                flash('No tiene permiso para realizar esta acción.', 'danger')
+                return redirect(url_for('main.index'))
+            
+            return f(*args, **kwargs)
+        return decorated_function
     return decorator

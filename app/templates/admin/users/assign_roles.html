@@ -1,0 +1,84 @@
+{% extends "layout.html" %}
+
+{% block title %}Asignar Roles - {{ user.username }} - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-lg-8 mx-auto">
+      <div class="d-flex align-items-center mb-4">
+        <a href="{{ url_for('users.list_users') }}" class="btn btn-link text-decoration-none me-2">
+          <i class="bi bi-arrow-left me-1"></i>Volver
+        </a>
+        <h2 class="mb-0"><i class="bi bi-shield-check me-2"></i>Asignar Roles</h2>
+      </div>
+
+      <div class="card shadow-sm mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Usuario: <strong>{{ user.username }}</strong></h5>
+          <p class="text-muted mb-0">Seleccione los roles que desea asignar a este usuario</p>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <form method="POST" novalidate>
+            {{ form.hidden_tag() }}
+
+            <!-- Roles Selection -->
+            <div class="mb-3">
+              <label class="form-label" for="roles">Roles Disponibles</label>
+              {% if form.roles.errors %}
+                {{ form.roles(class="form-select is-invalid", id="roles", multiple=True) }}
+                <div class="invalid-feedback d-block">
+                  {% for error in form.roles.errors %}
+                  {{ error }}
+                  {% endfor %}
+                </div>
+              {% else %}
+                {{ form.roles(class="form-select", id="roles", multiple=True, size=8) }}
+              {% endif %}
+              <small class="form-text text-muted">
+                Mantén Ctrl (Cmd en Mac) presionado para seleccionar múltiples roles. 
+                {% if user.roles %}Actualmente tiene {{ user.roles|length }} rol(es){% endif %}
+              </small>
+            </div>
+
+            <!-- Role Info -->
+            {% if form.roles.choices %}
+            <div class="alert alert-info" role="alert">
+              <i class="bi bi-info-circle me-2"></i>
+              <strong>Información:</strong>
+              <div class="mt-2">
+                <small>
+                  Los roles disponibles son:
+                  <ul class="mb-0 mt-2">
+                    {% for role_id, role_name in form.roles.choices %}
+                    <li>
+                      <strong>{{ role_name }}</strong>
+                      {% set role = query_role(role_id) %}
+                      {% if role and role.description %}
+                      - {{ role.description }}
+                      {% endif %}
+                    </li>
+                    {% endfor %}
+                  </ul>
+                </small>
+              </div>
+            </div>
+            {% endif %}
+
+            <!-- Submit Button -->
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+              <a href="{{ url_for('users.list_users') }}" class="btn btn-outline-secondary">
+                Cancelar
+              </a>
+              {{ form.submit(class="btn btn-primary", value="Asignar Roles") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

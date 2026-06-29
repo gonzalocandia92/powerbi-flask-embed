@@ -525,6 +525,18 @@
             <li><a class="dropdown-item" href="{{ url_for('empresas.list') }}"><i class="bi bi-building me-2"></i>Empresas</a></li>
           </ul>
         </li>
+        {% if current_user.is_authenticated and current_user.is_admin %}
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="navbarAdmin" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-shield-check me-1"></i>Administración
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="navbarAdmin">
+            <li><a class="dropdown-item" href="{{ url_for('users.list_users') }}"><i class="bi bi-people me-2"></i>Usuarios</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('users.list_roles') }}"><i class="bi bi-shield-check me-2"></i>Roles</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('users.list_permissions') }}"><i class="bi bi-lock me-2"></i>Permisos</a></li>
+          </ul>
+        </li>
+        {% endif %}
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" id="navbarFuturas" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="bi bi-building-check me-1"></i>Futuras Empresas
