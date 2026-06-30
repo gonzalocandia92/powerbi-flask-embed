@@ -151,7 +151,7 @@ class Report(db.Model):
 
     __tablename__ = 'reports'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     name = db.Column(db.String(200), nullable=False)
     report_id = db.Column(db.String(200), nullable=False)
     embed_url = db.Column(db.String(1000), nullable=True)
@@ -170,6 +170,11 @@ class Report(db.Model):
 
     # Whether to show DAX queries in the chat (off by default for clients)
     show_dax_query = db.Column(db.Boolean, default=False, nullable=False)
+
+    # Fixed schema retrieval limits for KLARA. Null values use runtime defaults.
+    schema_retrieval_prompt = db.Column(db.Text, nullable=True)
+    schema_table_context_limit = db.Column(db.Integer, nullable=True)
+    schema_measure_context_limit = db.Column(db.Integer, nullable=True)
 
     # Filter configuration for private API access
     filter_enabled = db.Column(db.Boolean, default=False, nullable=False)
@@ -429,6 +434,27 @@ class BillingLimit(db.Model):
     ends_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+
+class AgentPromptConfig(db.Model):
+    """Persisted additional agent instructions for global/empresa/report scopes."""
+
+    __tablename__ = 'agent_prompt_configs'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    scope_type = db.Column(db.String(20), nullable=False, index=True)
+    scope_id = db.Column(db.String(120), nullable=True, index=True)
+    title = db.Column(db.String(200), nullable=False)
+    instructions = db.Column(db.Text, nullable=False)
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    starts_at = db.Column(db.DateTime, nullable=True)
+    ends_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    __table_args__ = (
+        db.Index('ix_agent_prompt_configs_scope', 'scope_type', 'scope_id'),
+    )
 
 
 class AIModelPricing(db.Model):

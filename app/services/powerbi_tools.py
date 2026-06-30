@@ -2,12 +2,26 @@
 import json
 import logging
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import requests
 
 LOG = logging.getLogger(__name__)
 POWERBI_SCOPE = "https://analysis.windows.net/powerbi/api/.default"
+MAX_DAX_RESULT_ROWS_FOR_LLM = 30
+MAX_POWERBI_ERROR_BODY_CHARS = 3_000
+
+
+def _preview_response_body(response: requests.Response) -> str:
+    body = (response.text or "").strip()
+    if len(body) <= MAX_POWERBI_ERROR_BODY_CHARS:
+        return body
+
+    omitted_chars = len(body) - MAX_POWERBI_ERROR_BODY_CHARS
+    return (
+        f"{body[:MAX_POWERBI_ERROR_BODY_CHARS]}\n"
+        f"[Power BI error body truncado: se omitieron {omitted_chars} caracteres.]"
+    )
 
 
 def _get_access_token(credentials: Dict[str, str]) -> str:
@@ -44,13 +58,35 @@ def _get_access_token(credentials: Dict[str, str]) -> str:
     return str(access_token)
 
 
+def _load_dax_rows(result_json: str) -> List[Dict[str, Any]]:
+    """Parse executeQueries JSON output into a row list."""
+    parsed = json.loads(result_json)
+    if isinstance(parsed, list):
+        rows = parsed
+    elif isinstance(parsed, dict) and isinstance(parsed.get("rows"), list):
+        rows = parsed["rows"]
+    else:
+        raise RuntimeError(f"Power BI devolvio un formato inesperado para filas DAX: {type(parsed).__name__}")
+
+    malformed = [row for row in rows if not isinstance(row, dict)]
+    if malformed:
+        raise RuntimeError("Power BI devolvio filas DAX con formato inesperado")
+
+    return rows
+
+
 def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, str]) -> List[Dict[str, Any]]:
     """Fetch structured table and measure chunks from a semantic model."""
     try:
-        tables_res = execute_dax_query_local(dataset_id, "EVALUATE INFO.VIEW.TABLES()", credentials)
+        tables_res = execute_dax_query_local(
+            dataset_id,
+            "EVALUATE INFO.VIEW.TABLES()",
+            credentials,
+            max_rows=None,
+        )
         if tables_res.startswith("Error"):
             raise RuntimeError(tables_res)
-        t_rows = json.loads(tables_res)
+        t_rows = _load_dax_rows(tables_res)
 
         table_descriptions = {}
         for table_row in t_rows:
@@ -61,10 +97,15 @@ def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, 
                 continue
             table_descriptions[table_name] = table_description or ""
 
-        columns_res = execute_dax_query_local(dataset_id, "EVALUATE INFO.VIEW.COLUMNS()", credentials)
+        columns_res = execute_dax_query_local(
+            dataset_id,
+            "EVALUATE INFO.VIEW.COLUMNS()",
+            credentials,
+            max_rows=None,
+        )
         if columns_res.startswith("Error"):
             raise RuntimeError(columns_res)
-        c_rows = json.loads(columns_res)
+        c_rows = _load_dax_rows(columns_res)
 
         tables_dict = defaultdict(list)
         for column_row in c_rows:
@@ -79,10 +120,15 @@ def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, 
 
             tables_dict[table_name].append(f"{column_name} ({column_type})")
 
-        measures_res = execute_dax_query_local(dataset_id, "EVALUATE INFO.VIEW.MEASURES()", credentials)
+        measures_res = execute_dax_query_local(
+            dataset_id,
+            "EVALUATE INFO.VIEW.MEASURES()",
+            credentials,
+            max_rows=None,
+        )
         if measures_res.startswith("Error"):
             raise RuntimeError(measures_res)
-        m_rows = json.loads(measures_res)
+        m_rows = _load_dax_rows(measures_res)
 
         documents: List[Dict[str, Any]] = []
         for table_name, columns in tables_dict.items():
@@ -121,7 +167,12 @@ def get_tables_and_measures_description(dataset_id: str, credentials: Dict[str, 
         ) from exc
 
 
-def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[str, str]) -> str:
+def execute_dax_query_local(
+    dataset_id: str,
+    dax_query: str,
+    credentials: Dict[str, str],
+    max_rows: Optional[int] = MAX_DAX_RESULT_ROWS_FOR_LLM,
+) -> str:
     """Execute DAX directly against the Power BI API."""
     if not dax_query or not str(dax_query).strip():
         return "Error: dax_query vacio"
@@ -150,6 +201,17 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
                 "Verifica que exista y que el usuario Power BI del reporte tenga acceso."
             )
 
+        if not response.ok:
+            body_preview = _preview_response_body(response)
+            LOG.error(
+                "Power BI executeQueries failed - status=%s reason=%s body=%r",
+                response.status_code,
+                response.reason,
+                body_preview,
+            )
+            detail = f" Body: {body_preview}" if body_preview else ""
+            return f"Error tecnico ejecutando DAX: Power BI {response.status_code} {response.reason}.{detail}"
+
         response.raise_for_status()
         data = response.json()
 
@@ -157,6 +219,21 @@ def execute_dax_query_local(dataset_id: str, dax_query: str, credentials: Dict[s
         for result in data.get("results", []):
             for table in result.get("tables", []):
                 rows.extend(table.get("rows", []))
+
+        if max_rows is not None and len(rows) > max_rows:
+            truncated_rows = rows[:max_rows]
+            truncated_payload = {
+                "warning": (
+                    f"La consulta devolvio {len(rows)} filas. "
+                    f"Mostrando solo las primeras {max_rows}. "
+                    "Agrega filtros o TOPN en DAX si necesitas un resultado mas acotado."
+                ),
+                "truncated": True,
+                "total_rows": len(rows),
+                "returned_rows": len(truncated_rows),
+                "rows": truncated_rows,
+            }
+            return json.dumps(truncated_payload, ensure_ascii=False)
 
         return json.dumps(rows, ensure_ascii=False)
     except Exception as exc:

@@ -19,8 +19,9 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink, Report
-from app.services import ai_billing
+from app.services import agent_prompts, ai_billing
 from app.services.chat_credentials import resolve_powerbi_env_for_report
+from app.services.agent_core import DEFAULT_MODEL
 from app.services.observability import (
     hash_identifier,
     observation_preview,
@@ -206,6 +207,63 @@ def _prepare_turn_sync(
     return session.id, history
 
 
+def _record_result_usage_events(
+    *,
+    result: Dict[str, Any],
+    session_id: int,
+    message_id: int,
+    billing_context: ai_billing.BillingContext,
+    model: str,
+    had_error: bool,
+) -> int:
+    persisted_events = 0
+    for raw_event in result.get("ai_usage_events") or []:
+        event_payload = dict(raw_event)
+        metadata_json = event_payload.pop("metadata_json", None)
+        ai_billing.record_ai_usage_event(
+            session_id=session_id,
+            message_id=message_id,
+            workspace_id=billing_context.workspace_id,
+            report_id=billing_context.report_id,
+            empresa_id=billing_context.empresa_id,
+            billing_scope_type=billing_context.billing_scope_type,
+            billing_scope_id=billing_context.billing_scope_id,
+            metadata_json=metadata_json,
+            **event_payload,
+        )
+        persisted_events += 1
+
+    input_tokens = result.get("input_tokens")
+    output_tokens = result.get("output_tokens")
+    if persisted_events == 0 and (input_tokens is not None or output_tokens is not None):
+        ai_billing.record_ai_usage_event(
+            session_id=session_id,
+            message_id=message_id,
+            workspace_id=billing_context.workspace_id,
+            report_id=billing_context.report_id,
+            empresa_id=billing_context.empresa_id,
+            billing_scope_type=billing_context.billing_scope_type,
+            billing_scope_id=billing_context.billing_scope_id,
+            provider="anthropic",
+            model=model,
+            event_type="generation",
+            source_type="chat",
+            trigger_type="user_request",
+            operation_name="chat-response-fallback",
+            status="error" if had_error else "success",
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
+            metadata_json={
+                "estimated_usage": True,
+                "fallback_reason": "missing_ai_usage_events",
+            },
+        )
+        persisted_events += 1
+
+    return persisted_events
+
+
 @retry_on_db_error(max_retries=3, delay=1)
 def _persist_success_sync(
     *,
@@ -220,6 +278,7 @@ def _persist_success_sync(
     if session is None:
         raise ChatbotServiceError(f"Chat session not found: {session_id}")
 
+    had_error = bool(result.get("had_error"))
     assistant_message = ChatMessage(
         session_id=session.id,
         role="assistant",
@@ -232,33 +291,37 @@ def _persist_success_sync(
         mcp_used=bool(result.get("tools_called")),
         tools_called=result.get("tools_called") or None,
         dax_query=result.get("dax_query"),
-        had_error=False,
+        had_error=had_error,
+        error_message=result.get("error_message") if had_error else None,
     )
     _prepare_sqlite_id(assistant_message, ChatMessage)
     db.session.add(assistant_message)
     db.session.flush()
 
-    for raw_event in result.get("ai_usage_events") or []:
-        event_payload = dict(raw_event)
-        metadata_json = event_payload.pop("metadata_json", None)
-        ai_billing.record_ai_usage_event(
-            session_id=session.id,
-            message_id=assistant_message.id,
-            workspace_id=billing_context.workspace_id,
-            report_id=billing_context.report_id,
-            empresa_id=billing_context.empresa_id,
-            billing_scope_type=billing_context.billing_scope_type,
-            billing_scope_id=billing_context.billing_scope_id,
-            metadata_json=metadata_json,
-            **event_payload,
-        )
-    ai_billing.update_message_usage_totals(assistant_message.id)
-
+    _record_result_usage_events(
+        result=result,
+        session_id=session.id,
+        message_id=assistant_message.id,
+        billing_context=billing_context,
+        model=result.get("model") or anthropic_model,
+        had_error=had_error,
+    )
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
-    session.had_errors = bool(session.had_errors)
+    session.had_errors = bool(session.had_errors or had_error)
 
     db.session.commit()
+
+    try:
+        ai_billing.update_message_usage_totals(assistant_message.id)
+        db.session.commit()
+        db.session.refresh(assistant_message)
+    except Exception:
+        db.session.rollback()
+        logging.exception(
+            "[ChatbotService] Failed to refresh aggregated usage totals for assistant message %s",
+            assistant_message.id,
+        )
 
     return {
         "answer": result.get("answer", ""),
@@ -272,6 +335,9 @@ def _persist_success_sync(
         "mcp_used": bool(result.get("tools_called")),
         "tools_called": result.get("tools_called") or [],
         "dax_query": result.get("dax_query"),
+        "had_error": had_error,
+        "error_message": result.get("error_message") if had_error else None,
+        "failure_reason": result.get("failure_reason") if had_error else None,
         "total_cost_usd": assistant_message.total_cost_usd or 0.0,
     }
 
@@ -318,22 +384,14 @@ def _persist_error_sync(
     db.session.flush()
 
     if billing_context is not None and result is not None:
-        for raw_event in result.get("ai_usage_events") or []:
-            event_payload = dict(raw_event)
-            metadata_json = event_payload.pop("metadata_json", None)
-            ai_billing.record_ai_usage_event(
-                session_id=session.id,
-                message_id=error_log.id,
-                workspace_id=billing_context.workspace_id,
-                report_id=billing_context.report_id,
-                empresa_id=billing_context.empresa_id,
-                billing_scope_type=billing_context.billing_scope_type,
-                billing_scope_id=billing_context.billing_scope_id,
-                metadata_json=metadata_json,
-                **event_payload,
-            )
-        ai_billing.update_message_usage_totals(error_log.id)
-
+        _record_result_usage_events(
+            result=result,
+            session_id=session.id,
+            message_id=error_log.id,
+            billing_context=billing_context,
+            model=result.get("model") or DEFAULT_MODEL,
+            had_error=True,
+        )
     # If we are reusing an existing session, the user message was already
     # committed during turn preparation, so only the assistant error is added.
     session.total_messages = (session.total_messages or 0) + 1
@@ -341,6 +399,17 @@ def _persist_error_sync(
     session.had_errors = True
 
     db.session.commit()
+
+    if billing_context is not None and result is not None:
+        try:
+            ai_billing.update_message_usage_totals(error_log.id)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            logging.exception(
+                "[ChatbotService] Failed to refresh aggregated usage totals for error message %s",
+                error_log.id,
+            )
 
 
 def _validate_chat_pricing_sync(report: Report, settings: chat_mcp.RuntimeSettings) -> None:
@@ -400,6 +469,7 @@ async def procesar_interaccion_completa(
         try:
             report, dataset_id, powerbi_credentials = await asyncio.to_thread(_resolve_report_and_dataset_sync, slug)
             billing_context = ai_billing.resolve_report_billing_context(report)
+            custom_instructions = await asyncio.to_thread(agent_prompts.resolve_agent_prompt_instructions, report)
             await asyncio.to_thread(_validate_chat_pricing_sync, report, settings)
             session_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
@@ -437,6 +507,10 @@ async def procesar_interaccion_completa(
                     conversation_id=str(session_id),
                     report_id=report.id,
                     powerbi_credentials=powerbi_credentials,
+                    custom_instructions=custom_instructions,
+                    schema_retrieval_prompt=report.schema_retrieval_prompt,
+                    schema_table_context_limit=report.schema_table_context_limit,
+                    schema_measure_context_limit=report.schema_measure_context_limit,
                 )
 
             latency_ms = int((time.monotonic() - start) * 1000)
