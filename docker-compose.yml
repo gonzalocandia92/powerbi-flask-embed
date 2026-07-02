@@ -9,3 +9,54 @@ services:
     volumes:
       - .:/app
     restart: unless-stopped
+
+  evolution-db:
+    image: postgres:15
+    container_name: evolution_db
+    environment:
+      POSTGRES_USER: ${EVOLUTION_DB_USER}
+      POSTGRES_PASSWORD: ${EVOLUTION_DB_PASSWORD}
+      POSTGRES_DB: ${EVOLUTION_DB_NAME}
+    volumes:
+      - evolution_db_data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  evolution-redis:
+    image: redis:7-alpine
+    container_name: evolution_redis
+    restart: unless-stopped
+
+  evolution-api:
+    image: evoapicloud/evolution-api:latest
+    container_name: evolution_api
+    ports:
+      - "8080:8080"
+    environment:
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY}
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://${EVOLUTION_DB_USER}:${EVOLUTION_DB_PASSWORD}@evolution-db:5432/${EVOLUTION_DB_NAME}
+      CACHE_REDIS_ENABLED: "true"
+      CACHE_REDIS_URI: redis://evolution-redis:6379/6
+      CACHE_LOCAL_ENABLED: "false"
+      DATABASE_SAVE_DATA_CHATS: "false"
+      DATABASE_SAVE_DATA_CONTACTS: "false"
+      DATABASE_SAVE_DATA_HISTORIC: "false"
+      DATABASE_SAVE_DATA_LABELS: "false"
+      CONFIG_SESSION_PHONE_VERSION: "2.3000.1035194821"
+      WEBHOOK_GLOBAL_ENABLED: "false"
+    depends_on:
+      - evolution-db
+      - evolution-redis
+    restart: unless-stopped
+
+  evolution-manager:
+    image: evoapicloud/evolution-manager:latest
+    container_name: evolution_manager
+    ports:
+      - "9615:80"
+    volumes:
+      - ./.evolution-manager/nginx.conf:/etc/nginx/conf.d/nginx.conf:ro
+    restart: unless-stopped
+
+volumes:
+  evolution_db_data:

@@ -84,7 +84,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot
+    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -100,6 +100,7 @@ def create_app():
     app.register_blueprint(api_docs.bp)
     app.register_blueprint(monitor.bp)
     app.register_blueprint(chatbot.bp)
+    app.register_blueprint(whatsapp.bp)
     app.register_blueprint(ai_config.bp)
 
     # ── Background scheduler for dataset refresh monitoring ──────────────────

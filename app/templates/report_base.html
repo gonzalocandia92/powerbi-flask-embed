@@ -7,6 +7,9 @@
     
     <!-- Power BI SDK -->
     <script src="https://cdn.jsdelivr.net/npm/powerbi-client@2.23.1/dist/powerbi.min.js"></script>
+
+    <!-- Markdown renderer -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -468,10 +471,27 @@
         .klara-msg.bot { align-self: flex-start; }
         .klara-bubble {
             padding: 11px 14px; border-radius: 16px;
-            font-size: 14px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word;
+            font-size: 14px; line-height: 1.45; word-wrap: break-word;
         }
-        .klara-msg.user .klara-bubble { background: var(--sudata-green); color: white; border-bottom-right-radius: 5px; }
+        .klara-msg.user .klara-bubble { background: var(--sudata-green); color: white; border-bottom-right-radius: 5px; white-space: pre-wrap; }
         .klara-msg.bot .klara-bubble { background: white; color: var(--sudata-text); border: 1px solid var(--sudata-border); border-bottom-left-radius: 5px; }
+        /* Markdown elements inside bot bubbles */
+        .klara-msg.bot .klara-bubble p { margin: 0 0 6px 0; }
+        .klara-msg.bot .klara-bubble p:last-child { margin-bottom: 0; }
+        .klara-msg.bot .klara-bubble h1,
+        .klara-msg.bot .klara-bubble h2,
+        .klara-msg.bot .klara-bubble h3,
+        .klara-msg.bot .klara-bubble h4 { margin: 8px 0 4px 0; font-size: 1em; font-weight: 700; }
+        .klara-msg.bot .klara-bubble ul,
+        .klara-msg.bot .klara-bubble ol { margin: 4px 0 6px 0; padding-left: 18px; }
+        .klara-msg.bot .klara-bubble li { margin-bottom: 2px; }
+        .klara-msg.bot .klara-bubble code { background: #f1f5f9; border-radius: 4px; padding: 1px 5px; font-family: monospace; font-size: 12px; }
+        .klara-msg.bot .klara-bubble pre { background: #f1f5f9; border-radius: 8px; padding: 10px; overflow-x: auto; margin: 6px 0; }
+        .klara-msg.bot .klara-bubble pre code { background: none; padding: 0; }
+        .klara-msg.bot .klara-bubble strong { font-weight: 700; }
+        .klara-msg.bot .klara-bubble em { font-style: italic; }
+        .klara-msg.bot .klara-bubble hr { border: none; border-top: 1px solid var(--sudata-border); margin: 8px 0; }
+        .klara-msg.bot .klara-bubble blockquote { border-left: 3px solid var(--sudata-green); margin: 6px 0; padding-left: 10px; color: #555; }
         .klara-sql-debug {
             margin-top: 8px; padding: 8px; border-radius: 10px;
             background: #eef2ff; color: #3730a3; font-family: monospace;
@@ -1150,7 +1170,9 @@
                 var time = document.createElement("span");
                 wrapper.className = "klara-msg " + type;
                 bubble.className  = "klara-bubble";
-                bubble.innerHTML  = sanitize(text).replace(/\n/g, "<br>");
+                bubble.innerHTML  = type === 'bot'
+                    ? marked.parse(text || "")
+                    : sanitize(text).replace(/\n/g, "<br>");
                 if (sqlUsado && KLARA_SHOW_DAX) {
                     var dbg = document.createElement("div");
                     dbg.className = "klara-sql-debug";
