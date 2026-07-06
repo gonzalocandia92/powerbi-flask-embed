@@ -236,28 +236,6 @@ class PublicLink(db.Model):
     report = db.relationship('Report', back_populates='public_links')
 
 
-class WhatsAppContact(db.Model):
-    """Links a WhatsApp phone number to the report it can chat with KLARA about."""
-
-    __tablename__ = 'whatsapp_contacts'
-
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
-    phone_number = db.Column(db.String(32), unique=True, nullable=False, index=True)
-    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False)
-    slug = db.Column(db.String(120), nullable=False)
-    conversation_id = db.Column(db.BigInteger, db.ForeignKey('chat_sessions.id', ondelete='SET NULL'), nullable=True)
-
-    # True while a message from this contact is being processed by the agent,
-    # used to serialize concurrent WhatsApp messages from the same number.
-    is_processing = db.Column(db.Boolean, default=False, nullable=False)
-
-    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
-    last_message_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
-
-    report = db.relationship('Report')
-    session = db.relationship('ChatSession')
-
-
 class Visit(db.Model):
     """Analytics tracking for public link visits."""
 
