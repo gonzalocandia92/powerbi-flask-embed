@@ -7,11 +7,13 @@ using Azure AD authentication and the Power BI REST API.
 import os
 import atexit
 import logging
+import asyncio
 from flask import Flask
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_migrate import Migrate
 from dotenv import load_dotenv
+from app.services.observability import init_langfuse
 
 load_dotenv()
 
@@ -37,6 +39,7 @@ def create_app():
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    init_langfuse()
     
     db_uri = app.config['SQLALCHEMY_DATABASE_URI']
     if db_uri and 'sqlite' not in db_uri.lower():
@@ -57,6 +60,21 @@ def create_app():
     
     db.init_app(app)
     migrate.init_app(app, db)
+
+    # Flask async views require the 'async' extra. In environments where that
+    # dependency is unavailable, provide a lightweight compatibility shim so
+    # async routes can still run under WSGI.
+    try:
+        from asgiref.sync import async_to_sync as asgiref_async_to_sync
+    except ImportError:
+        def _async_to_sync(func):
+            def wrapper(*args, **kwargs):
+                return asyncio.run(func(*args, **kwargs))
+            return wrapper
+
+        app.async_to_sync = _async_to_sync
+    else:
+        app.async_to_sync = asgiref_async_to_sync
     
     login_manager.login_view = 'auth.login'
     login_manager.init_app(app)
@@ -66,7 +84,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor
+    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -81,6 +99,9 @@ def create_app():
     app.register_blueprint(futuras_empresas.bp)
     app.register_blueprint(api_docs.bp)
     app.register_blueprint(monitor.bp)
+    app.register_blueprint(chatbot.bp)
+    app.register_blueprint(whatsapp.bp)
+    app.register_blueprint(ai_config.bp)
 
     # ── Background scheduler for dataset refresh monitoring ──────────────────
     # Avoid double-start in Flask debug/reloader mode

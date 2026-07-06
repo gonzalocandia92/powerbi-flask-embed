@@ -11,7 +11,8 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import joinedload
 
 from app import db
-from app.models import Report, Workspace, Tenant, Client, DatasetRefreshLog
+from app.models import Report, Workspace, Tenant, Client, DatasetRefreshLog, SchemaEmbedding
+from app.services.vector_service import trigger_schema_embedding_update
 from app.utils.powerbi import get_refresh_history, refresh_dataset
 
 
@@ -33,6 +34,15 @@ def _parse_iso(value):
     return None
 
 
+def _normalize_utc(dt_value):
+    """Normalize datetimes before comparing values across DB backends."""
+    if dt_value is None:
+        return None
+    if dt_value.tzinfo is None:
+        return dt_value.replace(tzinfo=timezone.utc)
+    return dt_value.astimezone(timezone.utc)
+
+
 def _latest_retry_attempted(report_id):
     """
     Return True if the most-recent DatasetRefreshLog for this report already
@@ -46,6 +56,27 @@ def _latest_retry_attempted(report_id):
         .first()
     )
     return latest is not None and latest.retry_attempted
+
+
+def _latest_refresh_log(report_id):
+    """Return the most recent persisted refresh log for a report."""
+    return (
+        DatasetRefreshLog.query
+        .filter_by(report_id_fk=report_id)
+        .order_by(DatasetRefreshLog.polled_at.desc())
+        .first()
+    )
+
+
+def _has_schema_embeddings(report_id):
+    """Return True when the report already has persisted embeddings."""
+    return (
+        SchemaEmbedding.query
+        .filter_by(report_id_fk=report_id)
+        .limit(1)
+        .first()
+        is not None
+    )
 
 
 def poll_report(report):
@@ -63,6 +94,7 @@ def poll_report(report):
         DatasetRefreshLog: The newly created log entry.
     """
     now = _utcnow()
+    previous_log = _latest_refresh_log(report.id)
     log = DatasetRefreshLog(
         report_id_fk=report.id,
         polled_at=now,
@@ -98,6 +130,18 @@ def poll_report(report):
     # _latest_retry_attempted only sees previously committed entries, avoiding
     # any false negative from the unflushed current log.
     should_retry = log.status == "Failed" and not _latest_retry_attempted(report.id)
+    should_trigger_embeddings = (
+        log.status == "Completed"
+        and bool(log.dataset_id)
+        and log.end_time is not None
+        and report.chatbot_enabled
+        and (
+            previous_log is None
+            or _normalize_utc(previous_log.end_time) != _normalize_utc(log.end_time)
+            or previous_log.status != "Completed"
+            or not _has_schema_embeddings(report.id)
+        )
+    )
 
     db.session.add(log)
 
@@ -115,6 +159,13 @@ def poll_report(report):
             log.retry_triggered_at = _utcnow()
 
     db.session.commit()
+    if should_trigger_embeddings:
+        logging.info(
+            "[RefreshMonitor] New completed refresh detected for report id=%s dataset_id=%s. Triggering embeddings.",
+            report.id,
+            log.dataset_id,
+        )
+        trigger_schema_embedding_update(report.id, log.dataset_id)
     return log
 
 

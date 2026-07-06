@@ -111,7 +111,7 @@
         </div>
         <div class="card-body">
           <h6>Descripción</h6>
-          <p>Obtiene la lista de reportes asociados a la empresa autenticada.</p>
+          <p>Obtiene la lista de reportes asociados a la empresa autenticada, incluyendo información sobre si cada reporte soporta filtros dinámicos.</p>
 
           <h6>Headers</h6>
           <pre class="bg-light p-3 rounded"><code>Authorization: Bearer {access_token}</code></pre>
@@ -132,7 +132,8 @@
   "reports": [
     {
       "id": 1,
-      "name": "Reporte Ventas"
+      "name": "Reporte Ventas",
+      "filterable": true
     }
   ]
 }</code></pre>
@@ -165,6 +166,7 @@
           <h6>Query Parameters</h6>
           <ul>
             <li><code>report_id</code> (integer, required): ID del reporte</li>
+            <li><code>filter</code> (string, optional): Valor del filtro a aplicar. Solo se aplica si el reporte soporta filtros. Ejemplo: '2' para filtrar por sucursal</li>
           </ul>
 
           <h6>Respuestas</h6>

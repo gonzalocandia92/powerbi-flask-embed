@@ -145,6 +145,36 @@ def get_embed_for_report(report):
     return embed_token, embed_url, report_id
 
 
+def get_current_dataset_id(report):
+    """Resolve the current Power BI dataset ID for a report."""
+    access_token = _get_access_token(report)
+    headers = {
+        "Authorization": f"Bearer {access_token}",
+        "Content-Type": "application/json",
+    }
+    workspace_id = report.workspace.workspace_id
+
+    # Step 1: Resolve datasetId
+    report_url = (
+        f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}"
+        f"/reports/{report.report_id}"
+    )
+    logging.debug(
+        f"Fetching report info for dataset_id — workspace: {workspace_id}, "
+        f"report: {report.report_id}, url: {report_url}"
+    )
+    resp = requests.get(report_url, headers=headers)
+    if not resp.ok:
+        logging.error(
+            f"Failed to fetch report info — status: {resp.status_code}, "
+            f"response_headers: {dict(resp.headers)}, body: {resp.text!r}"
+        )
+    resp.raise_for_status()
+    dataset_id = resp.json()["datasetId"]
+    logging.debug(f"DAX query — dataset_id resolved: {dataset_id}")
+    return dataset_id
+
+
 def refresh_dataset(report):
     """
     Trigger a semantic model (dataset) refresh for a Power BI report.
@@ -164,22 +194,11 @@ def refresh_dataset(report):
         RuntimeError: If credentials are missing
         requests.HTTPError: If any API call fails (includes 429 for quota exceeded)
     """
+    dataset_id = get_current_dataset_id(report)
     access_token = _get_access_token(report)
     headers = {"Authorization": f"Bearer {access_token}"}
     workspace_id = report.workspace.workspace_id
 
-    # Step 1: Get dataset_id from report info
-    report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report.report_id}"
-    logging.debug(f"Fetching report info for dataset_id — workspace: {workspace_id}, report: {report.report_id}")
-    resp = requests.get(report_url, headers=headers)
-    if not resp.ok:
-        logging.error(
-            f"Failed to fetch report info — status: {resp.status_code}, "
-            f"response_headers: {dict(resp.headers)}, body: {resp.text!r}"
-        )
-    resp.raise_for_status()
-    dataset_id = resp.json()["datasetId"]
-    logging.debug(f"Dataset ID resolved: {dataset_id}")
 
     # Step 2: Trigger refresh
     refresh_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshes"

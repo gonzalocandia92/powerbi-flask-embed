@@ -88,8 +88,115 @@
                   {{ form.es_privado.label(class="form-check-label") }}
                   <div class="form-text">El reporte puede ser accedido por empresas autenticadas vía API</div>
                 </div>
+
+                <hr class="my-3">
+
+                <div class="form-check">
+                  {{ form.chatbot_enabled(class="form-check-input") }}
+                  {{ form.chatbot_enabled.label(class="form-check-label") }}
+                  <div class="form-text">Muestra el botón de KLARA en los links públicos de este reporte</div>
+                </div>
+
+                <div class="form-check mt-2">
+                  {{ form.show_dax_query(class="form-check-input") }}
+                  {{ form.show_dax_query.label(class="form-check-label") }}
+                  <div class="form-text">Muestra la consulta DAX ejecutada en cada respuesta del chat (desactivado por defecto para clientes)</div>
+                </div>
+
+                <hr class="my-3">
+
+                <div class="mb-3">
+                  {{ form.empresa_facturadora_id.label(class="form-label") }}
+                  {{ form.empresa_facturadora_id(class="form-select" + (" is-invalid" if form.empresa_facturadora_id.errors else "")) }}
+                  {% if form.empresa_facturadora_id.errors %}
+                    <div class="invalid-feedback">
+                      {% for error in form.empresa_facturadora_id.errors %}{{ error }}{% endfor %}
+                    </div>
+                  {% endif %}
+                  <div class="form-text">
+                    Define a que limite se imputa el consumo de KLARA y embeddings.
+                    Si se deja en Default global y el reporte tiene una sola empresa asociada, se usara esa empresa automaticamente.
+                  </div>
+                </div>
+
+                <hr class="my-3">
+
+                <div class="form-check mb-3">
+                  {{ form.filter_enabled(class="form-check-input") }}
+                  {{ form.filter_enabled.label(class="form-check-label") }}
+                  <div class="form-text">Permite aplicar un filtro por parámetro en la API privada de este reporte</div>
+                </div>
+
+                <div class="row">
+                  <div class="col-md-6 mb-3">
+                    {{ form.filter_table.label(class="form-label") }}
+                    {{ form.filter_table(class="form-control" + (" is-invalid" if form.filter_table.errors else "")) }}
+                    {% if form.filter_table.errors %}
+                      <div class="invalid-feedback">
+                        {% for error in form.filter_table.errors %}{{ error }}{% endfor %}
+                      </div>
+                    {% endif %}
+                  </div>
+
+                  <div class="col-md-6 mb-3">
+                    {{ form.filter_column.label(class="form-label") }}
+                    {{ form.filter_column(class="form-control" + (" is-invalid" if form.filter_column.errors else "")) }}
+                    {% if form.filter_column.errors %}
+                      <div class="invalid-feedback">
+                        {% for error in form.filter_column.errors %}{{ error }}{% endfor %}
+                      </div>
+                    {% endif %}
+                  </div>
+                </div>
               </div>
             </div>
+
+            <div class="card mb-3">
+              <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-funnel me-2"></i>Configuración de Filtros</h6>
+              </div>
+              <div class="card-body">
+                <div class="form-check mb-3">
+                  {{ form.filter_enabled(class="form-check-input", id="filter_enabled") }}
+                  {{ form.filter_enabled.label(class="form-check-label") }}
+                  <div class="form-text">Permite pasar <code>?filter=VALOR</code> al endpoint <code>/private/report-config</code> para filtrar el reporte.</div>
+                </div>
+
+                <div id="filter-fields" style="display: none;">
+                  <div class="mb-3">
+                    {{ form.filter_table.label(class="form-label") }}
+                    {{ form.filter_table(class="form-control" + (" is-invalid" if form.filter_table.errors else ""), placeholder="Ej: Sucursales") }}
+                    <div class="form-text">Nombre exacto de la tabla en el modelo de datos de Power BI.</div>
+                    {% if form.filter_table.errors %}
+                      <div class="invalid-feedback">{% for e in form.filter_table.errors %}{{ e }}{% endfor %}</div>
+                    {% endif %}
+                  </div>
+                  <div class="mb-3">
+                    {{ form.filter_column.label(class="form-label") }}
+                    {{ form.filter_column(class="form-control" + (" is-invalid" if form.filter_column.errors else ""), placeholder="Ej: ID") }}
+                    <div class="form-text">Nombre exacto del campo/columna en el modelo de datos de Power BI.</div>
+                    {% if form.filter_column.errors %}
+                      <div class="invalid-feedback">{% for e in form.filter_column.errors %}{{ e }}{% endfor %}</div>
+                    {% endif %}
+                  </div>
+                  <div class="alert alert-info small mb-0">
+                    <i class="bi bi-info-circle me-1"></i>
+                    El filtro generado será: <code>{tabla}/{campo} eq {valor}</code>.
+                    Verificá los nombres exactos en Power BI Desktop → Vista de modelo.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <script>
+              (function () {
+                var toggle = document.getElementById('filter_enabled');
+                var fields = document.getElementById('filter-fields');
+                function update() { fields.style.display = toggle.checked ? '' : 'none'; }
+                toggle.addEventListener('change', update);
+                update();
+              })();
+            </script>
 
             {% if report %}
             <div class="card mb-3">
