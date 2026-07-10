@@ -61,16 +61,24 @@ sequenceDiagram
     end
 ```
 
+
+
 ---
+
+
 
 ## 2. Componentes
 
-| Archivo | Rol |
-|---|---|
-| `app/routes/whatsapp.py` | Blueprint Flask: verificación de webhook (GET) y procesamiento de mensajes (POST) |
-| `app/services/meta_whatsapp_client.py` | Cliente HTTP para Meta Graph API (envío de mensajes, mark as read) |
-| `app/models.py` → `WhatsAppContact` | Tabla de binding phone↔reporte |
-| `migrations/versions/7f3a9c2e1b6d_*` | Migración que crea `whatsapp_contacts` |
+
+| Archivo                                | Rol                                                                               |
+| -------------------------------------- | --------------------------------------------------------------------------------- |
+| `app/routes/whatsapp.py`               | Blueprint Flask: verificación de webhook (GET) y procesamiento de mensajes (POST) |
+| `app/services/meta_whatsapp_client.py` | Cliente HTTP para Meta Graph API (envío de mensajes, mark as read)                |
+| `app/models.py` → `WhatsAppContact`    | Tabla de binding phone↔reporte                                                    |
+| `migrations/versions/7f3a9c2e1b6d_*`   | Migración que crea `whatsapp_contacts`                                            |
+
+
+
 
 ### Modelo WhatsAppContact
 
@@ -85,35 +93,43 @@ created_at     DATETIME — usado por el TTL de testing
 
 ---
 
+
+
 ## 3. Variables de entorno
 
-| Variable | Descripción |
-|---|---|
-| `META_WA_PHONE_NUMBER_ID` | ID del número de teléfono en Meta (ej: `1196613776875478`) |
-| `META_WA_ACCESS_TOKEN` | Bearer token para la Graph API |
-| `META_WA_VERIFY_TOKEN` | Token de verificación del webhook (elegido libremente) |
-| `META_WA_APP_SECRET` | App Secret de la app Meta (para verificar firma HMAC del webhook) |
-| `META_WA_TEST_MODE` | `true` en desarrollo — normaliza números argentinos al formato legacy de Meta |
-| `WHATSAPP_CONTACT_TTL_HOURS` | Si > 0, expira el registro phone↔reporte tras N horas (solo para testing) |
+
+| Variable                     | Descripción                                                                   |
+| ---------------------------- | ----------------------------------------------------------------------------- |
+| `META_WA_PHONE_NUMBER_ID`    | ID del número de teléfono en Meta (ej: `1196613776875478`)                    |
+| `META_WA_ACCESS_TOKEN`       | Bearer token para la Graph API                                                |
+| `META_WA_VERIFY_TOKEN`       | Token de verificación del webhook (elegido libremente)                        |
+| `META_WA_APP_SECRET`         | App Secret de la app Meta (para verificar firma HMAC del webhook)             |
+| `META_WA_TEST_MODE`          | `true` en desarrollo — normaliza números argentinos al formato legacy de Meta |
+| `WHATSAPP_CONTACT_TTL_HOURS` | Si > 0, expira el registro phone↔reporte tras N horas (solo para testing)     |
+
 
 ---
+
+
 
 ## 4. Setup inicial en Meta Developers
 
 1. Crear app tipo **Business** en [developers.facebook.com](https://developers.facebook.com)
 2. Agregar producto **WhatsApp** → vincular al **WhatsApp Business Account (WABA)**
 3. Configurar webhook:
-   - **Callback URL:** `https://<dominio>/webhook/whatsapp`
-   - **Verify Token:** valor de `META_WA_VERIFY_TOKEN`
-   - **Campo suscripto:** `messages`
+  - **Callback URL:** `https://<dominio>/webhook/whatsapp`
+  - **Verify Token:** valor de `META_WA_VERIFY_TOKEN`
+  - **Campo suscripto:** `messages`
 4. Suscribir la app al WABA (una sola vez):
-   ```bash
+  ```bash
    curl -X POST "https://graph.facebook.com/v20.0/<WABA_ID>/subscribed_apps" \
      -H "Authorization: Bearer <ACCESS_TOKEN>"
-   ```
+  ```
 5. En **modo desarrollo**: agregar números de prueba en Step 1 → Try it out
 
 ---
+
+
 
 ## 5. Cómo registrar un número al chat
 
@@ -130,6 +146,8 @@ El bot confirma y a partir de ese momento responde consultas sobre ese reporte u
 La relación es **1:1** — un número solo puede estar vinculado a un tablero a la vez.
 
 ---
+
+
 
 ## 6. Testing local con ngrok
 
@@ -153,7 +171,11 @@ curl -X POST "https://graph.facebook.com/v20.0/<WABA_ID>/subscribed_apps" \
 
 ---
 
+
+
 ## 7. Bugs conocidos y soluciones
+
+
 
 ### 7.1 `#131030` Recipient phone number not in allowed list (modo test)
 
@@ -163,7 +185,19 @@ curl -X POST "https://graph.facebook.com/v20.0/<WABA_ID>/subscribed_apps" \
 
 **Fix:** `META_WA_TEST_MODE=true` activa la normalización en `meta_whatsapp_client._normalize_ar_number()`. En producción, Meta resuelve ambos formatos automáticamente.
 
-### 7.2 Webhooks no llegan (silencioso)
+### 7.2 Webhooks duplicados → "Todavía estoy respondiendo" falso
+
+**Síntoma:** El usuario recibe "Todavía estoy respondiendo tu mensaje anterior" aunque el bot ya había respondido correctamente.
+
+**Causa:** Meta reintenta la entrega del webhook si el servidor no responde en menos de ~20 s (el LLM puede tardar más). La segunda entrega llega mientras `is_processing = true`, disparando el mensaje de espera.
+
+**Fix:** Cache en memoria por `message_id` con TTL de 120 s. Si el mismo `message_id` llega por segunda vez, se devuelve 200 OK sin procesar (`_is_duplicate()` en `app/routes/whatsapp.py`).
+
+> **Nota prod:** el cache es por proceso Flask. Con múltiples instancias, reemplazar por Redis.
+
+---
+
+### 7.3 Webhooks no llegan (silencioso)
 
 **Síntoma:** El webhook GET de verificación funciona pero no llegan POST de mensajes.
 
@@ -172,6 +206,8 @@ curl -X POST "https://graph.facebook.com/v20.0/<WABA_ID>/subscribed_apps" \
 **Fix:** Llamar `POST /<WABA_ID>/subscribed_apps` con el access token (ver §4, paso 4).
 
 ---
+
+
 
 ## 8. Decisiones pendientes para producción
 

@@ -18,6 +18,8 @@ import hmac
 import logging
 import os
 import re
+import threading
+import time
 import unicodedata
 from datetime import timedelta
 
@@ -31,6 +33,26 @@ from app.services import chatbot_service, meta_whatsapp_client
 from app.utils.decorators import retry_on_db_error
 
 bp = Blueprint("whatsapp", __name__)
+
+# In-memory dedup cache: message_id → expiry timestamp
+# Prevents processing the same webhook twice when Meta retries delivery.
+_seen_message_ids: dict[str, float] = {}
+_seen_lock = threading.Lock()
+_SEEN_TTL = 120  # seconds
+
+
+def _is_duplicate(message_id: str) -> bool:
+    now = time.monotonic()
+    with _seen_lock:
+        # Evict expired entries
+        expired = [k for k, v in _seen_message_ids.items() if v < now]
+        for k in expired:
+            del _seen_message_ids[k]
+        if message_id in _seen_message_ids:
+            return True
+        _seen_message_ids[message_id] = now + _SEEN_TTL
+        return False
+
 
 _GREETINGS = {
     "hola", "holis", "buenas", "buen dia", "buenos dias", "buenas tardes",
@@ -186,6 +208,9 @@ async def whatsapp_webhook():
     phone_number, text, message_id = _extract_incoming_message(payload)
 
     if not phone_number or not text:
+        return jsonify({"ok": True}), 200
+
+    if message_id and _is_duplicate(message_id):
         return jsonify({"ok": True}), 200
 
     if message_id:
