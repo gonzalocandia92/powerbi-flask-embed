@@ -515,3 +515,19 @@ class AIUsageEvent(db.Model):
         db.Index('ix_ai_usage_events_workspace_created', 'workspace_id_fk', 'created_at'),
         db.Index('ix_ai_usage_events_provider_model', 'provider', 'model'),
     )
+
+
+class WhatsAppContact(db.Model):
+    __tablename__ = 'whatsapp_contacts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    phone_number = db.Column(db.String(30), unique=True, nullable=False, index=True)
+    report_id_fk = db.Column(db.Integer, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False)
+    slug = db.Column(db.String(120), nullable=False)
+    conversation_id = db.Column(db.Integer, db.ForeignKey('chat_sessions.id', ondelete='SET NULL'), nullable=True)
+    is_processing = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    last_message_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    report = db.relationship('Report')
+    session = db.relationship('ChatSession')
