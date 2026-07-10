@@ -176,9 +176,35 @@ def _release_lock_and_save_sync(contact_id: int, conversation_id):
     db.session.commit()
 
 
+def _md_to_wa(text: str) -> str:
+    """Convert standard markdown to WhatsApp-compatible formatting.
+
+    WhatsApp supports: *bold*, _italic_, ~strikethrough~, `mono`, and plain bullet •
+    It does NOT render: **double asterisk**, ##headers, [links](url), ```code blocks```
+    """
+    # Remove triple-backtick code blocks, keep the content
+    text = re.sub(r"```[^\n]*\n?([\s\S]*?)```", lambda m: m.group(1).strip(), text)
+    # **bold** or __bold__ → *bold*
+    text = re.sub(r"\*\*(.+?)\*\*", r"*\1*", text, flags=re.DOTALL)
+    text = re.sub(r"__(.+?)__", r"*\1*", text, flags=re.DOTALL)
+    # # Headings → just the text (bold)
+    text = re.sub(r"^#{1,6}\s+(.+)$", r"*\1*", text, flags=re.MULTILINE)
+    # - list / * list → bullet •  (only at start of line)
+    text = re.sub(r"^[\-\*]\s+", "• ", text, flags=re.MULTILINE)
+    # [text](url) links → text
+    text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
+    # Horizontal rules
+    text = re.sub(r"^---+$", "", text, flags=re.MULTILINE)
+    # Collapse more than 2 consecutive blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
 async def _send_reply(phone_number: str, text: str):
     try:
-        await asyncio.to_thread(meta_whatsapp_client.send_text_message, phone_number, text)
+        await asyncio.to_thread(
+            meta_whatsapp_client.send_text_message, phone_number, _md_to_wa(text)
+        )
     except (meta_whatsapp_client.MetaWhatsAppError, requests.exceptions.RequestException):
         logging.exception("[WhatsApp] Failed to send reply to %s", phone_number)
 
