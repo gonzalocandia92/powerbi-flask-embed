@@ -41,7 +41,7 @@ def _get_access_token(credentials: Dict[str, str]) -> str:
         "password": credentials["PASS"],
     }
 
-    response = requests.post(token_url, data=payload, timeout=30)
+    response = requests.post(token_url, data=payload, timeout=90)
     if not response.ok:
         LOG.error(
             "Azure AD token request failed for Power BI chat user - status=%s body=%r",
@@ -193,7 +193,7 @@ def execute_dax_query_local(
             "serializerSettings": {"includeNulls": True},
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        response = requests.post(url, headers=headers, json=payload, timeout=90)
 
         if response.status_code == 404:
             return (

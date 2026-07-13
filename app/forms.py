@@ -6,6 +6,9 @@ from wtforms import (
     BooleanField,
     DateField,
     DecimalField,
+    FieldList,
+    Form,
+    FormField,
     IntegerField,
     PasswordField,
     SelectField,
@@ -223,6 +226,7 @@ class AIModelPricingForm(FlaskForm):
         choices=[
             ("generation", "Chat / Generacion"),
             ("embedding", "Embedding"),
+            ("rerank", "Rerank"),
         ],
         validators=[DataRequired()],
     )
@@ -253,3 +257,109 @@ class AIModelPricingForm(FlaskForm):
     effective_to = DateField("Vigente hasta", validators=[Optional()])
     is_active = BooleanField("Pricing activo", default=True)
     submit = SubmitField("Guardar pricing")
+
+
+class RequiredSchemaItemForm(Form):
+    """One schema object required by an analytics skill."""
+
+    item_type = SelectField(
+        "Tipo",
+        choices=[
+            ("", "Seleccionar tipo"),
+            ("measure", "Medida"),
+            ("table", "Tabla"),
+        ],
+        validators=[Optional()],
+    )
+    item_name = StringField("Nombre", validators=[Optional(), Length(max=255)])
+
+
+class CommonFailureModeForm(Form):
+    """One administrative validation warning for an analytics skill."""
+
+    issue = StringField("Problema", validators=[Optional(), Length(max=500)])
+    prevention = StringField("Prevencion", validators=[Optional(), Length(max=500)])
+
+
+class AnalyticsSkillForm(FlaskForm):
+    """Form for manually curated analytics routing skills."""
+
+    skill_key = StringField(
+        "Clave de skill",
+        validators=[DataRequired(), Length(max=120)],
+    )
+    domain_key = StringField(
+        "Dominio",
+        validators=[DataRequired(), Length(max=120)],
+    )
+    title = StringField(
+        "Titulo",
+        validators=[DataRequired(), Length(max=200)],
+    )
+    description = TextAreaField("Descripcion", validators=[Optional()])
+    priority = SelectField(
+        "Prioridad",
+        choices=[
+            ("low", "Low"),
+            ("normal", "Normal"),
+            ("high", "High"),
+        ],
+        validators=[DataRequired()],
+        default="normal",
+    )
+    enforcement_mode = SelectField(
+        "Modo de enforcement",
+        choices=[
+            ("soft", "Soft"),
+            ("hard_candidate", "Hard candidate"),
+            ("hard", "Hard"),
+        ],
+        validators=[DataRequired()],
+        default="soft",
+    )
+    confidence_label = SelectField(
+        "Confianza",
+        choices=[
+            ("", "Sin confirmar"),
+            ("draft", "Draft"),
+            ("reviewed", "Reviewed"),
+            ("confirmed", "Confirmed"),
+        ],
+        validators=[Optional()],
+        default="",
+    )
+    scope_type = SelectField(
+        "Scope",
+        choices=[
+            ("global", "Global"),
+            ("empresa", "Empresa"),
+            ("dataset", "Dataset"),
+            ("report", "Reporte"),
+        ],
+        validators=[DataRequired()],
+    )
+    empresa_id = SelectField("Empresa", coerce=int, validators=[Optional()], choices=[])
+    report_id = SelectField("Reporte", coerce=int, validators=[Optional()], choices=[])
+    dataset_id = StringField("Dataset ID", validators=[Optional(), Length(max=200)])
+    routing_text = TextAreaField("Texto de routing", validators=[DataRequired()])
+    content = TextAreaField("Contenido operativo", validators=[DataRequired()])
+    canonical_measures = TextAreaField("Medidas canonicas", validators=[Optional()])
+    preferred_tables = TextAreaField("Tablas preferidas", validators=[Optional()])
+    allowed_dimensions = TextAreaField("Dimensiones permitidas", validators=[Optional()])
+    constraints = TextAreaField("Restricciones", validators=[Optional()])
+    required_schema_items = FieldList(
+        FormField(RequiredSchemaItemForm),
+        min_entries=1,
+    )
+    trigger_terms = TextAreaField("Terminos disparadores", validators=[Optional()])
+    example_questions = TextAreaField("Preguntas ejemplo", validators=[Optional()])
+    intents = TextAreaField("Intenciones", validators=[Optional()])
+    negative_triggers = TextAreaField("Disparadores negativos", validators=[Optional()])
+    required_companion_skill_keys = TextAreaField("Skills companion requeridas", validators=[Optional()])
+    common_failure_modes = FieldList(
+        FormField(CommonFailureModeForm),
+        min_entries=1,
+    )
+    validation_notes = TextAreaField("Notas de validacion", validators=[Optional()])
+    is_active = BooleanField("Skill activa", default=True)
+    submit = SubmitField("Guardar skill")
