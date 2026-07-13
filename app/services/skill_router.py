@@ -55,18 +55,18 @@ class SkillRouterSettings:
     enabled: bool = False
     mode: str = "shadow"
     candidate_limit: int = 8
-    max_selected_skills: int = 2
+    max_selected_skills: int = 10
     rerank_enabled: bool = False
     selector_enabled: bool = False
     selector_mode: str = "shadow"
     selector_model: str = "claude-haiku-4-5-20251001"
-    selector_candidate_limit: int = 10
+    selector_candidate_limit: int = 8
     selector_confidence_threshold: float = 0.70
     hard_enforcement_enabled: bool = False
     hard_score_threshold: float = 0.78
     hard_margin_threshold: float = 0.12
-    soft_score_threshold: float = 0.60
-    max_skill_chars: int = 8000
+    soft_score_threshold: float = 0.35
+    max_skill_chars: int = 20000
     timeout_seconds: int = 20
 
 
@@ -195,7 +195,7 @@ def build_skill_router_settings(config: Optional[Dict[str, Any]] = None) -> Skil
         enabled=_parse_bool(_cfg(config, "SKILL_ROUTER_ENABLED", "false"), default=False),
         mode=mode,
         candidate_limit=_parse_int(_cfg(config, "SKILL_ROUTER_CANDIDATE_LIMIT", "8"), 8),
-        max_selected_skills=_parse_int(_cfg(config, "SKILL_ROUTER_MAX_SELECTED_SKILLS", "2"), 2),
+        max_selected_skills=_parse_int(_cfg(config, "SKILL_ROUTER_MAX_SELECTED_SKILLS", "10"), 10),
         rerank_enabled=_parse_bool(_cfg(config, "SKILL_ROUTER_RERANK_ENABLED", "false"), default=False),
         selector_enabled=_parse_bool(_cfg(config, "SKILL_ROUTER_SELECTOR_ENABLED", "false"), default=False),
         selector_mode=selector_mode,
@@ -203,7 +203,7 @@ def build_skill_router_settings(config: Optional[Dict[str, Any]] = None) -> Skil
             _cfg(config, "SKILL_ROUTER_SELECTOR_MODEL", "claude-haiku-4-5-20251001")
             or "claude-haiku-4-5-20251001"
         ),
-        selector_candidate_limit=_parse_int(_cfg(config, "SKILL_ROUTER_SELECTOR_CANDIDATE_LIMIT", "10"), 10),
+        selector_candidate_limit=_parse_int(_cfg(config, "SKILL_ROUTER_SELECTOR_CANDIDATE_LIMIT", "8"), 8),
         selector_confidence_threshold=_parse_float(
             _cfg(config, "SKILL_ROUTER_SELECTOR_CONFIDENCE_THRESHOLD", "0.70"),
             0.70,
@@ -214,8 +214,8 @@ def build_skill_router_settings(config: Optional[Dict[str, Any]] = None) -> Skil
         ),
         hard_score_threshold=_parse_float(_cfg(config, "SKILL_ROUTER_HARD_SCORE_THRESHOLD", "0.78"), 0.78),
         hard_margin_threshold=_parse_float(_cfg(config, "SKILL_ROUTER_HARD_MARGIN_THRESHOLD", "0.12"), 0.12),
-        soft_score_threshold=_parse_float(_cfg(config, "SKILL_ROUTER_SOFT_SCORE_THRESHOLD", "0.60"), 0.60),
-        max_skill_chars=_parse_int(_cfg(config, "SKILL_ROUTER_MAX_SKILL_CHARS", "8000"), 8000),
+        soft_score_threshold=_parse_float(_cfg(config, "SKILL_ROUTER_SOFT_SCORE_THRESHOLD", "0.35"), 0.35),
+        max_skill_chars=_parse_int(_cfg(config, "SKILL_ROUTER_MAX_SKILL_CHARS", "20000"), 20000),
         timeout_seconds=_parse_int(_cfg(config, "CHAT_SCHEMA_CONTEXT_TIMEOUT_SECONDS", "20"), 20),
     )
 
