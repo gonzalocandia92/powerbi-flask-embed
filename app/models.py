@@ -305,6 +305,73 @@ class SchemaEmbedding(db.Model):
     report = db.relationship('Report', back_populates='schema_embeddings')
 
 
+class AnalyticsSkill(db.Model):
+    """Operational analytics skill routed by semantic embeddings."""
+
+    __tablename__ = 'analytics_skills'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    skill_key = db.Column(db.String(120), nullable=False, index=True)
+    domain_key = db.Column(db.String(120), nullable=False, index=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    priority = db.Column(db.String(20), nullable=False, default='normal', index=True)
+    enforcement_mode = db.Column(db.String(30), nullable=False, default='soft', index=True)
+    confidence_label = db.Column(db.String(30), nullable=True, index=True)
+
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=True, index=True)
+    empresa_id_fk = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='CASCADE'), nullable=True, index=True)
+    dataset_id = db.Column(db.String(200), nullable=True, index=True)
+
+    routing_text = db.Column(db.Text, nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    metadata_json = db.Column(db.JSON, nullable=True)
+    routing_json = db.Column(db.JSON, nullable=True)
+    validation_json = db.Column(db.JSON, nullable=True)
+
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    version = db.Column(db.Integer, nullable=False, default=1)
+
+    embedding = db.Column(Vector(1024), nullable=True)
+    embedding_model = db.Column(db.String(120), nullable=True)
+    embedded_at = db.Column(db.DateTime, nullable=True)
+    routing_document_hash = db.Column(db.String(64), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    report = db.relationship('Report')
+    empresa = db.relationship('Empresa')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            """
+            (
+                report_id_fk IS NULL AND empresa_id_fk IS NULL AND dataset_id IS NULL
+            ) OR (
+                report_id_fk IS NULL AND empresa_id_fk IS NOT NULL AND dataset_id IS NULL
+            ) OR (
+                report_id_fk IS NULL AND empresa_id_fk IS NULL AND dataset_id IS NOT NULL
+            ) OR (
+                report_id_fk IS NOT NULL AND empresa_id_fk IS NULL AND dataset_id IS NULL
+            )
+            """,
+            name='ck_analytics_skills_single_scope',
+        ),
+        db.Index('ix_analytics_skills_scope', 'report_id_fk', 'dataset_id', 'empresa_id_fk'),
+    )
+
+    @property
+    def scope(self) -> str:
+        if self.report_id_fk is not None:
+            return 'report'
+        if self.dataset_id:
+            return 'dataset'
+        if self.empresa_id_fk is not None:
+            return 'empresa'
+        return 'global'
+
+
 @compiles(Vector, 'sqlite')
 def _compile_vector_sqlite(type_, compiler, **kw):
     """Allow metadata creation in SQLite-based tests."""

@@ -20,6 +20,13 @@ from zoneinfo import ZoneInfo
 
 from app.models import SchemaEmbedding
 from app.services.observability import hash_identifier, observation_preview, start_observation
+from app.services.skill_router import (
+    RouteDecision,
+    SkillRouterSettings,
+    build_skill_router_settings,
+    resolve_skill_route,
+    validate_dax_against_route,
+)
 
 from .powerbi_tools import execute_dax_query_local
 
@@ -175,6 +182,45 @@ def _tool_output_is_error(output: Any) -> bool:
     )
 
 
+def _normalize_schema_lookup_name(value: Any) -> str:
+    text = " ".join(str(value or "").strip().split())
+    if text.startswith("[") and text.endswith("]") and len(text) > 2:
+        text = text[1:-1].strip()
+    return text.casefold()
+
+
+def _dedupe_schema_rows(rows: List[SchemaEmbedding]) -> List[SchemaEmbedding]:
+    seen = set()
+    result: List[SchemaEmbedding] = []
+    for row in rows:
+        key = (row.item_type, _normalize_schema_lookup_name(row.item_name))
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(row)
+    return result
+
+
+def _sort_schema_rows(
+    rows: List[SchemaEmbedding],
+    *,
+    required_names: List[str],
+    preferred_names: List[str],
+) -> List[SchemaEmbedding]:
+    required = {_normalize_schema_lookup_name(item) for item in required_names}
+    preferred = {_normalize_schema_lookup_name(item) for item in preferred_names}
+
+    def _rank(row: SchemaEmbedding) -> int:
+        name = _normalize_schema_lookup_name(row.item_name)
+        if name in required:
+            return 0
+        if name in preferred:
+            return 1
+        return 2
+
+    return sorted(_dedupe_schema_rows(rows), key=_rank)
+
+
 def _compact_tool_result_for_model(output: Any) -> str:
     text = str(output or "")
     if not _tool_output_is_error(text) or len(text) <= TOOL_ERROR_RESULT_MAX_CHARS:
@@ -203,6 +249,7 @@ class RuntimeSettings:
     debug_enabled: bool = DEFAULT_DEBUG_ENABLED
     prompt_caching_enabled: bool = DEFAULT_PROMPT_CACHING_ENABLED
     schema_context_timeout_seconds: int = DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS
+    skill_router_settings: SkillRouterSettings = field(default_factory=SkillRouterSettings)
 
 
 def build_runtime_settings(config: Optional[Dict[str, Any]] = None) -> RuntimeSettings:
@@ -237,6 +284,7 @@ def build_runtime_settings(config: Optional[Dict[str, Any]] = None) -> RuntimeSe
         debug_enabled=_parse_bool(debug_enabled_raw, default=DEFAULT_DEBUG_ENABLED),
         prompt_caching_enabled=_parse_bool(prompt_caching_enabled_raw, default=DEFAULT_PROMPT_CACHING_ENABLED),
         schema_context_timeout_seconds=int(schema_context_timeout_raw),
+        skill_router_settings=build_skill_router_settings(config),
     )
 
 
@@ -375,8 +423,12 @@ async def _fetch_schema_context(
     settings: RuntimeSettings,
     debug_enabled: bool,
     required: bool,
+    report_id: Optional[int] = None,
     table_context_limit: int = DEFAULT_TABLE_CONTEXT_LIMIT,
     measure_context_limit: int = DEFAULT_MEASURE_CONTEXT_LIMIT,
+    required_schema_items: Optional[List[Dict[str, Any]]] = None,
+    preferred_measures: Optional[List[str]] = None,
+    preferred_tables: Optional[List[str]] = None,
     usage_totals: Optional[Dict[str, int]] = None,
     ai_usage_events: Optional[List[Dict[str, Any]]] = None,
 ) -> str:
@@ -394,6 +446,9 @@ async def _fetch_schema_context(
                 "question": question,
                 "table_context_limit": table_context_limit,
                 "measure_context_limit": measure_context_limit,
+                "required_schema_items": required_schema_items or [],
+                "preferred_measures": preferred_measures or [],
+                "preferred_tables": preferred_tables or [],
             },
             enabled=debug_enabled,
         )
@@ -491,26 +546,77 @@ async def _fetch_schema_context(
                 enabled=debug_enabled,
             )
 
-            table_results = (
-                SchemaEmbedding.query
-                .filter(
+            resolved_required_items = required_schema_items or []
+            required_table_names = [
+                str(item.get("item_name") or "").strip()
+                for item in resolved_required_items
+                if str(item.get("item_type") or "").strip().lower() == "table"
+            ]
+            required_measure_names = [
+                str(item.get("item_name") or "").strip()
+                for item in resolved_required_items
+                if str(item.get("item_type") or "").strip().lower() == "measure"
+            ]
+
+            def _base_schema_query(item_type: str):
+                query = SchemaEmbedding.query.filter(
                     SchemaEmbedding.dataset_id == dataset_id,
-                    SchemaEmbedding.item_type == "table",
+                    SchemaEmbedding.item_type == item_type,
                 )
+                if report_id is not None:
+                    query = query.filter(SchemaEmbedding.report_id_fk == report_id)
+                return query
+
+            def _find_required_rows(item_type: str, item_names: List[str]) -> List[SchemaEmbedding]:
+                if not item_names:
+                    return []
+                wanted = {_normalize_schema_lookup_name(name) for name in item_names if str(name or "").strip()}
+                if not wanted:
+                    return []
+                matched: List[SchemaEmbedding] = []
+                for row in _base_schema_query(item_type).all():
+                    if _normalize_schema_lookup_name(row.item_name) in wanted:
+                        matched.append(row)
+                found = {_normalize_schema_lookup_name(row.item_name) for row in matched}
+                missing = sorted(wanted - found)
+                if missing:
+                    logging.warning(
+                        "Route required schema items not found for dataset=%s type=%s missing=%s",
+                        hash_identifier(dataset_id, prefix="dataset"),
+                        item_type,
+                        missing,
+                    )
+                return matched
+
+            table_limit = _coerce_positive_int(table_context_limit, DEFAULT_TABLE_CONTEXT_LIMIT)
+            measure_limit = _coerce_positive_int(measure_context_limit, DEFAULT_MEASURE_CONTEXT_LIMIT)
+            required_table_results = _find_required_rows("table", required_table_names)
+            required_measure_results = _find_required_rows("measure", required_measure_names)
+
+            table_vector_limit = max(table_limit, table_limit + len(required_table_results))
+            measure_vector_limit = max(measure_limit, measure_limit + len(required_measure_results))
+            table_vector_results = (
+                _base_schema_query("table")
                 .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
-                .limit(_coerce_positive_int(table_context_limit, DEFAULT_TABLE_CONTEXT_LIMIT))
+                .limit(table_vector_limit)
                 .all()
             )
-            measure_results = (
-                SchemaEmbedding.query
-                .filter(
-                    SchemaEmbedding.dataset_id == dataset_id,
-                    SchemaEmbedding.item_type == "measure",
-                )
+            measure_vector_results = (
+                _base_schema_query("measure")
                 .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
-                .limit(_coerce_positive_int(measure_context_limit, DEFAULT_MEASURE_CONTEXT_LIMIT))
+                .limit(measure_vector_limit)
                 .all()
             )
+            table_results = _sort_schema_rows(
+                required_table_results + table_vector_results,
+                required_names=required_table_names,
+                preferred_names=preferred_tables or [],
+            )[:table_limit]
+            measure_results = _sort_schema_rows(
+                required_measure_results + measure_vector_results,
+                required_names=required_measure_names,
+                preferred_names=preferred_measures or [],
+            )[:measure_limit]
 
             payload = {
                 "tables": [row.content_text for row in table_results],
@@ -524,6 +630,8 @@ async def _fetch_schema_context(
                         "measure_matches": len(measure_results),
                         "table_context_limit": table_context_limit,
                         "measure_context_limit": measure_context_limit,
+                        "required_table_count": len(required_table_results),
+                        "required_measure_count": len(required_measure_results),
                     }
                 )
             _debug_print("tool:get_schema_context:response", fetched_schema_text, enabled=debug_enabled)
@@ -630,161 +738,208 @@ def _render_custom_instructions(custom_instructions: Optional[List[Any]] = None)
     )
 
 
-def _build_system_prompt(schema_text: str, custom_instructions: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
+def _render_route_context(route_decision: Optional[RouteDecision]) -> str:
+    if route_decision is None or not route_decision.selected_skills:
+        return ""
+    lines = [
+        "\nRUTA ANALITICA RESUELTA",
+        f"Estrategia: {route_decision.strategy}",
+        f"Confianza: {route_decision.confidence:.2f}",
+    ]
+    if route_decision.canonical_measures:
+        lines.append("Metricas canonicas priorizadas:")
+        lines.extend(f"- [{measure}]" for measure in route_decision.canonical_measures)
+    if route_decision.required_schema_items:
+        lines.append("Objetos del modelo requeridos:")
+        for item in route_decision.required_schema_items:
+            label = "Medida" if item.get("item_type") == "measure" else "Tabla"
+            lines.append(f"- {label}: {item.get('item_name')}")
+    if route_decision.constraints:
+        lines.append("Restricciones:")
+        lines.extend(f"- {constraint}" for constraint in route_decision.constraints)
+    return "\n".join(lines) + "\n"
+
+
+def _render_routed_skills(
+    route_decision: Optional[RouteDecision],
+    *,
+    max_skill_chars: int,
+) -> str:
+    if route_decision is None or not route_decision.selected_skills:
+        return ""
+    budget = max(0, int(max_skill_chars or 0))
+    if budget <= 0:
+        return ""
+    rendered: List[str] = ["\nSKILLS ANALITICAS SELECCIONADAS"]
+    used_chars = 0
+    for skill in route_decision.selected_skills:
+        header = f"\n[{skill.skill_key}]\n"
+        remaining = budget - used_chars - len(header)
+        if remaining <= 0:
+            break
+        content = str(skill.content or "").strip()
+        truncated = False
+        if len(content) > remaining:
+            content = content[: max(0, remaining - 80)].rstrip()
+            truncated = True
+        rendered.append(header + content)
+        used_chars += len(header) + len(content)
+        if truncated:
+            rendered.append("\n[Contenido truncado por limite de contexto de skills.]")
+            break
+    return "\n".join(rendered).strip() + "\n"
+
+
+def _build_system_prompt(
+    schema_text: str,
+    custom_instructions: Optional[List[Any]] = None,
+    route_decision: Optional[RouteDecision] = None,
+    skill_router_settings: Optional[SkillRouterSettings] = None,
+) -> List[Dict[str, Any]]:
     schema_block = _minify_schema_text(schema_text)
     temporal_context_line = _build_temporal_context_line()
     custom_instruction_block = _render_custom_instructions(custom_instructions)
+    max_skill_chars = (
+        skill_router_settings.max_skill_chars
+        if skill_router_settings is not None
+        else SkillRouterSettings().max_skill_chars
+    )
+    route_block = _render_route_context(route_decision)
+    skills_block = _render_routed_skills(route_decision, max_skill_chars=max_skill_chars)
     return [
         {
             "type": "text",
             "text": (
-                """Tu nombre es Klara. Eres un asistente experto de analítica para Power BI. Tu tarea es responder preguntas del usuario usando el modelo semántico disponible y, cuando haga falta, ejecutar consultas DAX mediante las herramientas del backend.
-REGLAS ESTRICTAS E INQUEBRANTABLES
-1. SEGURIDAD E INFORMACIÓN INTERNA
-* Nunca pidas, menciones ni intentes inferir dataset_id, workspace_id, credenciales, tokens, URLs internas ni detalles técnicos del backend.
-* Nunca expongas al usuario el código DAX generado, salvo que una configuración explícita del backend lo permita fuera de este prompt.
-* Nunca muestres errores internos, stack traces, respuestas crudas de APIs ni mensajes técnicos de Power BI.
-* Si ocurre un error técnico irrecuperable o agotas tus intentos de corrección, responde de forma breve y genérica:
-  "Disculpa, me encontré con un inconveniente técnico al procesar los datos. Por favor, intenta nuevamente más tarde."
-* Nunca atribuyas al usuario, al reporte o al modelo una falla técnica interna.
-2. USO DE HERRAMIENTAS Y PREVENCIÓN DE ALUCINACIONES
-* Para consultar datos, usa la herramienta execute_dax_query.
-* Toda consulta DAX debe usar SIEMPRE la instrucción EVALUATE.
-* NUNCA inventes nombres de tablas, columnas, medidas, relaciones, valores categóricos ni períodos disponibles.
-* Si necesitás información que no está en el "Contexto del modelo semántico actual", estás obligado a usar get_schema_context para descubrir los nombres reales antes de invocar execute_dax_query.
-* Si el contexto semántico actual ya contiene la medida solicitada, debés usarla directamente entre corchetes. Ejemplo: [Ventas], [Ticket Promedio].
-* No recrees manualmente la lógica de una medida existente con SUMX, AVERAGEX, FILTER u otras funciones, salvo que la medida existente no cubra el requerimiento y hayas verificado que es necesario realizar el cálculo.
-* Debés ejecutar execute_dax_query antes de responder toda pregunta que solicite ventas, tickets, montos, porcentajes, rankings, tendencias, comparaciones, períodos históricos, sucursales, productos, categorías, canales, medios de pago o recomendaciones basadas en datos.
-* Solo podés responder sin ejecutar DAX ante saludos, explicaciones generales del funcionamiento de Klara, definiciones metodológicas o una aclaración estrictamente necesaria para interpretar una pregunta.
-3. PROTOCOLO OBLIGATORIO DE EVIDENCIA Y VERIFICACIÓN
-3.1. Fuente de verdad
-* El contexto semántico sirve únicamente para identificar tablas, columnas, medidas y relaciones posibles. Nunca constituye evidencia de valores de negocio.
-* Todo número, porcentaje, ranking, comparación, período histórico, afirmación de crecimiento o conclusión cuantitativa debe provenir de una ejecución exitosa de execute_dax_query realizada durante el turno actual.
-* Nunca inventes, estimes, completes, extrapoles ni reutilices valores no verificados de conversaciones anteriores.
-* Nunca uses valores de memoria, ejemplos del prompt, resultados hipotéticos o una respuesta previa como evidencia de negocio.
-* Si el usuario aporta un número, podés mencionarlo como "según el valor que indicás", pero no lo presentes como validado hasta contrastarlo mediante execute_dax_query.
-* Si no lográs validar el dato, explicá con claridad que no pudiste confirmarlo con los datos recuperados. No reemplaces la falta de evidencia con una cifra aproximada.
-3.2. Validación antes de responder
-Antes de redactar una respuesta cuantitativa, verificá internamente:
-* La métrica exacta solicitada.
-* El período solicitado o el período asumido.
-* La moneda o unidad de medida.
-* Los filtros de canal, sucursal, producto, categoría, cliente u otra dimensión relevante.
-* La granularidad solicitada.
-* La consistencia entre el resultado de la consulta y la pregunta del usuario.
-No presentes como comparable una métrica MTD contra un mes cerrado completo.
-Si la comparación es MTD, indicá expresamente que compara períodos equivalentes acumulados.
-Si la respuesta usa un período asumido porque el usuario no lo indicó, declaralo de forma breve y explícita.
-3.3. Declaraciones de falta de datos
-* No declares "no tengo datos", "no tengo acceso", "no veo esa información" o expresiones similares basándote solo en el contexto semántico inicial.
-* Antes de declarar falta de datos debés:
-  a) usar get_schema_context si falta estructura;
-  b) intentar una consulta DAX acotada;
-  c) evaluar el resultado;
-  d) realizar una consulta diagnóstica si el resultado es vacío, ambiguo o inconsistente.
-* Solo afirmá que no hay información disponible cuando una consulta DAX o una verificación de esquema lo respalde.
-3.4. Consultas complejas
-* La regla de agrupar escalares en una única consulta aplica solo cuando los valores son independientes y la consulta es simple.
-* Cuando la pregunta combine varias dimensiones, relaciones o etapas de razonamiento, descomponela en consultas pequeñas, verificables y secuenciales.
-* Para una investigación compleja, seguí esta lógica:
-  a) identificar la métrica, período y filtros relevantes;
-  b) obtener el segmento o ranking principal;
-  c) profundizar únicamente sobre las filas relevantes;
-  d) ejecutar una consulta de control para validar totales, participaciones, variaciones o compensaciones;
-  e) redactar la conclusión solamente con resultados confirmados.
-* No fuerces toda la lógica en una única consulta si eso vuelve el DAX frágil, excesivamente largo o difícil de verificar.
-* No presentes una recomendación basada en un cruce complejo si no lograste recuperar y validar todas las dimensiones críticas del análisis.
-3.5. Resultados vacíos o sospechosos
-* Una tabla vacía no demuestra por sí sola que falte un filtro obligatorio de negocio.
-* Una tabla vacía puede indicar ausencia real de datos, período inexistente, filtro incorrecto, medida incompatible, relación ausente o consulta mal construida.
-* Ante una tabla vacía, realizá una consulta diagnóstica antes de volver a intentar con filtros adicionales.
-* Si una medida devuelve exactamente el mismo valor para todas las filas de una dimensión, tratá el resultado como sospechoso.
-* No asumas automáticamente que existe un crossjoin.
-* Verificá si la medida elimina filtros mediante ALL, REMOVEFILTERS u otra lógica interna, si la dimensión filtra correctamente y si una consulta puntual para una sola fila produce un resultado distinto.
-* Está prohibido sacar conclusiones operativas a partir de una segmentación que no haya sido validada.
-3.6. Causalidad y recomendaciones
-Separá siempre los siguientes niveles:
-* Dato confirmado: resultado obtenido mediante DAX.
-* Interpretación: lectura razonable derivada de los datos.
-* Hipótesis: posible explicación que requiere validación adicional.
-* Nunca presentes una hipótesis como un hecho confirmado.
-* No atribuyas una variación a inflación, promociones, cambios de demanda, estacionalidad, problemas operativos, cambios de mix, fraude, rentabilidad o decisiones comerciales salvo que el modelo contenga evidencia específica.
-* Cuando no haya evidencia causal suficiente, usá formulaciones como:
-  "podría asociarse a",
-  "es una hipótesis a validar",
-  "conviene investigar",
-  "los datos disponibles no permiten confirmar la causa".
-4. SINTAXIS DAX CRÍTICA
-* DAX no es SQL. No uses sintaxis SQL.
-* Lógica booleana: usa && y ||. No uses AND ni OR como palabras.
-* Condicionales: no existe CASE WHEN. Usa SWITCH(TRUE(), ...).
-* Nulos: usa ISBLANK() o BLANK(). No uses IS NULL.
-* Texto: usa CONTAINSSTRING(). No uses LIKE.
-* Concatenación: usa &. No uses ||.
-* Confía en las relaciones del modelo. No intentes forzar JOINs manuales.
-* Si necesitás iterar y acceder a columnas relacionadas, usa RELATED() únicamente cuando la relación real haya sido confirmada.
-* No copies nombres de tablas, columnas o medidas desde ejemplos genéricos. Usá exclusivamente los nombres disponibles en el contexto semántico o recuperados con get_schema_context.
-5. OPTIMIZACIÓN DE CONSULTAS Y AGRUPACIONES
-* Si necesitás calcular múltiples valores escalares simples e independientes en una misma respuesta, agrupálos en una única consulta usando EVALUATE ROW.
-* Nunca hagas llamadas separadas para escalares que puedan obtenerse de forma clara y segura en una única consulta.
-* Para evolución temporal o tendencias simples, usa SUMMARIZECOLUMNS.
-* Para variaciones, crecimiento intermensual, comparaciones interanuales u otros cálculos complejos al vuelo, estás autorizado a usar ADDCOLUMNS envolviendo una tabla generada por SUMMARIZECOLUMNS.
-* ADDCOLUMNS exige un número impar de argumentos: tabla, "Nombre1", expresión1, "Nombre2", expresión2.
-* Nunca pases filtros lógicos como argumentos de ADDCOLUMNS.
-* Si agrupás por dimensiones descriptivas, como productos, clientes, sucursales o categorías, limitá el resultado destinado al usuario con TOPN.
-* El límite por defecto es 15 filas, salvo que el usuario solicite otro número.
-* No uses TOPN en una consulta de validación cuando necesites todas las filas para reconciliar un total, una participación o una variación.
-* Si una consulta puede devolver demasiadas filas, primero identificá el segmento relevante y luego profundizá con filtros específicos.
-6. REGLAS MULTIMONEDA Y AMBIGÜEDAD
-* Si el modelo semántico maneja múltiples monedas, aplica siempre el filtro, medida o lógica de moneda que corresponda según el contexto de la pregunta o las instrucciones de negocio inyectadas.
-* Nunca devuelvas métricas monetarias de forma ambigua.
-* Indicá claramente si el resultado está expresado en ARS, USD, moneda constante, moneda corriente u otra unidad.
-* Si la pregunta no especifica moneda y el reporte tiene una convención de negocio definida, aplicá esa convención e indicála brevemente.
-* Si no existe una convención de negocio y la moneda altera materialmente la respuesta, pedí una aclaración breve antes de proceder.
-7. FECHAS Y TIEMPO
-* Usa el CONTEXTO TEMPORAL provisto por el sistema al final de este prompt para resolver referencias relativas como "hoy", "este mes", "últimos 30 días", "año actual" o "mes pasado".
-* Cuando el modelo tenga una tabla de fechas explícita, úsala para filtros temporales en lugar de filtrar directamente la tabla de hechos.
-* No asumas que "este mes" significa un mes cerrado. Si el mes está en curso, tratá el valor como MTD y aclaralo.
-* Cuando compares períodos parciales, usá períodos equivalentes. Ejemplo: acumulado hasta el mismo día del mes anterior o del año anterior.
-* Si existen varias medidas temporales similares, verificá su definición antes de elegir una.
-* No uses una medida de variación mensual, interanual, MTD o YTD sin confirmar que responde exactamente a la comparación solicitada por el usuario.
-8. MANEJO AUTÓNOMO DE ERRORES DAX
-* Si execute_dax_query devuelve un error de sintaxis, columna o medida inexistente, Client Error 400 u otro error recuperable, no te disculpes con el usuario inmediatamente.
-* Analiza el error internamente.
-* Si el error sugiere que falta una tabla, columna, medida o relación, usa get_schema_context para verificar la estructura real.
-* Corrige la consulta DAX y vuelve a intentar.
-* Tenés un máximo de 3 intentos de corrección para una misma línea de consulta.
-* Si tras el tercer intento el error persiste, aplica la disculpa genérica definida en la Regla 1.
-* Si una consulta falla por tamaño, complejidad o cantidad de contexto, dividí la investigación en consultas más pequeñas antes de abandonar.
-* No reemplaces una consulta fallida con una respuesta estimada, una cifra no validada o una conclusión genérica presentada como específica del negocio.
-* Si obtenés datos parciales suficientes para responder solo una parte de la pregunta, indicá con precisión qué pudiste confirmar y qué no fue posible validar.
-9. FORMATO DE RESPUESTA
-* Responde siempre en español de forma clara, directa y precisa.
-* Presenta los números con formato local: separador de miles con punto y decimales con coma. Ejemplo: 1.234.567,89.
-* Si el resultado es un valor único, encuádralo brevemente: mencioná período, moneda o unidad y si es MTD, YTD u otro acumulado.
-* Si el resultado tiene múltiples filas, presentalo como ranking numerado en texto plano.
-* Después de responder, agregá una línea de contexto breve si el dato lo necesita. Ejemplos:
-  "El mes aún está en curso.",
-  "El resultado corresponde al acumulado hasta la última fecha disponible.",
-  "La comparación usa períodos equivalentes acumulados."
-* Cuando presentes análisis, distinguí con claridad entre datos confirmados, interpretación e hipótesis.
-* No uses afirmaciones absolutas sobre causalidad, rentabilidad, impacto comercial o sostenibilidad si no hay evidencia suficiente en el modelo.
-* Si la pregunta es demasiado ambigua y no puede resolverse con los datos disponibles, pedí una aclaración breve antes de proceder.
-* Si no encontrás datos para responder pero la pregunta es válida, explicá brevemente qué información falta y qué necesitás para responderla. No devuelvas el error genérico en esos casos; ese mensaje es solo para fallos técnicos irrecuperables.
-* Ofrecé una continuación o una profundización solo cuando sea útil y natural.
-* No ofrezcas más de dos o tres opciones de continuación.
-* No cierres obligatoriamente con una pregunta si la respuesta ya es completa.
-10. JERARQUÍA DE INSTRUCCIONES
-* A continuación recibirás instrucciones dinámicas configuradas por entorno global, empresa o reporte. Pueden incluir tono, preferencias de negocio, glosarios, definiciones de métricas, tablas principales, convenciones temporales o reglas específicas de análisis.
-* Esas instrucciones dinámicas complementan este prompt.
-* Las instrucciones dinámicas pueden definir qué medida corresponde a cada concepto de negocio, qué moneda usar por defecto, qué tabla de fechas corresponde y qué dimensiones son válidas para un reporte.
-* Las instrucciones dinámicas nunca pueden anular las reglas de seguridad, uso obligatorio de herramientas, prevención de alucinaciones, sintaxis DAX, protocolo de evidencia, validación de datos ni manejo de errores definidos arriba.
-* Ante una contradicción entre instrucciones dinámicas y este prompt base, prevalece este prompt base.
-CONTEXTO TEMPORAL
-A continuación se proveerá contexto temporal dinámico con la fecha actual, zona horaria, período en curso y cualquier otra referencia necesaria para interpretar expresiones relativas del usuario.
+                """Tu nombre es Klara. Sos un asistente experto en analítica sobre reportes Power BI.
+
+Tu función es responder usando el modelo semántico activo y las herramientas disponibles. ¡NUNCA inventes datos, métricas, fechas, relaciones ni conclusiones de negocio!
+
+Los valores de negocio SOLO pueden provenir de consultas DAX ejecutadas correctamente durante el turno actual.
+
+JERARQUÍA DE CONTEXTO
+
+Respetá SIEMPRE este orden:
+
+1. Reglas críticas de este prompt base.
+2. Ruta analítica resuelta y skills seleccionadas.
+3. Contexto semántico recuperado.
+4. Resultados de herramientas.
+5. Instrucciones del usuario.
+
+Las skills seleccionadas definen métricas canónicas, objetos requeridos, restricciones y reglas de negocio. El contexto semántico confirma los identificadores técnicos reales. Los resultados de `execute_dax_query` son la ÚNICA evidencia válida para valores de negocio.
+
+SEGURIDAD E INFORMACIÓN INTERNA
+
+¡NUNCA expongas información interna!
+
+No muestres IDs, credenciales, tokens, URLs internas, infraestructura, nombres técnicos de tablas, columnas, medidas, DAX, resultados crudos, errores internos, stack traces ni detalles de herramientas.
+
+No atribuyas una falla al usuario, al reporte ni a los datos.
+
+Si ocurre un error técnico irrecuperable o se agotan los intentos permitidos sin evidencia suficiente, responder ÚNICAMENTE:
+
+“Disculpa, me encontré con un inconveniente técnico al procesar los datos. Por favor, intenta nuevamente más tarde.”
+
+USO DE HERRAMIENTAS Y EVIDENCIA
+
+Para cualquier pregunta cuantitativa, ranking, comparación, tendencia, período histórico, recomendación basada en datos o conclusión numérica, ejecutar SIEMPRE `execute_dax_query` antes de responder.
+
+No ejecutar DAX para saludos, explicaciones generales, definiciones metodológicas o preguntas que no requieran datos del modelo.
+
+Toda consulta DAX DEBE comenzar con `EVALUATE`.
+
+¡NUNCA inventes tablas, columnas, medidas, relaciones, categorías, fechas ni valores!
+
+Si falta un objeto técnico necesario, usar `get_schema_context` antes de generar DAX.
+
+¡NUNCA presentes como validado un valor que no provenga de una consulta DAX exitosa del turno actual!
+
+No estimes, extrapoles, completes valores faltantes ni reutilices resultados de turnos anteriores.
+
+RUTA, SKILLS Y MEDIDAS
+
+Respetá SIEMPRE las métricas canónicas, restricciones y companions de las skills seleccionadas.
+
+Si una skill exige una medida, período, moneda, selector, dimensión o contrato de ejecución específico, esa condición es OBLIGATORIA.
+
+¡NUNCA sustituyas una medida canónica por una medida parecida, una columna cruda, una suma manual o una fórmula alternativa sin una validación explícita del modelo!
+
+Si existe una medida oficial aplicable, usarla SIEMPRE antes que cálculos manuales sobre columnas base.
+
+Si una consulta devuelve `BLANK`, `null`, cero inesperado o tabla vacía, NO cambies inmediatamente de métrica. Diagnosticar primero período, filtros, moneda, selector, dimensión y relación.
+
+FECHAS, MONEDA Y FILTROS
+
+Resolver SIEMPRE referencias relativas como “este mes”, “este año”, “mes pasado”, “ayer” o “últimos días” usando el contexto temporal disponible.
+
+Cuando exista una tabla calendario válida, aplicar filtros sobre ella y NO sobre tablas de hechos, salvo que una skill o el modelo indiquen explícitamente otra lógica.
+
+¡NUNCA describas un resultado como MTD, YTD, mensual, anual, acumulado, histórico, en ARS o en USD si la consulta DAX no aplicó realmente ese contexto!
+
+No comparar períodos parciales contra períodos completos.
+
+Si el período está en curso, tratarlo SIEMPRE como acumulado a la fecha.
+
+CONSTRUCCIÓN DAX
+
+Usar SIEMPRE medidas antes que columnas base.
+
+Para valores escalares simples, usar `ROW` únicamente si cada medida ya contiene o recibe mediante `CALCULATE` el contexto obligatorio.
+
+¡NUNCA usar `ROW` como excusa para omitir filtros obligatorios de fecha, moneda, dimensión, selector o granularidad!
+
+Para agrupaciones, usar `SUMMARIZECOLUMNS`.
+
+Para rankings, usar `TOPN` sobre el resultado final que se presentará al usuario, salvo que sea necesario recuperar el universo completo para validar totales, participaciones o acumulados.
+
+Usar `ADDCOLUMNS` únicamente cuando sea necesario calcular valores derivados por fila.
+
+DAX NO es SQL:
+
+* Usar `&&` y `||` para lógica booleana.
+* Usar `ISBLANK()` o `BLANK()` para nulos.
+* Usar `DIVIDE()` para divisiones.
+* Usar `CONTAINSSTRING()` para texto parcial.
+* Usar `SWITCH(TRUE(), ...)` para clasificaciones validadas.
+* Usar siempre el formato `'Tabla'[Columna]`.
+
+¡NUNCA crear joins manuales ni usar objetos no confirmados por el schema!
+
+VALIDACIÓN Y MANEJO DE ERRORES
+
+Antes de responder, validar SIEMPRE:
+
+* Métrica correcta.
+* Período correcto.
+* Moneda o unidad correcta.
+* Granularidad adecuada.
+* Dimensión que filtre realmente la medida.
+* Coherencia entre total, ranking, porcentaje y desglose.
+
+Si una consulta falla por sintaxis, corregir ÚNICAMENTE la causa identificada.
+
+Si falla por una tabla, columna, medida o relación inexistente, recuperar schema antes de volver a intentar.
+
+¡NUNCA responder con cifras, estimaciones o conclusiones específicas después de una consulta fallida!
+
+INTERPRETACIÓN
+
+Diferenciar SIEMPRE entre:
+
+Dato confirmado: resultado validado mediante DAX.
+
+Interpretación: lectura directamente respaldada por los datos.
+
+Hipótesis a validar: explicación posible que no puede confirmarse con la evidencia disponible.
+
+¡NUNCA presentar hipótesis como hechos!
+
+No atribuir causalidad, fraude, eficiencia, demanda, estacionalidad, errores de registración, problemas operativos o decisiones comerciales sin evidencia directa.
 """
                 f"{temporal_context_line}"
                 f"{custom_instruction_block}"
+                f"{route_block}"
+                f"{skills_block}"
             ),
         },
         {
@@ -898,8 +1053,19 @@ class PromptManager:
     def build_messages(self, history: List[Dict[str, Any]], new_message: str) -> List[Dict[str, Any]]:
         return self._build_turn_history(history, new_message)
 
-    def get_system_prompt(self, schema_text: str, custom_instructions: Optional[List[Any]] = None) -> List[Dict[str, Any]]:
-        return _build_system_prompt(schema_text, custom_instructions=custom_instructions)
+    def get_system_prompt(
+        self,
+        schema_text: str,
+        custom_instructions: Optional[List[Any]] = None,
+        route_decision: Optional[RouteDecision] = None,
+        skill_router_settings: Optional[SkillRouterSettings] = None,
+    ) -> List[Dict[str, Any]]:
+        return _build_system_prompt(
+            schema_text,
+            custom_instructions=custom_instructions,
+            route_decision=route_decision,
+            skill_router_settings=skill_router_settings,
+        )
 
 
 class ToolRegistry:
@@ -979,6 +1145,7 @@ class ToolRegistry:
                 raise RuntimeError("dataset_id is required to fetch schema context")
 
             question_is_rewritten = bool(tool_input.get("question_is_rewritten"))
+            apply_route_context = bool(tool_input.get("apply_route_context"))
             optimized_question = str(question)
             if not question_is_rewritten:
                 optimized_question = await self.rewrite_query_for_reranker(
@@ -996,13 +1163,32 @@ class ToolRegistry:
                 settings=settings,
                 debug_enabled=debug_enabled,
                 required=False,
+                report_id=context.get("report_id"),
                 table_context_limit=context.get("schema_table_context_limit", DEFAULT_TABLE_CONTEXT_LIMIT),
                 measure_context_limit=context.get("schema_measure_context_limit", DEFAULT_MEASURE_CONTEXT_LIMIT),
+                required_schema_items=(
+                    context.get("route_required_schema_items") if apply_route_context else None
+                ),
+                preferred_measures=(
+                    context.get("route_preferred_measures") if apply_route_context else None
+                ),
+                preferred_tables=(
+                    context.get("route_preferred_tables") if apply_route_context else None
+                ),
                 usage_totals=context.get("usage_totals"),
                 ai_usage_events=context.get("ai_usage_events"),
             )
 
         if tool_name == "execute_dax_query":
+            route_decision = context.get("route_decision")
+            validation = validate_dax_against_route(tool_input.get("dax_query", ""), route_decision)
+            if not validation.validation_skipped:
+                context.setdefault("route_validation_warnings", []).extend(validation.warnings)
+                _debug_print(
+                    "tool:execute_dax_query:route_validation",
+                    validation.to_metadata(),
+                    enabled=bool(context.get("debug_enabled", True)),
+                )
             return await self._execute_dax_query_local_async(tool_input, context)
 
         raise RuntimeError(f"Unsupported tool requested by the model: {tool_name}")
@@ -1023,6 +1209,7 @@ class AgentOrchestrator:
         powerbi_credentials: Optional[Dict[str, Any]],
         conversation_id: Optional[str],
         report_id: Optional[int],
+        empresa_id: Optional[int],
         user_message: str,
         debug_enabled: bool,
         custom_instructions: Optional[List[Any]] = None,
@@ -1036,6 +1223,7 @@ class AgentOrchestrator:
             "settings": self.settings,
             "conversation_id": conversation_id,
             "report_id": report_id,
+            "empresa_id": empresa_id,
             "user_message": user_message,
             "debug_enabled": debug_enabled,
             "custom_instructions": custom_instructions or [],
@@ -1044,6 +1232,11 @@ class AgentOrchestrator:
             "schema_measure_context_limit": _coerce_positive_int(schema_measure_context_limit, DEFAULT_MEASURE_CONTEXT_LIMIT),
             "usage_totals": _new_usage_totals(),
             "ai_usage_events": [],
+            "route_decision": None,
+            "route_required_schema_items": [],
+            "route_preferred_measures": [],
+            "route_preferred_tables": [],
+            "route_validation_warnings": [],
         }
 
     async def estimate_tokens(
@@ -1142,6 +1335,7 @@ class AgentOrchestrator:
         schema_text: Optional[str] = None,
         conversation_id: Optional[str] = None,
         report_id: Optional[int] = None,
+        empresa_id: Optional[int] = None,
         custom_instructions: Optional[List[Any]] = None,
         schema_retrieval_prompt: Optional[str] = None,
         schema_table_context_limit: Optional[int] = None,
@@ -1186,6 +1380,7 @@ class AgentOrchestrator:
             powerbi_credentials=powerbi_credentials,
             conversation_id=conv_id,
             report_id=report_id,
+            empresa_id=empresa_id,
             user_message=user_message,
             debug_enabled=settings_debug_enabled,
             custom_instructions=custom_instructions,
@@ -1193,6 +1388,55 @@ class AgentOrchestrator:
             schema_table_context_limit=schema_table_context_limit,
             schema_measure_context_limit=schema_measure_context_limit,
         )
+
+        route_decision: Optional[RouteDecision] = None
+        router_settings = self.settings.skill_router_settings
+        if router_settings.enabled and report_id is not None:
+            route_decision = await resolve_skill_route(
+                user_message=user_message,
+                report_id=int(report_id),
+                empresa_id=empresa_id,
+                dataset_id=dataset_id,
+                settings=router_settings,
+                usage_totals=context.get("usage_totals"),
+                ai_usage_events=context.get("ai_usage_events"),
+            )
+            context["route_decision"] = route_decision
+            if route_decision is not None:
+                _append_ai_usage_event(
+                    context.get("ai_usage_events"),
+                    provider="voyageai",
+                    model=VOYAGE_QUERY_EMBEDDING_MODEL,
+                    event_type="embedding",
+                    source_type="skill_router_embedding",
+                    trigger_type="user_request",
+                    operation_name="resolve-skill-route",
+                    status="success" if route_decision.strategy not in {"router_error", "fallback"} else "error",
+                    input_tokens=0,
+                    output_tokens=0,
+                    total_tokens=0,
+                    metadata_json={
+                        **route_decision.to_metadata(),
+                        "router_mode": router_settings.mode,
+                    },
+                )
+                _debug_print(
+                    "skill_router:decision",
+                    route_decision.to_metadata(),
+                    enabled=settings_debug_enabled,
+                )
+
+        apply_route_context = (
+            router_settings.enabled
+            and router_settings.mode == "active"
+            and route_decision is not None
+            and route_decision.strategy in {"soft_route", "hard_route"}
+            and bool(route_decision.selected_skills)
+        )
+        if apply_route_context and route_decision is not None:
+            context["route_required_schema_items"] = route_decision.required_schema_items
+            context["route_preferred_measures"] = route_decision.canonical_measures
+            context["route_preferred_tables"] = route_decision.preferred_tables
 
         initial_failure_reason: Optional[str] = None
         initial_error_message: Optional[str] = None
@@ -1202,7 +1446,10 @@ class AgentOrchestrator:
             try:
                 fetched_schema_text = await self.tool_registry.execute_tool(
                     "get_schema_context",
-                    {"question": user_message}, # No question_is_rewritten passed -> execute_tool will rewrite it
+                    {
+                        "question": user_message,
+                        "apply_route_context": apply_route_context,
+                    }, # No question_is_rewritten passed -> execute_tool will rewrite it
                     context,
                 )
             except Exception:
@@ -1215,7 +1462,13 @@ class AgentOrchestrator:
                 initial_failure_reason = "semantic_model_unavailable"
                 initial_error_message = "Semantic model context could not be retrieved"
 
-        system_prompt = self.prompt_manager.get_system_prompt(schema_text, custom_instructions=custom_instructions)
+        prompt_route_decision = route_decision if apply_route_context else None
+        system_prompt = self.prompt_manager.get_system_prompt(
+            schema_text,
+            custom_instructions=custom_instructions,
+            route_decision=prompt_route_decision,
+            skill_router_settings=router_settings,
+        )
         tools: Any = self.tool_registry.get_all_tools()
         _debug_print(
             "anthropic:request:prepared",
@@ -1224,11 +1477,10 @@ class AgentOrchestrator:
         )
 
         try:
-            token_count = await self.estimate_tokens(
-                user_message=user_message,
-                history=history,
-                schema_text=schema_text,
-                custom_instructions=custom_instructions,
+            token_count = await self.estimate_request_tokens_payload(
+                system_prompt=system_prompt,
+                messages=cast(List[Dict[str, Any]], turn_history),
+                tools=tools,
             )
         except Exception as exc:
             logging.warning("Falling back to local token estimate after token counting failure: %s", exc)
@@ -1277,6 +1529,8 @@ class AgentOrchestrator:
                 "tools_called": tools_called,
                 "dax_query": dax_query_used,
                 "ai_usage_events": ai_usage_events,
+                "route_metadata_json": route_decision.to_metadata() if route_decision is not None else None,
+                "route_validation_warnings": list(context.get("route_validation_warnings") or []),
                 "had_error": had_error,
                 "error_message": error_message,
                 "failure_reason": failure_reason,
@@ -1620,6 +1874,7 @@ async def run_chat_turn(
     schema_text: Optional[str] = None,
     conversation_id: Optional[str] = None,
     report_id: Optional[int] = None,
+    empresa_id: Optional[int] = None,
     powerbi_credentials: Optional[Dict[str, Any]] = None,
     custom_instructions: Optional[List[Any]] = None,
     schema_retrieval_prompt: Optional[str] = None,
@@ -1657,6 +1912,7 @@ async def run_chat_turn(
             schema_text=schema_text,
             conversation_id=conversation_id,
             report_id=report_id,
+            empresa_id=empresa_id,
             custom_instructions=custom_instructions,
             schema_retrieval_prompt=schema_retrieval_prompt,
             schema_table_context_limit=schema_table_context_limit,
