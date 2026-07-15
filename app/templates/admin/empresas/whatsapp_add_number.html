@@ -1,0 +1,112 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-whatsapp me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" class="btn btn-outline-secondary">
+      <i class="bi bi-arrow-left me-1"></i> Volver
+    </a>
+  </div>
+
+  <div class="row">
+    <div class="col-md-8">
+      <div class="card shadow-sm">
+        <div class="card-header bg-success text-white">
+          <h5 class="mb-0">
+            <i class="bi bi-phone me-2"></i>
+            Autorizar Numero de WhatsApp
+          </h5>
+        </div>
+        <div class="card-body">
+          {% if not empresa.whatsapp_enabled %}
+          <div class="alert alert-warning">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            El chat de WhatsApp esta deshabilitado para esta empresa. El numero podra
+            cargarse igual, pero no respondera hasta que habilite WhatsApp desde
+            <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}">Acciones Rapidas</a>.
+          </div>
+          {% endif %}
+
+          <form method="POST">
+            <div class="mb-3">
+              <label class="form-label">Numero de WhatsApp (con codigo de pais, sin + ni espacios)</label>
+              <input type="text" name="phone_number" class="form-control" placeholder="5491126770450" required>
+            </div>
+
+            <p class="text-muted mb-2">Reportes a los que tendra acceso este numero:</p>
+
+            {% if empresa.reports %}
+            <div class="table-responsive">
+              <table class="table table-hover">
+                <thead class="table-light">
+                  <tr>
+                    <th width="50">
+                      <input type="checkbox" id="selectAll" class="form-check-input">
+                    </th>
+                    <th>ID</th>
+                    <th>Nombre</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {% for report in empresa.reports %}
+                  <tr>
+                    <td>
+                      <input type="checkbox" name="reports" value="{{ report.id }}"
+                             class="form-check-input report-checkbox">
+                    </td>
+                    <td>{{ report.id }}</td>
+                    <td><strong>{{ report.name }}</strong></td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end mt-4">
+              <a href="{{ url_for('empresas.detail', empresa_id=empresa.id) }}" class="btn btn-outline-secondary">
+                Cancelar
+              </a>
+              <button type="submit" class="btn btn-success">
+                <i class="bi bi-check-circle me-2"></i>Autorizar Numero
+              </button>
+            </div>
+            {% else %}
+            <div class="alert alert-warning mb-0">
+              <i class="bi bi-exclamation-triangle me-2"></i>
+              Esta empresa no tiene reportes asociados todavia.
+              <a href="{{ url_for('empresas.manage_reports', empresa_id=empresa.id) }}">Gestionar reportes</a>
+              antes de autorizar numeros.
+            </div>
+            {% endif %}
+          </form>
+        </div>
+      </div>
+    </div>
+
+    <div class="col-md-4">
+      <div class="card shadow-sm">
+        <div class="card-header">
+          <h6 class="mb-0"><i class="bi bi-lightbulb me-2"></i>Como funciona</h6>
+        </div>
+        <div class="card-body">
+          <ul class="small mb-0">
+            <li>Si el numero solo tiene un reporte autorizado, se conecta directo.</li>
+            <li>Si tiene varios, KLARA le muestra un menu para elegir.</li>
+            <li>El usuario puede escribir "menu" o "cambiar" para elegir otro reporte.</li>
+            <li>No hace falta compartir ningun link ni slug con el usuario.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.getElementById('selectAll')?.addEventListener('change', function() {
+  document.querySelectorAll('.report-checkbox').forEach(cb => cb.checked = this.checked);
+});
+</script>
+{% endblock %}

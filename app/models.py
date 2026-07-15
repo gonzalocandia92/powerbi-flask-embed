@@ -208,12 +208,16 @@ class Empresa(db.Model):
     client_id = db.Column(db.String(200), nullable=False, unique=True)
     client_secret_hash = db.Column(db.String(256), nullable=False)
     estado_activo = db.Column(db.Boolean, default=True, nullable=False)
+    whatsapp_enabled = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     # Relationship to reports (many-to-many)
     reports = db.relationship('Report', secondary='empresa_report', back_populates='empresas')
     reports_facturados = db.relationship('Report', foreign_keys='Report.empresa_facturadora_id', back_populates='empresa_facturadora')
+    whatsapp_authorized_numbers = db.relationship(
+        'WhatsAppAuthorizedNumber', back_populates='empresa', cascade='all, delete-orphan'
+    )
 
 
 # Keep ClientePrivado as an alias for backward compatibility
@@ -582,3 +586,41 @@ class AIUsageEvent(db.Model):
         db.Index('ix_ai_usage_events_workspace_created', 'workspace_id_fk', 'created_at'),
         db.Index('ix_ai_usage_events_provider_model', 'provider', 'model'),
     )
+
+
+class WhatsAppAuthorizedNumber(db.Model):
+    """Admin-granted access: a phone number authorized to query a given report."""
+
+    __tablename__ = 'whatsapp_authorized_numbers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    phone_number = db.Column(db.String(30), nullable=False, index=True)
+    empresa_id_fk = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='CASCADE'), nullable=False)
+    report_id_fk = db.Column(db.Integer, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    empresa = db.relationship('Empresa', back_populates='whatsapp_authorized_numbers')
+    report = db.relationship('Report')
+
+    __table_args__ = (
+        db.UniqueConstraint('phone_number', 'report_id_fk', name='uq_whatsapp_authorized_number_report'),
+    )
+
+
+class WhatsAppContact(db.Model):
+    """Live phone↔report binding. report_id_fk is the currently active report;
+    it is null while the user is choosing from a multi-report menu."""
+
+    __tablename__ = 'whatsapp_contacts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    phone_number = db.Column(db.String(30), unique=True, nullable=False, index=True)
+    report_id_fk = db.Column(db.Integer, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=True)
+    awaiting_report_selection = db.Column(db.Boolean, nullable=False, default=False)
+    conversation_id = db.Column(db.Integer, db.ForeignKey('chat_sessions.id', ondelete='SET NULL'), nullable=True)
+    is_processing = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    last_message_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    report = db.relationship('Report')
+    session = db.relationship('ChatSession')
