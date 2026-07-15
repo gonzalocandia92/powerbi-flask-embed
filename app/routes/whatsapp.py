@@ -1,11 +1,14 @@
 """
 WhatsApp webhook for KLARA, backed by Meta Cloud API.
 
-Registration flow:
-  1. User sends the public slug of their report as their first message.
-  2. The bot confirms the connection and stores the phone↔report binding.
-  3. Every subsequent message is forwarded to the same chatbot agent used
-     by the web chat (chatbot_service.procesar_interaccion_completa).
+Access flow:
+  1. An admin pre-authorizes which phone numbers can query which reports,
+     scoped to a single empresa (see WhatsAppAuthorizedNumber).
+  2. On first contact, an authorized number is connected straight to its
+     report if it only has one, or shown a numbered menu if it has several.
+  3. The user can send "menu"/"cambiar" at any time to switch reports.
+  4. Every message is forwarded to the same chatbot agent used by the web
+     chat (chatbot_service.procesar_interaccion_completa).
 
 Webhook setup (Meta Developer Console):
   - Callback URL: https://<your-domain>/webhook/whatsapp
@@ -28,7 +31,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 
 from app import db
-from app.models import PublicLink, WhatsAppContact
+from app.models import Empresa, PublicLink, WhatsAppAuthorizedNumber, WhatsAppContact
 from app.services import chatbot_service, meta_whatsapp_client
 from app.utils.decorators import retry_on_db_error
 
@@ -54,10 +57,12 @@ def _is_duplicate(message_id: str) -> bool:
         return False
 
 
-_GREETINGS = {
-    "hola", "holis", "buenas", "buen dia", "buenos dias", "buenas tardes",
-    "buenas noches", "que tal", "hello", "hi", "hey",
-}
+_MENU_COMMANDS = {"menu", "cambiar"}
+
+_NO_ACCESS_MESSAGE = (
+    "No tenes acceso habilitado a ningun tablero desde este numero. "
+    "Si crees que esto es un error, contacta a tu administrador."
+)
 
 
 # ---------------------------------------------------------------------------
@@ -71,11 +76,21 @@ def _contact_ttl_hours() -> float:
         return 0
 
 
-def _is_greeting(text: str) -> bool:
+def _normalize_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text.lower().strip())
     normalized = "".join(c for c in normalized if not unicodedata.combining(c))
-    normalized = re.sub(r"[^a-z ]", "", normalized).strip()
-    return normalized in _GREETINGS
+    return re.sub(r"[^a-z0-9 ]", "", normalized).strip()
+
+
+def _is_menu_command(text: str) -> bool:
+    return _normalize_text(text) in _MENU_COMMANDS
+
+
+def _build_menu_text(authorized) -> str:
+    lines = ["Tenes acceso a varios tableros. Respondeme con el numero del que queres consultar:"]
+    for i, entry in enumerate(authorized, start=1):
+        lines.append(f"{i}. {entry.report.name}")
+    return "\n".join(lines)
 
 
 def _verify_meta_signature(payload: bytes, signature_header: str) -> bool:
@@ -140,18 +155,71 @@ def _find_contact_sync(phone_number: str):
 
 
 @retry_on_db_error(max_retries=3, delay=1)
-def _register_contact_sync(phone_number: str, slug: str):
-    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
-    if not link:
-        return None, None
+def _authorized_entries_sync(phone_number: str):
+    """Reports this number may access, restricted to empresas with WhatsApp enabled."""
+    return (
+        WhatsAppAuthorizedNumber.query
+        .join(Empresa, WhatsAppAuthorizedNumber.empresa_id_fk == Empresa.id)
+        .filter(
+            WhatsAppAuthorizedNumber.phone_number == phone_number,
+            Empresa.whatsapp_enabled.is_(True),
+            Empresa.estado_activo.is_(True),
+        )
+        .order_by(WhatsAppAuthorizedNumber.report_id_fk)
+        .all()
+    )
+
+
+@retry_on_db_error(max_retries=3, delay=1)
+def _create_contact_sync(phone_number: str, report_id: int = None, awaiting_selection: bool = False):
     contact = WhatsAppContact(
         phone_number=phone_number,
-        report_id_fk=link.report_id_fk,
-        slug=slug,
+        report_id_fk=report_id,
+        awaiting_report_selection=awaiting_selection,
     )
     db.session.add(contact)
     db.session.commit()
-    return contact, link.report.name
+    return contact
+
+
+@retry_on_db_error(max_retries=3, delay=1)
+def _select_report_sync(contact_id: int, report_id: int):
+    contact = db.session.get(WhatsAppContact, contact_id)
+    if contact is None:
+        return None
+    contact.report_id_fk = report_id
+    contact.awaiting_report_selection = False
+    db.session.commit()
+    return contact
+
+
+@retry_on_db_error(max_retries=3, delay=1)
+def _reset_to_menu_sync(contact_id: int):
+    contact = db.session.get(WhatsAppContact, contact_id)
+    if contact is None:
+        return
+    contact.report_id_fk = None
+    contact.awaiting_report_selection = True
+    db.session.commit()
+
+
+@retry_on_db_error(max_retries=3, delay=1)
+def _delete_contact_sync(contact_id: int):
+    contact = db.session.get(WhatsAppContact, contact_id)
+    if contact is None:
+        return
+    db.session.delete(contact)
+    db.session.commit()
+
+
+@retry_on_db_error(max_retries=3, delay=1)
+def _active_slug_sync(report_id: int):
+    link = (
+        PublicLink.query
+        .filter_by(report_id_fk=report_id, is_active=True)
+        .first()
+    )
+    return link.custom_slug if link else None
 
 
 @retry_on_db_error(max_retries=3, delay=1)
@@ -247,36 +315,84 @@ async def whatsapp_webhook():
 
     contact = await asyncio.to_thread(_find_contact_sync, phone_number)
 
+    # First contact: look up what this number is authorized to see.
     if contact is None:
-        new_contact, report_name = await asyncio.to_thread(_register_contact_sync, phone_number, text)
-        if new_contact:
+        authorized = await asyncio.to_thread(_authorized_entries_sync, phone_number)
+        if not authorized:
+            await _send_reply(phone_number, _NO_ACCESS_MESSAGE)
+            return jsonify({"ok": True}), 200
+
+        if len(authorized) == 1:
+            entry = authorized[0]
+            await asyncio.to_thread(_create_contact_sync, phone_number, entry.report_id_fk, False)
             await _send_reply(
                 phone_number,
-                f'Listo, quedaste conectado al tablero de "{report_name}". '
+                f'Listo, quedaste conectado al tablero de "{entry.report.name}". '
                 "Ya podes preguntarme lo que necesites.",
             )
-        elif _is_greeting(text):
+        else:
+            await asyncio.to_thread(_create_contact_sync, phone_number, None, True)
+            await _send_reply(phone_number, _build_menu_text(authorized))
+        return jsonify({"ok": True}), 200
+
+    # Explicit request to switch reports.
+    if _is_menu_command(text):
+        authorized = await asyncio.to_thread(_authorized_entries_sync, phone_number)
+        if not authorized:
+            await asyncio.to_thread(_delete_contact_sync, contact.id)
+            await _send_reply(phone_number, _NO_ACCESS_MESSAGE)
+            return jsonify({"ok": True}), 200
+        if len(authorized) == 1:
+            await asyncio.to_thread(_select_report_sync, contact.id, authorized[0].report_id_fk)
+            await _send_reply(phone_number, f'Ya estas conectado al tablero de "{authorized[0].report.name}".')
+        else:
+            await asyncio.to_thread(_reset_to_menu_sync, contact.id)
+            await _send_reply(phone_number, _build_menu_text(authorized))
+        return jsonify({"ok": True}), 200
+
+    # Waiting for the user to pick a report from the menu.
+    if contact.awaiting_report_selection:
+        authorized = await asyncio.to_thread(_authorized_entries_sync, phone_number)
+        if not authorized:
+            await asyncio.to_thread(_delete_contact_sync, contact.id)
+            await _send_reply(phone_number, _NO_ACCESS_MESSAGE)
+            return jsonify({"ok": True}), 200
+
+        choice = text.strip()
+        index = int(choice) - 1 if choice.isdigit() else -1
+        if 0 <= index < len(authorized):
+            entry = authorized[index]
+            await asyncio.to_thread(_select_report_sync, contact.id, entry.report_id_fk)
             await _send_reply(
                 phone_number,
-                "Hola! Soy KLARA. Para conectarte con tu tablero, mandame el "
-                "link/slug publico que usas para verlo.",
+                f'Listo, quedaste conectado al tablero de "{entry.report.name}". '
+                "Ya podes preguntarme lo que necesites.",
             )
         else:
-            await _send_reply(
-                phone_number,
-                "No reconozco ese codigo. Mandame el mismo link/slug publico que usas "
-                "para ver tu tablero, asi te conecto con KLARA.",
-            )
+            await _send_reply(phone_number, _build_menu_text(authorized))
+        return jsonify({"ok": True}), 200
+
+    # Guard against access revoked after the contact was created.
+    still_authorized = await asyncio.to_thread(_authorized_entries_sync, phone_number)
+    if not any(e.report_id_fk == contact.report_id_fk for e in still_authorized):
+        await asyncio.to_thread(_delete_contact_sync, contact.id)
+        await _send_reply(phone_number, _NO_ACCESS_MESSAGE)
         return jsonify({"ok": True}), 200
 
     if not await asyncio.to_thread(_try_acquire_lock_sync, contact.id):
         await _send_reply(phone_number, "Todavia estoy respondiendo tu mensaje anterior, dame un momento.")
         return jsonify({"ok": True}), 200
 
+    slug = await asyncio.to_thread(_active_slug_sync, contact.report_id_fk)
+    if not slug:
+        await asyncio.to_thread(_release_lock_and_save_sync, contact.id, None)
+        await _send_reply(phone_number, "Tu tablero no tiene un link publico activo en este momento.")
+        return jsonify({"ok": True}), 200
+
     try:
         resultado = await chatbot_service.procesar_interaccion_completa(
             text,
-            slug=contact.slug,
+            slug=slug,
             user_key=f"whatsapp:{phone_number}",
             conversation_id=str(contact.conversation_id) if contact.conversation_id else None,
         )
