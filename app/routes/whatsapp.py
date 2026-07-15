@@ -24,11 +24,9 @@ import re
 import threading
 import time
 import unicodedata
-from datetime import timedelta
 
 import requests
 from flask import Blueprint, jsonify, request
-from sqlalchemy import func
 
 from app import db
 from app.models import Empresa, PublicLink, Report, WhatsAppAuthorizedNumber, WhatsAppContact
@@ -68,13 +66,6 @@ _NO_ACCESS_MESSAGE = (
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-def _contact_ttl_hours() -> float:
-    try:
-        return float(os.getenv("WHATSAPP_CONTACT_TTL_HOURS") or 0)
-    except ValueError:
-        return 0
-
 
 def _normalize_text(text: str) -> str:
     normalized = unicodedata.normalize("NFKD", text.lower().strip())
@@ -133,26 +124,7 @@ def _extract_incoming_message(payload: dict):
 
 @retry_on_db_error(max_retries=3, delay=1)
 def _find_contact_sync(phone_number: str):
-    contact = WhatsAppContact.query.filter_by(phone_number=phone_number).first()
-    if contact is None:
-        return None
-
-    ttl_hours = _contact_ttl_hours()
-    if ttl_hours > 0:
-        expired = db.session.query(
-            db.session.query(WhatsAppContact.id)
-            .filter(
-                WhatsAppContact.id == contact.id,
-                func.now() - WhatsAppContact.created_at > timedelta(hours=ttl_hours),
-            )
-            .exists()
-        ).scalar()
-        if expired:
-            db.session.delete(contact)
-            db.session.commit()
-            return None
-
-    return contact
+    return WhatsAppContact.query.filter_by(phone_number=phone_number).first()
 
 
 @retry_on_db_error(max_retries=3, delay=1)
