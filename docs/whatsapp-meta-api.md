@@ -30,7 +30,7 @@ sequenceDiagram
     FW->>DB: SELECT WhatsAppContact WHERE phone_number = ...
 
     alt Primer contacto (no existe WhatsAppContact)
-        FW->>DB: SELECT WhatsAppAuthorizedNumber<br/>JOIN Empresa (whatsapp_enabled AND estado_activo)<br/>WHERE phone_number = ...
+        FW->>DB: SELECT WhatsAppAuthorizedNumber<br/>JOIN Empresa (whatsapp_enabled AND estado_activo)<br/>JOIN Report (chatbot_enabled)<br/>WHERE phone_number = ...
         alt Sin reportes autorizados
             FW->>META: "No tenes acceso habilitado..."
         else Un solo reporte autorizado
@@ -120,9 +120,11 @@ last_message_at           DATETIME
 
 - Un número puede tener acceso a uno o varios reportes de una misma empresa.
 - **Un solo reporte autorizado** → conecta directo, sin menú.
-- **Varios reportes** → menú numerado; el comando `menu` o `cambiar` lo vuelve a mostrar en cualquier momento.
+- **Varios reportes** → menú numerado; el comando `menu` o `cambiar` lo vuelve a mostrar en cualquier momento. La detección no exige el mensaje exacto: alcanza con que "menu" o "cambiar" aparezca como palabra suelta en cualquier frase (ej. "quiero cambiar de tablero, me equivoque" también dispara el menú) — `_is_menu_command()` en `app/routes/whatsapp.py`.
 - **No autorizado** → mensaje genérico, sin pistas de qué reportes existen.
 - El acceso también depende de `Empresa.whatsapp_enabled` **y** `Empresa.estado_activo` — se revalida en **cada mensaje**, no solo al conectar, así que desactivar el toggle corta el acceso al instante (el próximo mensaje del número recibe el aviso de "sin acceso" y se borra su `WhatsAppContact`).
+- **El reporte también debe tener `Report.chatbot_enabled = True` (KLARA activo)**. Un reporte autorizado pero sin KLARA activo queda invisible por WhatsApp: no aparece en el menú, y si es el único reporte cargado, el número recibe "sin acceso" aunque tenga una fila en `WhatsAppAuthorizedNumber`. El formulario "Autorizar Número" en el panel admin ya filtra esto — solo deja elegir reportes que tienen KLARA activo.
+  > **Caso borde:** si un número tiene 2 reportes autorizados y a uno le desactivan KLARA *después*, y el usuario justo estaba conectado a ese reporte, el próximo mensaje lo desconecta con "no tenés acceso" en vez de reconectarlo automáticamente al otro reporte que sigue siendo válido — tiene que volver a escribir para que lo reconecte.
 
 ---
 
