@@ -31,7 +31,7 @@ from flask import Blueprint, jsonify, request
 from sqlalchemy import func
 
 from app import db
-from app.models import Empresa, PublicLink, WhatsAppAuthorizedNumber, WhatsAppContact
+from app.models import Empresa, PublicLink, Report, WhatsAppAuthorizedNumber, WhatsAppContact
 from app.services import chatbot_service, meta_whatsapp_client
 from app.utils.decorators import retry_on_db_error
 
@@ -83,7 +83,8 @@ def _normalize_text(text: str) -> str:
 
 
 def _is_menu_command(text: str) -> bool:
-    return _normalize_text(text) in _MENU_COMMANDS
+    words = set(_normalize_text(text).split())
+    return bool(words & _MENU_COMMANDS)
 
 
 def _build_menu_text(authorized) -> str:
@@ -156,14 +157,17 @@ def _find_contact_sync(phone_number: str):
 
 @retry_on_db_error(max_retries=3, delay=1)
 def _authorized_entries_sync(phone_number: str):
-    """Reports this number may access, restricted to empresas with WhatsApp enabled."""
+    """Reports this number may access: empresa must have WhatsApp enabled and active,
+    and the report itself must have KLARA (chatbot_enabled) turned on."""
     return (
         WhatsAppAuthorizedNumber.query
         .join(Empresa, WhatsAppAuthorizedNumber.empresa_id_fk == Empresa.id)
+        .join(Report, WhatsAppAuthorizedNumber.report_id_fk == Report.id)
         .filter(
             WhatsAppAuthorizedNumber.phone_number == phone_number,
             Empresa.whatsapp_enabled.is_(True),
             Empresa.estado_activo.is_(True),
+            Report.chatbot_enabled.is_(True),
         )
         .order_by(WhatsAppAuthorizedNumber.report_id_fk)
         .all()

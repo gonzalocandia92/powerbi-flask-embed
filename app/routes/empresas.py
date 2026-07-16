@@ -138,6 +138,7 @@ def toggle_whatsapp(empresa_id):
 @retry_on_db_error(max_retries=3, delay=1)
 def add_whatsapp_number(empresa_id):
     empresa = Empresa.query.options(db.joinedload(Empresa.reports)).get_or_404(empresa_id)
+    chatbot_reports = [r for r in empresa.reports if r.chatbot_enabled]
 
     if request.method == 'POST':
         phone_number = (request.form.get('phone_number') or '').strip()
@@ -149,10 +150,10 @@ def add_whatsapp_number(empresa_id):
         elif not selected_ids:
             flash("Seleccione al menos un reporte", "danger")
         else:
-            empresa_report_ids = {r.id for r in empresa.reports}
+            chatbot_report_ids = {r.id for r in chatbot_reports}
             added = 0
             for report_id in selected_ids:
-                if report_id not in empresa_report_ids:
+                if report_id not in chatbot_report_ids:
                     continue
                 exists = WhatsAppAuthorizedNumber.query.filter_by(
                     phone_number=phone_number, report_id_fk=report_id
@@ -169,7 +170,7 @@ def add_whatsapp_number(empresa_id):
 
     return render_template(
         'admin/empresas/whatsapp_add_number.html',
-        empresa=empresa, title=f'Autorizar Numero: {empresa.nombre}'
+        empresa=empresa, chatbot_reports=chatbot_reports, title=f'Autorizar Numero: {empresa.nombre}'
     )
 
 
