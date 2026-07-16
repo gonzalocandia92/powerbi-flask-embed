@@ -42,6 +42,9 @@ instance/
 .github/
 
 .evolution-manager/
+
+# Local debug logs
+agent_core_debug.txt
 .evolution-api/
 .evolution-db/
 .evolution-redis/
