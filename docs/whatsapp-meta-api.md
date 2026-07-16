@@ -166,11 +166,9 @@ En producción: `META_WA_TEST_MODE=false`.
    curl -X POST "https://graph.facebook.com/v20.0/<WABA_ID>/subscribed_apps" \
      -H "Authorization: Bearer <ACCESS_TOKEN>"
    ```
-5. **Mientras la app esté en modo Development**, Meta solo entrega webhooks reales para números agregados como *tester*: **WhatsApp → API Setup → Send and receive messages → Manage phone number list → Add recipient phone number**. Se verifica el número con un código que Meta manda por WhatsApp. Esto es independiente de "App roles → Testers" (ese es para gente que accede al dashboard, no para destinatarios de mensajes).
-6. Para que cualquier usuario final (no solo testers) pueda escribirle al bot, hace falta:
-   - Completar **Business Verification** en Meta Business Manager (documentación legal del negocio).
-   - Completar **Settings → Basic** de la app (ícono, categoría, Privacy Policy URL).
-   - Pasar el toggle de la app de **Development** a **Live**.
+5. **Solo aplica al número de prueba gratuito (sandbox)**: mientras uses el número que Meta te da al crear la app, únicamente los destinatarios agregados como *tester* (**WhatsApp → API Setup → Send and receive messages → Manage phone number list → Add recipient phone number**) pueden mandar/recibir mensajes reales. Esto es independiente de "App roles → Testers" (ese es para gente que accede al dashboard, no para destinatarios de mensajes).
+6. **Con un número real y verificado conectado al WABA (como `+54 9 11 2677-0450`, status `CONNECTED`) esta restricción no aplica** — puede enviar y recibir mensajes de cualquier usuario de WhatsApp sin importar si la app está en modo Development o Live. Confirmado en producción: usuarios autorizados que nunca fueron agregados como tester recibieron respuesta normalmente.
+   - **Publicar la app** (Business Verification + toggle a Live) NO es un requisito para este caso de uso (mensajería con tu propio número, tu propio negocio). Es relevante solo para permisos avanzados de Graph API o si la app fuera a gestionar WABAs de otros negocios.
 
 ---
 
@@ -253,6 +251,6 @@ curl -X POST "https://graph.facebook.com/v20.0/<WABA_ID>/subscribed_apps" \
 - [x] Reemplazar token temporal por **System User Token permanente** (no expira)
 - [x] Registrar el número real de Sudata (`+54 9 11 2677-0450`) — status `CONNECTED`
 - [x] Desactivar `META_WA_TEST_MODE` en producción
-- [ ] Publicar la app en Meta (Business Verification + Live mode) para recibir mensajes de cualquier usuario, no solo testers
-- [ ] Configurar dominio propio con HTTPS y deploy persistente (reemplaza ngrok, que hoy es el único punto de entrada y depende de una máquina local prendida)
-- [ ] Agregar Privacy Policy URL en Settings → Basic de la app (requisito para publicar)
+- [x] ~~Publicar la app en Meta~~ — **no es necesario**: con un número real conectado al WABA, cualquier usuario puede escribir sin necesidad de Business Verification ni modo Live (ver §5, confirmado en producción)
+- [x] Configurar dominio propio con HTTPS (`reports-test.sudata.co`), reemplaza el uso de ngrok como Callback URL de producción
+- [ ] Confirmar que el deploy en `reports-test.sudata.co` sea persistente (systemd/Docker con reinicio automático), no dependiente de que alguien lo levante a mano
