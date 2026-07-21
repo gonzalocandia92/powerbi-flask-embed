@@ -338,6 +338,8 @@ def _persist_success_sync(
         "had_error": had_error,
         "error_message": result.get("error_message") if had_error else None,
         "failure_reason": result.get("failure_reason") if had_error else None,
+        "route_metadata_json": result.get("route_metadata_json"),
+        "route_validation_warnings": result.get("route_validation_warnings") or [],
         "total_cost_usd": assistant_message.total_cost_usd or 0.0,
     }
 
@@ -428,6 +430,12 @@ def _validate_chat_pricing_sync(report: Report, settings: chat_mcp.RuntimeSettin
         model="voyage-4",
         event_type="embedding",
     )
+    if settings.skill_router_settings.selector_enabled:
+        ai_billing.resolve_pricing(
+            provider="anthropic",
+            model=settings.skill_router_settings.selector_model,
+            event_type="generation",
+        )
     ai_billing.enforce_limit_for_report(report)
 
 
@@ -506,6 +514,7 @@ async def procesar_interaccion_completa(
                     settings=settings,
                     conversation_id=str(session_id),
                     report_id=report.id,
+                    empresa_id=billing_context.empresa_id,
                     powerbi_credentials=powerbi_credentials,
                     custom_instructions=custom_instructions,
                     schema_retrieval_prompt=report.schema_retrieval_prompt,

@@ -208,12 +208,16 @@ class Empresa(db.Model):
     client_id = db.Column(db.String(200), nullable=False, unique=True)
     client_secret_hash = db.Column(db.String(256), nullable=False)
     estado_activo = db.Column(db.Boolean, default=True, nullable=False)
+    whatsapp_enabled = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     # Relationship to reports (many-to-many)
     reports = db.relationship('Report', secondary='empresa_report', back_populates='empresas')
     reports_facturados = db.relationship('Report', foreign_keys='Report.empresa_facturadora_id', back_populates='empresa_facturadora')
+    whatsapp_authorized_numbers = db.relationship(
+        'WhatsAppAuthorizedNumber', back_populates='empresa', cascade='all, delete-orphan'
+    )
 
 
 # Keep ClientePrivado as an alias for backward compatibility
@@ -303,6 +307,73 @@ class SchemaEmbedding(db.Model):
     last_updated = db.Column(db.DateTime, default=_utcnow, nullable=False)
 
     report = db.relationship('Report', back_populates='schema_embeddings')
+
+
+class AnalyticsSkill(db.Model):
+    """Operational analytics skill routed by semantic embeddings."""
+
+    __tablename__ = 'analytics_skills'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    skill_key = db.Column(db.String(120), nullable=False, index=True)
+    domain_key = db.Column(db.String(120), nullable=False, index=True)
+    title = db.Column(db.String(200), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    priority = db.Column(db.String(20), nullable=False, default='normal', index=True)
+    enforcement_mode = db.Column(db.String(30), nullable=False, default='soft', index=True)
+    confidence_label = db.Column(db.String(30), nullable=True, index=True)
+
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=True, index=True)
+    empresa_id_fk = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='CASCADE'), nullable=True, index=True)
+    dataset_id = db.Column(db.String(200), nullable=True, index=True)
+
+    routing_text = db.Column(db.Text, nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    metadata_json = db.Column(db.JSON, nullable=True)
+    routing_json = db.Column(db.JSON, nullable=True)
+    validation_json = db.Column(db.JSON, nullable=True)
+
+    is_active = db.Column(db.Boolean, nullable=False, default=True, index=True)
+    version = db.Column(db.Integer, nullable=False, default=1)
+
+    embedding = db.Column(Vector(1024), nullable=True)
+    embedding_model = db.Column(db.String(120), nullable=True)
+    embedded_at = db.Column(db.DateTime, nullable=True)
+    routing_document_hash = db.Column(db.String(64), nullable=True)
+
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    report = db.relationship('Report')
+    empresa = db.relationship('Empresa')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            """
+            (
+                report_id_fk IS NULL AND empresa_id_fk IS NULL AND dataset_id IS NULL
+            ) OR (
+                report_id_fk IS NULL AND empresa_id_fk IS NOT NULL AND dataset_id IS NULL
+            ) OR (
+                report_id_fk IS NULL AND empresa_id_fk IS NULL AND dataset_id IS NOT NULL
+            ) OR (
+                report_id_fk IS NOT NULL AND empresa_id_fk IS NULL AND dataset_id IS NULL
+            )
+            """,
+            name='ck_analytics_skills_single_scope',
+        ),
+        db.Index('ix_analytics_skills_scope', 'report_id_fk', 'dataset_id', 'empresa_id_fk'),
+    )
+
+    @property
+    def scope(self) -> str:
+        if self.report_id_fk is not None:
+            return 'report'
+        if self.dataset_id:
+            return 'dataset'
+        if self.empresa_id_fk is not None:
+            return 'empresa'
+        return 'global'
 
 
 @compiles(Vector, 'sqlite')
@@ -515,3 +586,41 @@ class AIUsageEvent(db.Model):
         db.Index('ix_ai_usage_events_workspace_created', 'workspace_id_fk', 'created_at'),
         db.Index('ix_ai_usage_events_provider_model', 'provider', 'model'),
     )
+
+
+class WhatsAppAuthorizedNumber(db.Model):
+    """Admin-granted access: a phone number authorized to query a given report."""
+
+    __tablename__ = 'whatsapp_authorized_numbers'
+
+    id = db.Column(db.Integer, primary_key=True)
+    phone_number = db.Column(db.String(30), nullable=False, index=True)
+    empresa_id_fk = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='CASCADE'), nullable=False)
+    report_id_fk = db.Column(db.Integer, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    empresa = db.relationship('Empresa', back_populates='whatsapp_authorized_numbers')
+    report = db.relationship('Report')
+
+    __table_args__ = (
+        db.UniqueConstraint('phone_number', 'report_id_fk', name='uq_whatsapp_authorized_number_report'),
+    )
+
+
+class WhatsAppContact(db.Model):
+    """Live phone↔report binding. report_id_fk is the currently active report;
+    it is null while the user is choosing from a multi-report menu."""
+
+    __tablename__ = 'whatsapp_contacts'
+
+    id = db.Column(db.Integer, primary_key=True)
+    phone_number = db.Column(db.String(30), unique=True, nullable=False, index=True)
+    report_id_fk = db.Column(db.Integer, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=True)
+    awaiting_report_selection = db.Column(db.Boolean, nullable=False, default=False)
+    conversation_id = db.Column(db.Integer, db.ForeignKey('chat_sessions.id', ondelete='SET NULL'), nullable=True)
+    is_processing = db.Column(db.Boolean, nullable=False, default=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    last_message_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    report = db.relationship('Report')
+    session = db.relationship('ChatSession')

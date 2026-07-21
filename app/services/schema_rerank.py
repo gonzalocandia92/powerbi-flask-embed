@@ -6,10 +6,28 @@ from __future__ import annotations
 import json
 import os
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from dataclasses import dataclass
 from typing import Any, Dict, List, Literal
 
 SchemaKind = Literal["tabla", "medida", "otro"]
 DEFAULT_RERANK_TIMEOUT_SECONDS = 10
+DEFAULT_RERANK_MODEL = "rerank-2.5"
+
+
+@dataclass(frozen=True)
+class RankedDocument:
+    document: str
+    score: float
+    index: int
+
+
+@dataclass(frozen=True)
+class RerankUsage:
+    total_tokens: int = 0
+    estimated: bool = False
+    query_tokens: int = 0
+    document_tokens: int = 0
+    document_count: int = 0
 
 
 def _get_voyage_client():
@@ -31,6 +49,23 @@ def _get_rerank_timeout_seconds() -> int:
         return max(1, int(raw_value))
     except Exception:
         return DEFAULT_RERANK_TIMEOUT_SECONDS
+
+
+def _estimate_tokens(text: str) -> int:
+    return max(1, len(text or "") // 5)
+
+
+def estimate_rerank_processed_tokens(query: str, documents: List[str]) -> RerankUsage:
+    query_tokens = _estimate_tokens(query)
+    document_tokens = sum(_estimate_tokens(document) for document in documents)
+    document_count = len(documents)
+    return RerankUsage(
+        total_tokens=(query_tokens * document_count) + document_tokens,
+        estimated=True,
+        query_tokens=query_tokens,
+        document_tokens=document_tokens,
+        document_count=document_count,
+    )
 
 
 def clasificar_schema_item(texto: str) -> SchemaKind:
@@ -55,7 +90,7 @@ def buscar_elementos_relevantes_rerank(
         return cliente.rerank(
             query=pregunta,
             documents=documentos_candidatos,
-            model="rerank-2.5-lite",
+            model=DEFAULT_RERANK_MODEL,
             top_k=top_k,
         )
 
@@ -78,6 +113,77 @@ def buscar_elementos_relevantes_rerank(
             }
         )
     return elementos_ordenados
+
+
+def rerank_documents(
+    *,
+    query: str,
+    documents: List[str],
+    model: str = DEFAULT_RERANK_MODEL,
+    top_k: int | None = None,
+) -> List[RankedDocument]:
+    """Generic Voyage rerank helper used by schema and skill routing."""
+    ranked, _usage = rerank_documents_with_usage(
+        query=query,
+        documents=documents,
+        model=model,
+        top_k=top_k,
+    )
+    return ranked
+
+
+def rerank_documents_with_usage(
+    *,
+    query: str,
+    documents: List[str],
+    model: str = DEFAULT_RERANK_MODEL,
+    top_k: int | None = None,
+) -> tuple[List[RankedDocument], RerankUsage]:
+    """Rerank documents and return Voyage token accounting metadata."""
+    if not query.strip() or not documents:
+        return [], RerankUsage()
+
+    cliente = _get_voyage_client()
+    resolved_top_k = top_k or len(documents)
+
+    def _do_rerank():
+        return cliente.rerank(
+            query=query,
+            documents=documents,
+            model=model,
+            top_k=resolved_top_k,
+        )
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(_do_rerank)
+            resultado_rerank = future.result(timeout=_get_rerank_timeout_seconds())
+    except FuturesTimeoutError:
+        return [], RerankUsage()
+    except Exception:
+        return [], RerankUsage()
+
+    total_tokens = int(getattr(resultado_rerank, "total_tokens", None) or 0)
+    usage = (
+        RerankUsage(
+            total_tokens=total_tokens,
+            estimated=False,
+            document_count=len(documents),
+        )
+        if total_tokens > 0
+        else estimate_rerank_processed_tokens(query, documents)
+    )
+
+    ranked: List[RankedDocument] = []
+    for result in resultado_rerank.results:
+        ranked.append(
+            RankedDocument(
+                document=result.document,
+                score=float(result.relevance_score),
+                index=int(result.index),
+            )
+        )
+    return ranked, usage
 
 
 def build_schema_items_from_live_schema(mcp_schema_json: str) -> List[str]:
