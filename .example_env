@@ -35,3 +35,23 @@ ANALYTICS_RESPECT_DNT=true
 # Interval (in hours) for the automatic dataset refresh status polling
 REFRESH_POLL_INTERVAL_HOURS=12
 
+# ── KLARA Chatbot Configuration ──────────────────────────────────────────────
+# Anthropic API key (required)
+ANTHROPIC_API_KEY=sk-ant-...
+
+# Claude model to use for KLARA (optional, defaults to claude-haiku-4-5-20251001)
+# CHATBOT_MODEL=claude-haiku-4-5-20251001
+
+# MCP server URL — set by the other dev once their MCP server is deployed.
+# When set, Claude connects to this server and can call its tools (DAX queries, etc.)
+# When NOT set, KLARA runs without data access and informs the user.
+CHATBOT_MCP_URL=http://localhost:8080/mcp
+
+# Optional: API key / bearer token required by the MCP server
+# CHATBOT_MCP_API_KEY=
+
+# Dataset ID — used by /api/chatbot/context/<slug> to tell the MCP server
+# which Power BI / Fabric dataset to query for each report.
+# If not set, falls back to the report's report_id from the DB.
+CHATBOT_DATASET_ID=your-dataset-id
+

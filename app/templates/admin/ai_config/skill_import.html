@@ -1,0 +1,179 @@
+{% extends "layout.html" %}
+
+{% block title %}Importar skills - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div>
+      <h2 class="fw-bold mb-1"><i class="bi bi-upload text-primary me-2"></i>Importar skills</h2>
+      <p class="text-muted mb-0">Sube un CSV completo exportado o un CSV parcial tipo patch por id.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='skills') }}">
+      <i class="bi bi-arrow-left me-1"></i>Volver
+    </a>
+  </div>
+
+  <div class="card mb-4">
+    <div class="card-header">
+      <h5 class="mb-0"><i class="bi bi-filetype-csv me-2"></i>Archivo CSV</h5>
+    </div>
+    <div class="card-body">
+      <form method="post" action="{{ url_for('ai_config.skill_import_preview') }}" enctype="multipart/form-data">
+        <div class="row g-3 align-items-end">
+          <div class="col-lg-7">
+            <label class="form-label" for="csv_file">CSV de skills</label>
+            <input class="form-control" id="csv_file" name="csv_file" type="file" accept=".csv,text/csv" required>
+            <div class="form-text">Completo: usa el export actual. Patch: puede tener solo id y las columnas a modificar.</div>
+          </div>
+          <div class="col-lg-3">
+            <label class="form-label" for="import_mode">Modo</label>
+            <select class="form-select" id="import_mode" name="import_mode">
+              <option value="full" {% if import_mode != 'patch' %}selected{% endif %}>Importacion completa</option>
+              <option value="patch" {% if import_mode == 'patch' %}selected{% endif %}>Patch por id</option>
+            </select>
+            <div class="form-text">Para borrar en patch usa clear_fields.</div>
+          </div>
+          <div class="col-lg-2">
+            <button class="btn btn-primary w-100" type="submit">
+              <i class="bi bi-search me-1"></i>Previsualizar
+            </button>
+          </div>
+        </div>
+        <div class="alert alert-light border mt-3 mb-0 small">
+          <div><strong>Patch minimo:</strong> <code>id,content</code></div>
+          <div><strong>Patch con dos campos:</strong> <code>id,content,routing_text</code></div>
+          <div><strong>Borrar campo:</strong> <code>id,clear_fields</code> con <code>clear_fields=description</code></div>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  {% if preview %}
+  <div class="card">
+    <div class="card-header">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Vista previa</h5>
+        {% if import_token %}
+        <form method="post" action="{{ url_for('ai_config.skill_import_confirm') }}">
+          <textarea class="d-none" name="import_token">{{ import_token }}</textarea>
+          <button class="btn btn-success" type="submit" onclick="return confirm('Esto aplicara la importacion. Si algo falla, no se guardara nada.');">
+            <i class="bi bi-check2-circle me-1"></i>Confirmar importacion
+          </button>
+        </form>
+        {% else %}
+        <button class="btn btn-secondary" type="button" disabled>
+          <i class="bi bi-lock me-1"></i>Corregir errores para confirmar
+        </button>
+        {% endif %}
+      </div>
+    </div>
+    <div class="card-body">
+      {% if preview.errors %}
+      <div class="alert alert-danger">
+        {% for error in preview.errors %}
+        <div>{{ error }}</div>
+        {% endfor %}
+      </div>
+      {% endif %}
+
+      <div class="row row-cols-1 row-cols-md-2 row-cols-xl-5 g-3 mb-4">
+        <div class="col">
+          <div class="border rounded p-3 h-100">
+            <div class="text-muted small fw-bold text-uppercase">Nuevas</div>
+            <div class="fs-4 fw-bold text-primary">{{ preview.summary['create'] }}</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="border rounded p-3 h-100">
+            <div class="text-muted small fw-bold text-uppercase">Actualizaciones</div>
+            <div class="fs-4 fw-bold text-warning">{{ preview.summary['update'] }}</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="border rounded p-3 h-100">
+            <div class="text-muted small fw-bold text-uppercase">Patches</div>
+            <div class="fs-4 fw-bold text-info">{{ preview.summary['patch'] }}</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="border rounded p-3 h-100">
+            <div class="text-muted small fw-bold text-uppercase">Sin cambios</div>
+            <div class="fs-4 fw-bold text-secondary">{{ preview.summary['unchanged'] }}</div>
+          </div>
+        </div>
+        <div class="col">
+          <div class="border rounded p-3 h-100">
+            <div class="text-muted small fw-bold text-uppercase">Errores</div>
+            <div class="fs-4 fw-bold {{ 'text-danger' if preview.summary['error'] else 'text-success' }}">{{ preview.summary['error'] }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table align-middle">
+          <thead>
+            <tr>
+              <th>Fila</th>
+              <th>Accion</th>
+              <th>Scope</th>
+              <th>Skill</th>
+              <th>Titulo</th>
+              <th>Campos</th>
+              <th>Errores</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in preview.rows %}
+            <tr>
+              <td>{{ row.row_number }}</td>
+              <td>
+                {% if row.action == 'create' %}
+                <span class="badge bg-primary">Nueva</span>
+                {% elif row.action == 'update' %}
+                <span class="badge bg-warning text-dark">Actualizar</span>
+                {% elif row.action == 'patch' %}
+                <span class="badge bg-info text-dark">Patch</span>
+                {% elif row.action == 'unchanged' %}
+                <span class="badge bg-secondary">Sin cambios</span>
+                {% else %}
+                <span class="badge bg-danger">Error</span>
+                {% endif %}
+              </td>
+              <td>{{ row.scope or '--' }}</td>
+              <td class="fw-semibold">{{ row.skill_key or '--' }}</td>
+              <td>{{ row.title or '--' }}</td>
+              <td>
+                {% if row.data and row.data.changed_fields %}
+                {% for field_name in row.data.changed_fields %}
+                <span class="badge bg-light text-dark border">{{ field_name }}</span>
+                {% endfor %}
+                {% else %}
+                <span class="text-muted">--</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if row.errors %}
+                <ul class="mb-0 ps-3">
+                  {% for error in row.errors %}
+                  <li>{{ error }}</li>
+                  {% endfor %}
+                </ul>
+                {% else %}
+                <span class="text-muted">--</span>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="7" class="text-center text-muted py-4">No hay filas para importar.</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -4,9 +4,9 @@ Utility decorators for the Power BI Flask Embed application.
 import time
 import logging
 from functools import wraps
-from sqlalchemy.exc import OperationalError, DBAPIError
 from flask import redirect, url_for, flash
 from flask_login import current_user
+from sqlalchemy.exc import OperationalError, DBAPIError
 
 from app import db
 

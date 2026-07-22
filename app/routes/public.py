@@ -4,7 +4,9 @@ Public report viewing routes (no authentication required).
 import logging
 import time
 import requests as _requests_lib
-from flask import Blueprint, render_template, request, make_response, jsonify
+
+from flask import Blueprint, render_template, request, make_response, jsonify, url_for, redirect
+
 
 from app.models import PublicLink, Report, Workspace, Tenant
 from app.utils.decorators import retry_on_db_error
@@ -19,6 +21,18 @@ _refresh_timestamps = {}
 
 # Minimum seconds between refreshes per slug
 _REFRESH_COOLDOWN = 1800  # 30 minutes
+
+
+CENTRAL_TICKET_REDIRECT_URL = (
+    'https://app.powerbi.com/links/CZwaplCsbc?ctid=94fb2600-60af-4872-80d9-727cacb45759'
+    '&pbi_source=linkShare&bookmarkGuid=20cd48f9-0fec-4308-9276-228fc85e92cb'
+)
+
+
+@bp.route('/central-ticket')
+def central_ticket_redirect():
+    """Temporary manual redirect for central-ticket public path."""
+    return redirect(CENTRAL_TICKET_REDIRECT_URL, code=302)
 
 
 def _cleanup_refresh_timestamps():
@@ -67,7 +81,11 @@ def view(custom_slug):
         report_id=report_id,
         config_name=report.name,
         is_public=True,
-        allow_refresh=link.allow_refresh
+        allow_refresh=link.allow_refresh,
+        refresh_url=url_for('public.refresh', custom_slug=custom_slug),
+        slug=custom_slug,
+        chatbot_enabled=report.chatbot_enabled,
+        show_dax_query=report.show_dax_query,
     ))
     
     if not visitor_id_is_valid:

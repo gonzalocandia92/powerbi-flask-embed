@@ -1,7 +1,7 @@
 """Add roles and permissions for user management
 
 Revision ID: add_roles_permissions_001
-Revises: add_allow_refresh_001
+Revises: 1512c11ce3b0
 Create Date: 2026-06-29
 
 """
@@ -11,7 +11,7 @@ from sqlalchemy.dialects import postgresql
 
 # revision identifiers
 revision = 'add_roles_permissions_001'
-down_revision = 'add_allow_refresh_001'
+down_revision = '1512c11ce3b0'
 branch_labels = None
 depends_on = None
 

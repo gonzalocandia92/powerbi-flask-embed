@@ -96,7 +96,7 @@ def openapi_spec():
             "/private/reports": {
                 "get": {
                     "summary": "Listar reportes de la empresa",
-                    "description": "Obtiene la lista de reportes asociados a la empresa autenticada",
+                    "description": "Obtiene la lista de reportes asociados a la empresa autenticada, incluyendo información de si cada reporte soporta filtros",
                     "security": [
                         {
                             "BearerAuth": []
@@ -122,10 +122,16 @@ def openapi_spec():
                                                     "type": "object",
                                                     "properties": {
                                                         "id": {
-                                                            "type": "integer"
+                                                            "type": "integer",
+                                                            "description": "ID único del reporte"
                                                         },
                                                         "name": {
-                                                            "type": "string"
+                                                            "type": "string",
+                                                            "description": "Nombre del reporte"
+                                                        },
+                                                        "filterable": {
+                                                            "type": "boolean",
+                                                            "description": "Indica si el reporte soporta filtros dinámicos"
                                                         }
                                                     }
                                                 }
@@ -144,7 +150,7 @@ def openapi_spec():
             "/private/report-config": {
                 "get": {
                     "summary": "Obtener configuración de embed de reporte",
-                    "description": "Obtiene la configuración necesaria para embeber un reporte específico. Acepta report_id o config_id (backward compatibility) como parámetro.",
+                    "description": "Obtiene la configuración necesaria para embeber un reporte específico. Soporta filtros dinámicos mediante el parámetro 'filter' cuando el reporte está configurado para permitir filtros. Acepta report_id o config_id (backward compatibility) como parámetro.",
                     "security": [
                         {
                             "BearerAuth": []
@@ -159,6 +165,15 @@ def openapi_spec():
                                 "type": "integer"
                             },
                             "description": "ID del reporte"
+                        },
+                        {
+                            "name": "filter",
+                            "in": "query",
+                            "required": False,
+                            "schema": {
+                                "type": "string"
+                            },
+                            "description": "Valor del filtro a aplicar al reporte. Solo se aplica si el reporte está configurado para soportar filtros. Ejemplo: 'USA' para filtrar por país"
                         }
                     ],
                     "responses": {
@@ -171,7 +186,7 @@ def openapi_spec():
                                         "properties": {
                                             "embedUrl": {
                                                 "type": "string",
-                                                "description": "URL de embed del reporte"
+                                                "description": "URL de embed del reporte con filtro aplicado si corresponde"
                                             },
                                             "reportId": {
                                                 "type": "string",

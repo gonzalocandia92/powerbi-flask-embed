@@ -1,0 +1,92 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div>
+      <h2 class="fw-bold mb-1"><i class="bi bi-chat-square-text text-primary me-2"></i>{{ title }}</h2>
+      <p class="text-muted mb-0">Configura instrucciones adicionales para {{ scope_label }}.</p>
+    </div>
+    <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='prompts') }}">
+      <i class="bi bi-arrow-left me-1"></i>Volver
+    </a>
+  </div>
+
+  <div class="row justify-content-center">
+    <div class="col-xl-8 col-lg-10">
+      <div class="card">
+        <div class="card-header">
+          <h5><i class="bi bi-sliders me-2"></i>Instrucciones del agente</h5>
+        </div>
+        <div class="card-body">
+          <div class="alert alert-info">
+            Estas instrucciones se agregan al prompt base protegido. No pueden anular reglas de seguridad, privacidad, tools, sintaxis DAX ni manejo de errores.
+          </div>
+          <form method="post" novalidate>
+            {{ form.hidden_tag() }}
+            <div class="row g-3">
+              <div class="col-12">
+                {{ form.title.label(class="form-label") }}
+                {{ form.title(class="form-control" + (" is-invalid" if form.title.errors else "")) }}
+                {% for error in form.title.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+              </div>
+              <div class="col-12">
+                {{ form.instructions.label(class="form-label") }}
+                {{ form.instructions(class="form-control" + (" is-invalid" if form.instructions.errors else ""), rows="12") }}
+                {% for error in form.instructions.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+                <div class="form-text">Usa este campo para tono, glosarios, reglas comerciales y defaults analiticos.</div>
+              </div>
+              {% if retrieval_form_enabled %}
+              <div class="col-12">
+                <hr>
+                <h6 class="fw-bold mb-1">Recuperacion del embedding</h6>
+                <p class="text-muted small mb-0">Configura un diccionario corto para el microagente y limites fijos para este reporte. Si los limites quedan vacios se usa el default 6 tablas y 10 medidas.</p>
+              </div>
+              <div class="col-12">
+                {{ form.schema_retrieval_prompt.label(class="form-label") }}
+                {{ form.schema_retrieval_prompt(class="form-control" + (" is-invalid" if form.schema_retrieval_prompt.errors else ""), rows="5", placeholder="Ej: ventas reales -> sales_order_line, sales_order, product_product, Date; forecast -> fct_dishes, fct_sucursal") }}
+                {% for error in form.schema_retrieval_prompt.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+                <div class="form-text">Este texto lo usa solo el microagente que arma keywords para el embedding. Mantenelo corto.</div>
+              </div>
+              <div class="col-md-6">
+                {{ form.schema_table_context_limit.label(class="form-label") }}
+                {{ form.schema_table_context_limit(class="form-control" + (" is-invalid" if form.schema_table_context_limit.errors else ""), min="1", max="20", placeholder="6") }}
+                {% for error in form.schema_table_context_limit.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+              </div>
+              <div class="col-md-6">
+                {{ form.schema_measure_context_limit.label(class="form-label") }}
+                {{ form.schema_measure_context_limit(class="form-control" + (" is-invalid" if form.schema_measure_context_limit.errors else ""), min="1", max="40", placeholder="10") }}
+                {% for error in form.schema_measure_context_limit.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+              </div>
+              {% endif %}
+              <div class="col-md-6">
+                {{ form.starts_at.label(class="form-label") }}
+                {{ form.starts_at(class="form-control" + (" is-invalid" if form.starts_at.errors else "")) }}
+                {% for error in form.starts_at.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+              </div>
+              <div class="col-md-6">
+                {{ form.ends_at.label(class="form-label") }}
+                {{ form.ends_at(class="form-control" + (" is-invalid" if form.ends_at.errors else "")) }}
+                {% for error in form.ends_at.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+              </div>
+              <div class="col-12">
+                <div class="form-check form-switch">
+                  {{ form.is_active(class="form-check-input") }}
+                  {{ form.is_active.label(class="form-check-label fw-semibold") }}
+                </div>
+              </div>
+            </div>
+
+            <div class="d-flex justify-content-end gap-2 mt-4">
+              <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='prompts') }}">Cancelar</a>
+              {{ form.submit(class="btn btn-primary") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -11,13 +11,14 @@ from flask import Blueprint, render_template, redirect, url_for, flash, request,
 from flask_login import login_required
 
 from app import db
-from app.models import Report, Workspace, Tenant, UsuarioPBI, PublicLink, Empresa
+from app.models import Report, Workspace, Tenant, UsuarioPBI, PublicLink, Empresa, DatasetRefreshLog
 from app.forms import (
     ReportForm, PublicLinkForm,
     PublicUrlForm, PublicUrlWorkspaceForm, PublicUrlReportForm, PublicUrlLinkForm
 )
+from app.services.vector_service import trigger_schema_embedding_update
 from app.utils.decorators import retry_on_db_error
-from app.utils.powerbi import get_embed_for_report, refresh_dataset
+from app.utils.powerbi import get_current_dataset_id, get_embed_for_report, refresh_dataset
 
 bp = Blueprint('reports', __name__, url_prefix='/reports')
 
@@ -35,6 +36,92 @@ def parse_powerbi_url(url):
     if not match:
         return None, None
     return match.group(1), match.group(2)
+
+
+def _get_latest_successful_dataset_id(report_id):
+    """Return the most recent successful dataset_id for a report."""
+    latest_success = (
+        DatasetRefreshLog.query
+        .filter(
+            DatasetRefreshLog.report_id_fk == report_id,
+            DatasetRefreshLog.status == "Completed",
+            DatasetRefreshLog.dataset_id.isnot(None),
+        )
+        .order_by(DatasetRefreshLog.end_time.desc(), DatasetRefreshLog.polled_at.desc())
+        .first()
+    )
+    if latest_success is None or not latest_success.dataset_id:
+        return None
+    return latest_success.dataset_id
+
+
+def _queue_embeddings_if_available(report):
+    """Trigger background embeddings using a known or freshly resolved dataset."""
+    dataset_id = _get_latest_successful_dataset_id(report.id)
+    if not dataset_id:
+        try:
+            dataset_id = get_current_dataset_id(report)
+        except KeyError:
+            logging.exception(
+                "Power BI report response did not include datasetId for report %s",
+                report.id,
+            )
+            flash(
+                "Chatbot habilitado, pero Power BI no devolvio el dataset del reporte.",
+                "warning",
+            )
+            return False
+        except _requests_lib.HTTPError as exc:
+            status_code = exc.response.status_code if exc.response is not None else None
+            if status_code in (401, 403):
+                message = (
+                    "Chatbot habilitado, pero el usuario Power BI no tiene permisos "
+                    "para leer el reporte/dataset."
+                )
+            elif status_code == 404:
+                message = (
+                    "Chatbot habilitado, pero no se encontro el reporte o dataset en Power BI."
+                )
+            else:
+                message = (
+                    "Chatbot habilitado, pero Power BI devolvio un error al resolver el dataset."
+                )
+            logging.exception(
+                "Power BI dataset resolution failed for report %s with status %s",
+                report.id,
+                status_code,
+            )
+            flash(message, "warning")
+            return False
+        except Exception:
+            logging.exception(
+                "Could not resolve dataset_id for report %s while enabling chatbot",
+                report.id,
+            )
+            flash(
+                "Chatbot habilitado, pero no se pudo resolver el dataset para generar embeddings.",
+                "warning",
+            )
+            return False
+
+    try:
+        trigger_schema_embedding_update(report.id, dataset_id)
+    except Exception:
+        logging.exception(
+            "Could not queue schema embeddings for report %s dataset %s",
+            report.id,
+            dataset_id,
+        )
+        flash(
+            "Chatbot habilitado, pero no se pudo iniciar la generacion de embeddings.",
+            "warning",
+        )
+        return False
+    flash(
+        "Se inicio la generacion de embeddings del esquema en segundo plano.",
+        "info",
+    )
+    return True
 
 
 @bp.route('/')
@@ -71,9 +158,10 @@ def new():
     form = ReportForm()
     form.workspace.choices = [(w.id, f"{w.name} ({w.workspace_id[:8]}...)") for w in Workspace.query.order_by(Workspace.name).all()]
     form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]
-    form.empresas.choices = [
-        (e.id, e.nombre) for e in Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
-    ]
+    active_companies = Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
+    company_choices = [(e.id, e.nombre) for e in active_companies]
+    form.empresas.choices = company_choices
+    form.empresa_facturadora_id.choices = [(0, "Default global")] + company_choices
     
     if form.validate_on_submit():
         es_publico = form.es_publico.data
@@ -90,10 +178,18 @@ def new():
             workspace_id_fk=form.workspace.data,
             usuario_pbi_id=form.usuario_pbi.data,
             es_publico=es_publico,
-            es_privado=es_privado
+            es_privado=es_privado,
+            chatbot_enabled=form.chatbot_enabled.data,
+            show_dax_query=form.show_dax_query.data,
+            empresa_facturadora_id=form.empresa_facturadora_id.data or None,
+            filter_enabled=form.filter_enabled.data,
+            filter_table=form.filter_table.data or None,
+            filter_column=form.filter_column.data or None,
         )
         db.session.add(report)
         db.session.commit()
+        if report.chatbot_enabled:
+            _queue_embeddings_if_available(report)
         
         flash("Report creado", "success")
         return redirect(url_for('reports.detail', report_id=report.id))
@@ -110,14 +206,15 @@ def edit(report_id):
     form = ReportForm(obj=report)
     form.workspace.choices = [(w.id, f"{w.name} ({w.workspace_id[:8]}...)") for w in Workspace.query.order_by(Workspace.name).all()]
     form.usuario_pbi.choices = [(u.id, u.nombre) for u in UsuarioPBI.query.order_by(UsuarioPBI.nombre).all()]
-    form.empresas.choices = [
-        (e.id, e.nombre) for e in Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
-    ]
     all_empresas = Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
+    company_choices = [(e.id, e.nombre) for e in all_empresas]
+    form.empresas.choices = company_choices
+    form.empresa_facturadora_id.choices = [(0, "Default global")] + company_choices
     
     if request.method == 'GET':
         form.workspace.data = report.workspace_id_fk
         form.usuario_pbi.data = report.usuario_pbi_id
+        form.empresa_facturadora_id.data = report.empresa_facturadora_id or 0
     
     if request.method == 'POST':
         if not form.validate_on_submit():
@@ -130,6 +227,8 @@ def edit(report_id):
             flash("El reporte debe ser público, privado, o ambos", "danger")
             return render_template('reports/form.html', form=form, report=report, all_empresas=all_empresas, title='Editar Report')
         
+        was_chatbot_enabled = bool(report.chatbot_enabled)
+
         report.name = form.name.data
         report.report_id = form.report_id.data
         report.embed_url = form.embed_url.data or None
@@ -137,6 +236,12 @@ def edit(report_id):
         report.usuario_pbi_id = form.usuario_pbi.data
         report.es_publico = es_publico
         report.es_privado = es_privado
+        report.chatbot_enabled = form.chatbot_enabled.data
+        report.show_dax_query = form.show_dax_query.data
+        report.empresa_facturadora_id = form.empresa_facturadora_id.data or None
+        report.filter_enabled = form.filter_enabled.data
+        report.filter_table = form.filter_table.data or None
+        report.filter_column = form.filter_column.data or None
         
         # Update empresa associations
         selected_empresa_ids = request.form.getlist('empresas')
@@ -148,6 +253,8 @@ def edit(report_id):
                 report.empresas.append(empresa)
         
         db.session.commit()
+        if not was_chatbot_enabled and report.chatbot_enabled:
+            _queue_embeddings_if_available(report)
         flash("Report actualizado", "success")
         return redirect(url_for('reports.list'))
     
@@ -197,9 +304,11 @@ def view_report(report_id):
         embed_token=embed_token,
         embed_url=embed_url,
         report_id=rid,
+        report_pk=report.id,
         config_name=report.name,
         is_public=False,
-        allow_refresh=True
+        allow_refresh=True,
+        refresh_url=url_for('reports.refresh_report', report_id=report.id),
     )
 
 
@@ -352,6 +461,35 @@ def delete_link(report_id, link_id):
     logging.debug(f"Public link deleted: {slug} (ID: {link_id})")
     flash(f"Link público eliminado: /p/{slug}", "success")
     return redirect(url_for('main.index'))
+
+
+@bp.route('/<int:report_id>/toggle-chatbot', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def toggle_chatbot(report_id):
+    """Toggle chatbot visibility for a report."""
+    report = Report.query.get_or_404(report_id)
+    was_chatbot_enabled = bool(report.chatbot_enabled)
+    report.chatbot_enabled = not report.chatbot_enabled
+    db.session.commit()
+    if not was_chatbot_enabled and report.chatbot_enabled:
+        _queue_embeddings_if_available(report)
+    estado = "habilitado" if report.chatbot_enabled else "deshabilitado"
+    flash(f"Chatbot KLARA {estado} para el reporte «{report.name}»", "success")
+    return redirect(url_for('reports.detail', report_id=report_id))
+
+
+@bp.route('/<int:report_id>/toggle-show-dax', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def toggle_show_dax(report_id):
+    """Toggle DAX query visibility in the chat for a report."""
+    report = Report.query.get_or_404(report_id)
+    report.show_dax_query = not report.show_dax_query
+    db.session.commit()
+    estado = "activada" if report.show_dax_query else "desactivada"
+    flash(f"Visibilidad de consultas DAX {estado} para el reporte «{report.name}»", "success")
+    return redirect(url_for('reports.detail', report_id=report_id))
 
 
 # --- URL-based Report Creation Wizard ---

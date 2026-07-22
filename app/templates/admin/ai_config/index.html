@@ -1,0 +1,738 @@
+{% extends "layout.html" %}
+
+{% block title %}Configuracion AI - Sudata PBI{% endblock %}
+
+{% block styles %}
+<style>
+  .ai-config-page .page-title {
+    font-size: clamp(1.8rem, 3vw, 2.4rem);
+    font-weight: 800;
+    letter-spacing: -0.04em;
+    color: #172033;
+  }
+
+  .ai-tabs {
+    border-bottom: 1px solid #e5e9f0;
+  }
+
+  .ai-tabs .nav-link {
+    color: #687386;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    margin: 0 1.5rem 0 0;
+    padding: 0.8rem 0 !important;
+  }
+
+  .ai-tabs .nav-link:hover {
+    background: transparent;
+    color: #667eea;
+  }
+
+  .ai-tabs .nav-link.active {
+    background: transparent;
+    color: #667eea;
+    border-bottom-color: #667eea;
+    box-shadow: none;
+  }
+
+  .config-panel {
+    border: 1px solid #e5e9f0;
+    border-radius: 14px;
+    box-shadow: 0 3px 12px rgba(24, 34, 55, 0.06);
+  }
+
+  .config-panel .card-header {
+    padding: 1rem 1.25rem;
+  }
+
+  .config-panel .card-header.bg-white {
+    border-bottom: 1px solid #e9edf3;
+  }
+
+  .config-panel .card-body {
+    padding: 1.25rem;
+  }
+
+  .skills-config-panel {
+    overflow: visible;
+  }
+
+  .skills-config-panel > .card-header {
+    overflow: visible;
+    z-index: 20;
+  }
+
+  .skills-config-panel .dropdown {
+    position: relative;
+    z-index: 1090;
+  }
+
+  .skills-config-panel .dropdown-menu {
+    z-index: 1090;
+  }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    border: 1px solid #e7ebf1;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+
+  .summary-item {
+    padding: 1rem;
+    border-right: 1px solid #e7ebf1;
+  }
+
+  .summary-item:last-child {
+    border-right: 0;
+  }
+
+  .summary-label {
+    color: #8a94a6;
+    font-size: 0.7rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .summary-value {
+    color: #1c3f95;
+    font-size: 1rem;
+    font-weight: 800;
+    margin-top: 0.3rem;
+  }
+
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 0.35rem;
+  }
+
+  .status-active { background: #1dbb68; }
+  .status-inactive { background: #9aa4b2; }
+
+  .config-table thead th {
+    font-size: 0.68rem;
+    padding: 0.8rem;
+  }
+
+  .config-table tbody td {
+    font-size: 0.82rem;
+    padding: 0.8rem;
+  }
+
+  .action-btn {
+    width: 34px;
+    height: 34px;
+    display: inline-grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid #dfe4eb;
+    background: white;
+    color: #667085;
+  }
+
+  .fallback-note {
+    border: 1px solid #bde1fa;
+    background: #edf8ff;
+    color: #27627f;
+    border-radius: 8px;
+    padding: 0.8rem 1rem;
+    font-size: 0.85rem;
+  }
+
+  .skill-scope-section {
+    border-top: 1px solid #e9edf3;
+    padding: 1.25rem;
+  }
+
+  .skill-scope-section:first-child {
+    border-top: 0;
+  }
+
+  .skill-scope-header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+  }
+
+  .skill-scope-title {
+    color: #172033;
+    font-size: 1rem;
+    font-weight: 800;
+    margin: 0;
+  }
+
+  .skill-group-title {
+    background: #f7f9fc;
+    border: 1px solid #e5e9f0;
+    border-radius: 8px 8px 0 0;
+    color: #344054;
+    font-size: 0.85rem;
+    font-weight: 800;
+    padding: 0.75rem 0.9rem;
+  }
+
+  .skill-table-wrap {
+    border: 1px solid #e5e9f0;
+    border-radius: 0 0 8px 8px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+  }
+
+  .skill-table-wrap.is-standalone {
+    border-radius: 8px;
+  }
+
+  @media (max-width: 767px) {
+    .summary-grid {
+      grid-template-columns: 1fr 1fr;
+    }
+
+    .summary-item:nth-child(2) {
+      border-right: 0;
+    }
+
+    .summary-item:nth-child(-n+2) {
+      border-bottom: 1px solid #e7ebf1;
+    }
+  }
+</style>
+{% endblock %}
+
+{% macro render_skills_table(skills, empty_message, standalone=False) %}
+<div class="table-responsive skill-table-wrap {% if standalone %}is-standalone{% endif %}">
+  <table class="table config-table align-middle mb-0">
+    <thead>
+      <tr>
+        <th>Skill</th>
+        <th>Dominio</th>
+        <th>Prioridad</th>
+        <th>Enforcement</th>
+        <th>Confianza</th>
+        <th>Version</th>
+        <th>Embedding</th>
+        <th>Estado</th>
+        <th class="text-end">Acciones</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for skill in skills %}
+      <tr>
+        <td>
+          <div class="fw-semibold">{{ skill.skill_key }}</div>
+          <div class="text-muted small">{{ skill.title }}</div>
+          {% if skill.description %}
+          <div class="text-muted small">{{ skill.description[:120] }}{{ '...' if skill.description|length > 120 else '' }}</div>
+          {% endif %}
+        </td>
+        <td>{{ skill.domain_key }}</td>
+        <td>
+          <span class="badge {{ 'bg-danger-subtle text-danger' if skill.priority == 'high' else 'bg-light text-dark border' }}">
+            {{ skill.priority or 'normal' }}
+          </span>
+        </td>
+        <td><span class="badge bg-light text-dark border">{{ skill.enforcement_mode or 'soft' }}</span></td>
+        <td>{{ skill.confidence_label or '--' }}</td>
+        <td>{{ skill.version }}</td>
+        <td>
+          {% if skill.embedding is not none %}
+          <span class="badge bg-success-subtle text-success">Indexada</span>
+          <div class="text-muted small">{{ skill.embedded_at.strftime('%d/%m/%Y %H:%M') if skill.embedded_at else '--' }}</div>
+          {% else %}
+          <span class="badge bg-warning-subtle text-warning">Pendiente</span>
+          {% endif %}
+        </td>
+        <td>
+          <span class="badge {{ 'bg-success' if skill.is_active else 'bg-secondary' }}">
+            {{ 'Activa' if skill.is_active else 'Inactiva' }}
+          </span>
+        </td>
+        <td class="text-end text-nowrap">
+          <a class="btn action-btn" href="{{ url_for('ai_config.skill_edit', skill_id=skill.id) }}" title="Editar">
+            <i class="bi bi-pencil"></i>
+          </a>
+          <form class="d-inline" method="post" action="{{ url_for('ai_config.skill_reindex', skill_id=skill.id) }}">
+            <button class="btn action-btn" type="submit" title="Reindexar">
+              <i class="bi bi-arrow-repeat"></i>
+            </button>
+          </form>
+          <form class="d-inline" method="post" action="{{ url_for('ai_config.skill_toggle', skill_id=skill.id) }}">
+            <button class="btn action-btn" type="submit" title="{{ 'Desactivar' if skill.is_active else 'Activar' }}">
+              <i class="bi {{ 'bi-pause-circle' if skill.is_active else 'bi-play-circle' }}"></i>
+            </button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="9" class="text-center text-muted py-4">{{ empty_message }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endmacro %}
+
+{% block body %}
+<div class="container-fluid ai-config-page">
+  <div class="mb-4">
+    <h1 class="page-title mb-1">Configuracion AI</h1>
+    <p class="text-muted mb-0">Administra limites, prompts del agente y precios de modelos sin redeploy.</p>
+  </div>
+
+  <ul class="nav ai-tabs mb-4">
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'limits' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='limits') }}">
+        <i class="bi bi-speedometer2 me-1"></i>Limites de consumo
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'pricing' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='pricing') }}">
+        <i class="bi bi-tags me-1"></i>Pricing de modelos
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'prompts' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='prompts') }}">
+        <i class="bi bi-chat-square-text me-1"></i>Prompts del agente
+      </a>
+    </li>
+    <li class="nav-item">
+      <a class="nav-link {% if active_tab == 'skills' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='skills') }}">
+        <i class="bi bi-diagram-3 me-1"></i>Skills analiticas
+      </a>
+    </li>
+  </ul>
+
+  {% if active_tab == 'limits' %}
+  <div class="card config-panel mb-4">
+    <div class="card-header">
+      <div class="d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-globe2 me-2"></i>Default Global</h5>
+        <a class="btn btn-light btn-sm" href="{{ url_for('ai_config.global_limit') }}">
+          <i class="bi bi-pencil me-1"></i>{{ 'Editar' if global_limit else 'Configurar' }} default global
+        </a>
+      </div>
+    </div>
+    <div class="card-body">
+      <p class="text-muted small">Este limite se usa cuando una empresa no tiene una configuracion propia activa.</p>
+      {% if global_limit %}
+      <div class="summary-grid mb-3">
+        <div class="summary-item">
+          <div class="summary-label">Limite USD</div>
+          <div class="summary-value">{{ '%.2f'|format(global_limit.limit_usd) }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Periodo</div>
+          <div class="summary-value">Mensual, dia {{ global_limit.cycle_anchor_day or 1 }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Estado</div>
+          <div class="summary-value {% if global_limit.is_active %}text-success{% else %}text-muted{% endif %}">
+            <span class="status-dot {{ 'status-active' if global_limit.is_active else 'status-inactive' }}"></span>
+            {{ 'Activo' if global_limit.is_active else 'Inactivo' }}
+          </div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Vigente desde</div>
+          <div class="summary-value">{{ global_limit.starts_at.strftime('%d/%m/%Y') if global_limit.starts_at else 'Sin fecha' }}</div>
+        </div>
+      </div>
+      {% else %}
+      <div class="alert alert-warning mb-3">
+        <i class="bi bi-exclamation-triangle me-2"></i>No hay un limite global configurado.
+      </div>
+      {% endif %}
+      <div class="fallback-note">
+        <i class="bi bi-info-circle-fill me-2"></i>El scope global es el fallback. El control mensual se reinicia segun el dia de renovacion configurado.
+      </div>
+    </div>
+  </div>
+
+  <div class="card config-panel">
+    <div class="card-header bg-white">
+      <h5 class="mb-0"><i class="bi bi-buildings me-2"></i>Limites por empresa</h5>
+    </div>
+    <div class="table-responsive">
+      <table class="table config-table align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Empresa</th>
+            <th class="text-end">Limite USD</th>
+            <th>Renovacion</th>
+            <th>Vigencia</th>
+            <th>Estado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in company_limits %}
+          <tr>
+            <td class="fw-semibold">{{ item.company.nombre }}</td>
+            <td class="text-end">
+              {{ '%.2f'|format(item.limit.limit_usd) if item.limit else 'Default global' }}
+            </td>
+            <td>{{ 'Dia ' ~ (item.limit.cycle_anchor_day or 1) if item.limit else '--' }}</td>
+            <td>{{ item.limit.starts_at.strftime('%d/%m/%Y') if item.limit and item.limit.starts_at else '--' }}</td>
+            <td>
+              {% if item.limit %}
+              <span class="badge {{ 'bg-success-subtle text-success' if item.limit.is_active else 'bg-secondary-subtle text-secondary' }}">
+                {{ 'Activo' if item.limit.is_active else 'Usa fallback' }}
+              </span>
+              {% else %}
+              <span class="badge bg-info-subtle text-info">Usa fallback</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <a class="btn action-btn" href="{{ url_for('ai_config.company_limit', empresa_id=item.company.id) }}" title="Configurar limite">
+                <i class="bi bi-pencil"></i>
+              </a>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="6" class="text-center text-muted py-5">No hay empresas configuradas.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% elif active_tab == 'pricing' %}
+  <div class="card config-panel">
+    <div class="card-header">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <h5 class="mb-0"><i class="bi bi-tags me-2"></i>Pricing de modelos</h5>
+        <a class="btn btn-light btn-sm" href="{{ url_for('ai_config.pricing_new') }}">
+          <i class="bi bi-plus-lg me-1"></i>Nuevo pricing
+        </a>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table config-table align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Proveedor</th>
+            <th>Modelo</th>
+            <th>Tipo de evento</th>
+            <th class="text-end">Input / 1M</th>
+            <th class="text-end">Output / 1M</th>
+            <th class="text-end">Cache write / 1M</th>
+            <th class="text-end">Cache read / 1M</th>
+            <th>Vigencia</th>
+            <th>Estado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for pricing in pricings %}
+          <tr>
+            <td class="text-capitalize">{{ pricing.provider }}</td>
+            <td class="fw-semibold">{{ pricing.model }}</td>
+            <td>
+              {% if pricing.event_type == 'generation' %}
+                Chat / Generacion
+              {% elif pricing.event_type == 'embedding' %}
+                Embedding
+              {% elif pricing.event_type == 'rerank' %}
+                Rerank
+              {% else %}
+                {{ pricing.event_type }}
+              {% endif %}
+            </td>
+            <td class="text-end">{{ '%.4f'|format(pricing.input_cost_per_million_usd or 0) }}</td>
+            <td class="text-end">{{ '%.4f'|format(pricing.output_cost_per_million_usd or 0) }}</td>
+            <td class="text-end">{{ '%.4f'|format(pricing.cache_write_cost_per_million_usd or 0) }}</td>
+            <td class="text-end">{{ '%.4f'|format(pricing.cache_read_cost_per_million_usd or 0) }}</td>
+            <td>{{ pricing.effective_from.strftime('%d/%m/%Y') }}</td>
+            <td>
+              <span class="badge {{ 'bg-success' if pricing.is_active else 'bg-secondary' }}">
+                {{ 'Activo' if pricing.is_active else 'Inactivo' }}
+              </span>
+            </td>
+            <td class="text-end text-nowrap">
+              <a class="btn action-btn" href="{{ url_for('ai_config.pricing_edit', pricing_id=pricing.id) }}" title="Editar">
+                <i class="bi bi-pencil"></i>
+              </a>
+              <form class="d-inline" method="post" action="{{ url_for('ai_config.pricing_toggle', pricing_id=pricing.id) }}">
+                <button class="btn action-btn" type="submit" title="{{ 'Desactivar' if pricing.is_active else 'Activar' }}">
+                  <i class="bi {{ 'bi-pause-circle' if pricing.is_active else 'bi-play-circle' }}"></i>
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="10" class="text-center text-muted py-5">No hay pricings configurados.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% elif active_tab == 'prompts' %}
+  <div class="card config-panel mb-4">
+    <div class="card-header">
+      <div class="d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-globe2 me-2"></i>Prompt Global</h5>
+        <a class="btn btn-light btn-sm" href="{{ url_for('ai_config.global_prompt') }}">
+          <i class="bi bi-pencil me-1"></i>{{ 'Editar' if global_prompt else 'Configurar' }} prompt global
+        </a>
+      </div>
+    </div>
+    <div class="card-body">
+      <p class="text-muted small">Estas instrucciones se suman al prompt base protegido del agente. No reemplazan reglas de seguridad, tools ni sintaxis DAX.</p>
+      {% if global_prompt %}
+      <div class="summary-grid mb-3">
+        <div class="summary-item">
+          <div class="summary-label">Titulo</div>
+          <div class="summary-value">{{ global_prompt.title }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Estado</div>
+          <div class="summary-value {% if global_prompt.is_active %}text-success{% else %}text-muted{% endif %}">
+            <span class="status-dot {{ 'status-active' if global_prompt.is_active else 'status-inactive' }}"></span>
+            {{ 'Activo' if global_prompt.is_active else 'Inactivo' }}
+          </div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Vigente desde</div>
+          <div class="summary-value">{{ global_prompt.starts_at.strftime('%d/%m/%Y') if global_prompt.starts_at else 'Sin fecha' }}</div>
+        </div>
+        <div class="summary-item">
+          <div class="summary-label">Actualizado</div>
+          <div class="summary-value">{{ global_prompt.updated_at.strftime('%d/%m/%Y') if global_prompt.updated_at else '--' }}</div>
+        </div>
+      </div>
+      {% else %}
+      <div class="alert alert-warning mb-0">
+        <i class="bi bi-exclamation-triangle me-2"></i>No hay prompt global configurado.
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="card config-panel mb-4">
+    <div class="card-header bg-white">
+      <h5 class="mb-0"><i class="bi bi-buildings me-2"></i>Prompts por empresa</h5>
+    </div>
+    <div class="table-responsive">
+      <table class="table config-table align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Empresa</th>
+            <th>Prompt</th>
+            <th>Vigencia</th>
+            <th>Estado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in company_prompts %}
+          <tr>
+            <td class="fw-semibold">{{ item.company.nombre }}</td>
+            <td>{{ item.prompt.title if item.prompt else 'Solo global / reporte' }}</td>
+            <td>{{ item.prompt.starts_at.strftime('%d/%m/%Y') if item.prompt and item.prompt.starts_at else '--' }}</td>
+            <td>
+              {% if item.prompt %}
+              <span class="badge {{ 'bg-success-subtle text-success' if item.prompt.is_active else 'bg-secondary-subtle text-secondary' }}">
+                {{ 'Activo' if item.prompt.is_active else 'Inactivo' }}
+              </span>
+              {% else %}
+              <span class="badge bg-info-subtle text-info">Sin config</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <a class="btn action-btn" href="{{ url_for('ai_config.company_prompt', empresa_id=item.company.id) }}" title="Configurar prompt">
+                <i class="bi bi-pencil"></i>
+              </a>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="5" class="text-center text-muted py-5">No hay empresas configuradas.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card config-panel">
+    <div class="card-header bg-white">
+      <h5 class="mb-0"><i class="bi bi-file-earmark-bar-graph me-2"></i>Prompts por reporte</h5>
+    </div>
+    <div class="table-responsive">
+      <table class="table config-table align-middle mb-0">
+        <thead>
+          <tr>
+            <th>Reporte</th>
+            <th>Prompt</th>
+            <th>Mini prompt embedding</th>
+            <th>Retrieval</th>
+            <th>Vigencia</th>
+            <th>Estado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in report_prompts %}
+          <tr>
+            <td class="fw-semibold">{{ item.report.name }}</td>
+            <td>{{ item.prompt.title if item.prompt else 'Solo global / empresa' }}</td>
+            <td>{{ 'Configurado' if item.report.schema_retrieval_prompt else 'Sin config' }}</td>
+            <td>
+              {{ item.report.schema_table_context_limit or 6 }} tablas /
+              {{ item.report.schema_measure_context_limit or 10 }} medidas
+            </td>
+            <td>{{ item.prompt.starts_at.strftime('%d/%m/%Y') if item.prompt and item.prompt.starts_at else '--' }}</td>
+            <td>
+              {% if item.prompt %}
+              <span class="badge {{ 'bg-success-subtle text-success' if item.prompt.is_active else 'bg-secondary-subtle text-secondary' }}">
+                {{ 'Activo' if item.prompt.is_active else 'Inactivo' }}
+              </span>
+              {% else %}
+              <span class="badge bg-info-subtle text-info">Sin config</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <a class="btn action-btn" href="{{ url_for('ai_config.report_prompt', report_id=item.report.id) }}" title="Configurar prompt">
+                <i class="bi bi-pencil"></i>
+              </a>
+            </td>
+          </tr>
+          {% else %}
+          <tr>
+            <td colspan="7" class="text-center text-muted py-5">No hay reportes configurados.</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="card config-panel skills-config-panel">
+    <div class="card-header">
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <h5 class="mb-0"><i class="bi bi-diagram-3 me-2"></i>Skills analiticas</h5>
+        <div class="d-flex flex-wrap gap-2">
+          <div class="dropdown">
+            <button class="btn btn-light btn-sm dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-boundary="viewport" aria-expanded="false">
+              <i class="bi bi-download me-1"></i>Exportar
+            </button>
+            <ul class="dropdown-menu dropdown-menu-end">
+              <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='all') }}">Todas las skills</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='global') }}">Globales</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='report') }}">Todos los reportes</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='empresa') }}">Todas las empresas</a></li>
+              <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='dataset') }}">Todos los datasets</a></li>
+            </ul>
+          </div>
+          <a class="btn btn-light btn-sm" href="{{ url_for('ai_config.skill_import') }}">
+            <i class="bi bi-upload me-1"></i>Importar
+          </a>
+          <form method="post" action="{{ url_for('ai_config.skill_reindex_all') }}" onsubmit="return confirm('Esto reindexara en background las skills activas que tengan embeddings faltantes o desactualizados.');">
+            <button class="btn btn-light btn-sm" type="submit">
+              <i class="bi bi-arrow-repeat me-1"></i>Reindexar activas
+            </button>
+          </form>
+          <a class="btn btn-light btn-sm" href="{{ url_for('ai_config.skill_new') }}">
+            <i class="bi bi-plus-lg me-1"></i>Nueva skill
+          </a>
+        </div>
+      </div>
+    </div>
+    <div class="px-4 py-3 bg-light border-bottom">
+      <div class="row g-3">
+        <div class="col-md-4">
+          <div class="summary-item h-100">
+            <div class="summary-label">Skills activas</div>
+            <div class="summary-value">{{ skill_index_summary.active_total }}</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="summary-item h-100">
+            <div class="summary-label">Activas indexadas</div>
+            <div class="summary-value text-success">{{ skill_index_summary.active_indexed }}</div>
+          </div>
+        </div>
+        <div class="col-md-4">
+          <div class="summary-item h-100">
+            <div class="summary-label">Activas pendientes</div>
+            <div class="summary-value {{ 'text-warning' if skill_index_summary.active_pending else 'text-success' }}">{{ skill_index_summary.active_pending }}</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="skill-scope-section">
+      <div class="skill-scope-header">
+        <h6 class="skill-scope-title"><i class="bi bi-file-earmark-bar-graph me-2"></i>Por reporte</h6>
+        <span class="badge bg-light text-dark border">{{ skill_groups.reports|length }} reportes</span>
+      </div>
+      {% for group in skill_groups.reports %}
+      <div class="skill-group-title d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>{{ group.label }} <span class="text-muted fw-normal">({{ group.skills|length }})</span></span>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('ai_config.skill_export', scope='report', scope_id=group.id) }}">
+          <i class="bi bi-download me-1"></i>Exportar CSV
+        </a>
+      </div>
+      {{ render_skills_table(group.skills, 'No hay skills para este reporte.') }}
+      {% else %}
+      {{ render_skills_table([], 'No hay skills por reporte.', True) }}
+      {% endfor %}
+    </div>
+
+    <div class="skill-scope-section">
+      <div class="skill-scope-header">
+        <h6 class="skill-scope-title"><i class="bi bi-buildings me-2"></i>Por empresa</h6>
+        <span class="badge bg-light text-dark border">{{ skill_groups.companies|length }} empresas</span>
+      </div>
+      {% for group in skill_groups.companies %}
+      <div class="skill-group-title d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>{{ group.label }} <span class="text-muted fw-normal">({{ group.skills|length }})</span></span>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('ai_config.skill_export', scope='empresa', scope_id=group.id) }}">
+          <i class="bi bi-download me-1"></i>Exportar CSV
+        </a>
+      </div>
+      {{ render_skills_table(group.skills, 'No hay skills para esta empresa.') }}
+      {% else %}
+      {{ render_skills_table([], 'No hay skills por empresa.', True) }}
+      {% endfor %}
+    </div>
+
+    <div class="skill-scope-section">
+      <div class="skill-scope-header">
+        <h6 class="skill-scope-title"><i class="bi bi-globe2 me-2"></i>Globales</h6>
+        <span class="badge bg-light text-dark border">{{ skill_groups.global|length }} skills</span>
+      </div>
+      {{ render_skills_table(skill_groups.global, 'No hay skills globales.', True) }}
+    </div>
+
+    {% if skill_groups.datasets %}
+    <div class="skill-scope-section">
+      <div class="skill-scope-header">
+        <h6 class="skill-scope-title"><i class="bi bi-database me-2"></i>Por dataset</h6>
+        <span class="badge bg-light text-dark border">{{ skill_groups.datasets|length }} datasets</span>
+      </div>
+      {% for group in skill_groups.datasets %}
+      <div class="skill-group-title d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <span>{{ group.label }} <span class="text-muted fw-normal">({{ group.skills|length }})</span></span>
+        <a class="btn btn-outline-secondary btn-sm" href="{{ url_for('ai_config.skill_export', scope='dataset', scope_id=group.id) }}">
+          <i class="bi bi-download me-1"></i>Exportar CSV
+        </a>
+      </div>
+      {{ render_skills_table(group.skills, 'No hay skills para este dataset.') }}
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

@@ -9,6 +9,7 @@ A professional Flask application for embedding Microsoft Power BI reports using 
 - **Public Links**: Generate shareable public links for reports without authentication
 - **Private Client API**: Secure API access with client credentials and JWT authentication
 - **Analytics & Metrics**: Comprehensive visit tracking with privacy-first approach
+- **Langfuse Tracing**: Optional tracing for the Anthropic-powered chat flow, tool calls, and schema retrieval
 - **Modular Architecture**: Clean, maintainable code structure with separation of concerns
 - **Database Connection Resilience**: Automatic retry mechanism for database connection failures
 - **Responsive UI**: Professional, mobile-friendly interface built with Bootstrap 5
@@ -493,6 +494,11 @@ PRIVATE_JWT_SECRET=your-secret-key-for-jwt
 
 # JWT Token expiration time in seconds (default: 3600 = 1 hour)
 JWT_EXPIRATION=3600
+
+# Langfuse tracing for AI chat observability
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
 ```
 
 **Important Notes:**
@@ -536,6 +542,25 @@ Database pool settings in `app/__init__.py`:
 - `pool_timeout`: 30 seconds
 
 ## Development
+
+## Langfuse Tracing
+
+The public chatbot and agent orchestration now support Langfuse tracing following Langfuse's recommended approach:
+
+- Manual parent observations for the request, agent, retrieval, and DAX tool steps
+- Anthropic SDK auto-instrumentation for model generations
+- Propagated `session_id` for conversation grouping in Langfuse Sessions
+- Propagated `user_id` using a hashed identifier instead of raw client IPs
+
+To enable tracing, set these environment variables and reinstall dependencies:
+
+```env
+LANGFUSE_PUBLIC_KEY=pk-lf-...
+LANGFUSE_SECRET_KEY=sk-lf-...
+LANGFUSE_BASE_URL=https://cloud.langfuse.com
+```
+
+If you self-host Langfuse or use a non-EU cloud region, point `LANGFUSE_BASE_URL` to the correct host.
 
 ### Running Tests
 

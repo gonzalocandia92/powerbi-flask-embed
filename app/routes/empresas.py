@@ -2,11 +2,12 @@
 Admin routes for managing empresas (CRUD operations).
 """
 import logging
+import re
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_required
 
 from app import db
-from app.models import Empresa, Report
+from app.models import Empresa, Report, WhatsAppAuthorizedNumber
 from app.forms import EmpresaForm
 from app.services.credentials_service import generate_client_id, generate_client_secret, hash_client_secret
 from app.utils.decorators import retry_on_db_error
@@ -110,11 +111,78 @@ def regenerate_credentials(empresa_id):
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
 def detail(empresa_id):
-    empresa = Empresa.query.options(db.joinedload(Empresa.reports)).get_or_404(empresa_id)
+    empresa = Empresa.query.options(
+        db.joinedload(Empresa.reports),
+        db.joinedload(Empresa.whatsapp_authorized_numbers).joinedload(WhatsAppAuthorizedNumber.report),
+    ).get_or_404(empresa_id)
     for report in empresa.reports:
         _ = report.workspace
         _ = report.workspace.tenant
     return render_template('admin/empresas/detail.html', empresa=empresa, title=f'Empresa: {empresa.nombre}')
+
+
+@bp.route('/<int:empresa_id>/toggle-whatsapp', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def toggle_whatsapp(empresa_id):
+    empresa = Empresa.query.get_or_404(empresa_id)
+    empresa.whatsapp_enabled = not empresa.whatsapp_enabled
+    db.session.commit()
+    status = "habilitado" if empresa.whatsapp_enabled else "deshabilitado"
+    flash(f"Chat de WhatsApp {status} para {empresa.nombre}", "success")
+    return redirect(url_for('empresas.detail', empresa_id=empresa_id))
+
+
+@bp.route('/<int:empresa_id>/whatsapp/add', methods=['GET', 'POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def add_whatsapp_number(empresa_id):
+    empresa = Empresa.query.options(db.joinedload(Empresa.reports)).get_or_404(empresa_id)
+    chatbot_reports = [r for r in empresa.reports if r.chatbot_enabled]
+
+    if request.method == 'POST':
+        phone_number = (request.form.get('phone_number') or '').strip()
+        phone_number = re.sub(r'[^0-9]', '', phone_number)
+        selected_ids = [int(rid) for rid in request.form.getlist('reports') if rid]
+
+        if not phone_number:
+            flash("Ingrese un numero de telefono valido", "danger")
+        elif not selected_ids:
+            flash("Seleccione al menos un reporte", "danger")
+        else:
+            chatbot_report_ids = {r.id for r in chatbot_reports}
+            added = 0
+            for report_id in selected_ids:
+                if report_id not in chatbot_report_ids:
+                    continue
+                exists = WhatsAppAuthorizedNumber.query.filter_by(
+                    phone_number=phone_number, report_id_fk=report_id
+                ).first()
+                if exists:
+                    continue
+                db.session.add(WhatsAppAuthorizedNumber(
+                    phone_number=phone_number, empresa_id_fk=empresa.id, report_id_fk=report_id
+                ))
+                added += 1
+            db.session.commit()
+            flash(f"Numero {phone_number} autorizado para {added} reporte(s)", "success")
+            return redirect(url_for('empresas.detail', empresa_id=empresa_id))
+
+    return render_template(
+        'admin/empresas/whatsapp_add_number.html',
+        empresa=empresa, chatbot_reports=chatbot_reports, title=f'Autorizar Numero: {empresa.nombre}'
+    )
+
+
+@bp.route('/<int:empresa_id>/whatsapp/<int:number_id>/remove', methods=['POST'])
+@login_required
+@retry_on_db_error(max_retries=3, delay=1)
+def remove_whatsapp_number(empresa_id, number_id):
+    entry = WhatsAppAuthorizedNumber.query.filter_by(id=number_id, empresa_id_fk=empresa_id).first_or_404()
+    db.session.delete(entry)
+    db.session.commit()
+    flash("Acceso de WhatsApp eliminado", "success")
+    return redirect(url_for('empresas.detail', empresa_id=empresa_id))
 
 
 @bp.route('/<int:empresa_id>/reports/manage', methods=['GET', 'POST'])
