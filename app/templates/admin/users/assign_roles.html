@@ -45,7 +45,7 @@
             </div>
 
             <!-- Role Info -->
-            {% if form.roles.choices %}
+            {% if role_details %}
             <div class="alert alert-info" role="alert">
               <i class="bi bi-info-circle me-2"></i>
               <strong>Información:</strong>
@@ -53,12 +53,12 @@
                 <small>
                   Los roles disponibles son:
                   <ul class="mb-0 mt-2">
-                    {% for role_id, role_name in form.roles.choices %}
+                    {% for role in role_details %}
                     <li>
-                      <strong>{{ role_name }}</strong>
-                      {% set role = query_role(role_id) %}
                       {% if role and role.description %}
-                      - {{ role.description }}
+                      <strong>{{ role.name }}</strong> - {{ role.description }}
+                      {% else %}
+                      <strong>{{ role.name }}</strong>
                       {% endif %}
                     </li>
                     {% endfor %}

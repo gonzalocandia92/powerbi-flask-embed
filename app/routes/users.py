@@ -148,6 +148,14 @@ def assign_roles(user_id):
     # Populate role choices
     all_roles = Role.query.order_by(Role.name).all()
     form.roles.choices = [(r.id, r.name) for r in all_roles]
+    role_details = [
+        {
+            'id': role.id,
+            'name': role.name,
+            'description': role.description,
+        }
+        for role in all_roles
+    ]
     
     if form.validate_on_submit():
         # Clear existing roles
@@ -165,7 +173,12 @@ def assign_roles(user_id):
     # Pre-select current roles
     form.roles.data = [r.id for r in user.roles]
     
-    return render_template('admin/users/assign_roles.html', form=form, user=user)
+    return render_template(
+        'admin/users/assign_roles.html',
+        form=form,
+        user=user,
+        role_details=role_details,
+    )
 
 
 # ── Role Management Routes ────────────────────────────────────────────────────
