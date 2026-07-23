@@ -100,7 +100,8 @@ class User(db.Model, UserMixin):
 
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     username = db.Column(db.String(120), unique=True, nullable=False)
-    password_hash = db.Column(db.String(256), nullable=False)
+    email = db.Column(db.String(254), unique=True, nullable=True, index=True)
+    password_hash = db.Column(db.String(256), nullable=True)
     is_admin = db.Column(db.Boolean, default=True)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
@@ -115,6 +116,8 @@ class User(db.Model, UserMixin):
 
     def check_password(self, password):
         """Verify the password against the stored hash."""
+        if not self.password_hash:
+            return False
         return check_password_hash(self.password_hash, password)
 
     def has_permission(self, permission_name):

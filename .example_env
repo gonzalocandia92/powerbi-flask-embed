@@ -35,6 +35,13 @@ ANALYTICS_RESPECT_DNT=true
 # Interval (in hours) for the automatic dataset refresh status polling
 REFRESH_POLL_INTERVAL_HOURS=12
 
+# ── Google OAuth Configuration ────────────────────────────────────────────────
+# Required for "Login with Google" on the login page.
+# Create credentials at https://console.cloud.google.com/apis/credentials
+# Set the Authorized redirect URI to: https://<your-domain>/login/google/callback
+GOOGLE_CLIENT_ID=your-google-client-id.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=your-google-client-secret
+
 # ── KLARA Chatbot Configuration ──────────────────────────────────────────────
 # Anthropic API key (required)
 ANTHROPIC_API_KEY=sk-ant-...
