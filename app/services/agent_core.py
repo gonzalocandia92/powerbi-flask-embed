@@ -11,6 +11,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -52,6 +53,10 @@ SAFE_TECHNICAL_ERROR_ANSWER = (
     "Por favor, intenta nuevamente mas tarde."
 )
 DAX_ERROR_ATTEMPT_LIMIT = 3
+DAX_SQL_SYNTAX_BLOCKED_MESSAGE = (
+    "Consulta bloqueada: no se permite sintaxis SQL en consultas DAX. "
+    "Reescribi la consulta usando sintaxis DAX valida con EVALUATE."
+)
 
 TEMPORAL_CONTEXT_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
 TEMPORAL_CONTEXT_LOCATION = "Resistencia, Chaco, Argentina"
@@ -180,6 +185,37 @@ def _tool_output_is_error(output: Any) -> bool:
         or text.startswith("error interno")
         or text.startswith("error obteniendo")
     )
+
+
+_SQL_IN_DAX_PATTERNS = [
+    ("SELECT ... FROM", re.compile(r"\bselect\b[\s\S]+?\bfrom\b", re.IGNORECASE)),
+    ("GROUP BY", re.compile(r"\bgroup\s+by\b", re.IGNORECASE)),
+    ("JOIN", re.compile(r"\b(?:inner|left|right|full|cross)\s+join\b|\bjoin\b", re.IGNORECASE)),
+    ("WHERE", re.compile(r"\bwhere\b", re.IGNORECASE)),
+    ("HAVING", re.compile(r"\bhaving\b", re.IGNORECASE)),
+    ("UNION SELECT", re.compile(r"\bunion\s+select\b", re.IGNORECASE)),
+    ("MUTATING SQL", re.compile(r"\b(?:insert|update|delete|drop|create|alter)\b", re.IGNORECASE)),
+    ("SORT BY", re.compile(r"\bsort\s+by\b", re.IGNORECASE)),
+]
+
+
+def _strip_dax_literals_for_sql_detection(dax_query: str) -> str:
+    text = str(dax_query or "")
+    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.DOTALL)
+    text = re.sub(r"--[^\r\n]*", " ", text)
+    text = re.sub(r"'(?:''|[^'])*'", " ", text)
+    text = re.sub(r'"(?:""|[^"])*"', " ", text)
+    text = re.sub(r"\[[^\]]*\]", "[]", text)
+    return text
+
+
+def detect_sql_syntax_in_dax(dax_query: str) -> Optional[str]:
+    """Return the matched SQL pattern label when a DAX query clearly contains SQL."""
+    normalized = _strip_dax_literals_for_sql_detection(dax_query)
+    for label, pattern in _SQL_IN_DAX_PATTERNS:
+        if pattern.search(normalized):
+            return label
+    return None
 
 
 def _normalize_schema_lookup_name(value: Any) -> str:
@@ -1792,6 +1828,28 @@ class AgentOrchestrator:
 
                         if dax_query_used is None:
                             dax_query_used = str(dax_query)
+
+                        sql_syntax_match = detect_sql_syntax_in_dax(str(dax_query))
+                        if sql_syntax_match:
+                            _debug_print(
+                                "tool:execute_dax_query:sql_syntax_blocked",
+                                {
+                                    "tool_use_id": tool_use.get("id"),
+                                    "dataset_id": dataset_id,
+                                    "dax_query": str(dax_query),
+                                    "matched_pattern": sql_syntax_match,
+                                    "tool_round": tool_rounds,
+                                },
+                                enabled=settings_debug_enabled,
+                            )
+                            tool_result_blocks.append(
+                                {
+                                    "type": "tool_result",
+                                    "tool_use_id": tool_use["id"],
+                                    "content": DAX_SQL_SYNTAX_BLOCKED_MESSAGE,
+                                }
+                            )
+                            continue
 
                         _debug_print(
                             "tool:execute_dax_query:request",
