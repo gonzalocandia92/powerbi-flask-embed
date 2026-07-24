@@ -4,7 +4,87 @@ Power BI integration utilities for embedding reports.
 import base64
 import json
 import logging
+import hashlib
+import re
 import requests
+
+MCP_API_KEY_PREFIX = "mcp-key-"
+POWERBI_URL_PATTERN = re.compile(
+    r'https?://app\.powerbi\.com/groups/([0-9a-f\-]{36})/reports/([0-9a-f\-]{36})',
+    re.IGNORECASE
+)
+
+
+def parse_powerbi_url(url):
+    """Parse a canonical Power BI report URL into workspace and report GUIDs."""
+    url = (url or "").strip()
+    match = POWERBI_URL_PATTERN.search(url)
+    if not match:
+        return None, None
+    return match.group(1), match.group(2)
+
+
+def validate_mcp_api_key(api_key):
+    """Return True when a raw MCP key uses the required prefix."""
+    return bool(api_key and api_key.strip().startswith(MCP_API_KEY_PREFIX))
+
+
+def hash_mcp_api_key(api_key):
+    """Hash the raw MCP key exactly as persisted by McpAgentConfig."""
+    key = (api_key or "").strip()
+    if not validate_mcp_api_key(key):
+        raise ValueError(f"La API key debe empezar con {MCP_API_KEY_PREFIX}")
+    return hashlib.sha256(key.encode()).hexdigest()
+
+
+def _get_json_or_raise(url, headers, *, context):
+    resp = requests.get(url, headers=headers, timeout=90)
+    if not resp.ok:
+        logging.error(
+            "Power BI metadata request failed - context: %s, status: %s, body: %r",
+            context,
+            resp.status_code,
+            resp.text,
+        )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_mcp_metadata_for_report(report):
+    """Resolve workspace and dataset metadata for an existing Power BI report."""
+    access_token = _get_access_token(report)
+    headers = {"Authorization": f"Bearer {access_token}"}
+    workspace_id = report.workspace.workspace_id
+    report_id = report.report_id
+
+    base_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}"
+    workspace_info = _get_json_or_raise(
+        base_url,
+        headers,
+        context=f"workspace:{workspace_id}",
+    )
+    report_info = _get_json_or_raise(
+        f"{base_url}/reports/{report_id}",
+        headers,
+        context=f"report:{report_id}",
+    )
+
+    dataset_id = report_info.get("datasetId")
+    if not dataset_id:
+        raise KeyError("datasetId")
+
+    dataset_info = _get_json_or_raise(
+        f"{base_url}/datasets/{dataset_id}",
+        headers,
+        context=f"dataset:{dataset_id}",
+    )
+
+    return {
+        "workspace_id": workspace_id,
+        "workspace_name": workspace_info.get("name") or report.workspace.name,
+        "dataset_id": dataset_id,
+        "dataset_name": dataset_info.get("name") or dataset_id,
+    }
 
 
 def _decode_token_claims(token):

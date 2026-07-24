@@ -1,0 +1,92 @@
+{% extends "layout.html" %}
+
+{% block title %}MCP Config - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid py-4">
+  <div class="d-flex justify-content-between align-items-center mb-4 page-header">
+    <div>
+      <h2 class="fw-bold text-dark mb-2">
+        <i class="bi bi-hdd-network me-2 text-primary"></i>MCP Config
+      </h2>
+      <p class="text-muted mb-0">
+        <i class="bi bi-info-circle me-1"></i>
+        Configuraciones dinamicas para servidores MCP.
+      </p>
+    </div>
+    <a href="{{ url_for('mcp_config.new') }}" class="btn btn-primary px-4">
+      <i class="bi bi-plus-circle me-2"></i>Nueva MCP Config
+    </a>
+  </div>
+
+  <div class="card">
+    <div class="card-header">
+      <div class="d-flex justify-content-between align-items-center">
+        <h6 class="mb-0">
+          <i class="bi bi-list-check me-2"></i>Configuraciones
+        </h6>
+        <span class="badge bg-light text-dark">{{ configs|length }} registros</span>
+      </div>
+    </div>
+    <div class="card-body p-0">
+      {% if configs %}
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th>Estado</th>
+              <th>Workspace</th>
+              <th>Dataset</th>
+              <th>Empresa</th>
+              <th>API key hash</th>
+              <th>Creada</th>
+              <th class="text-center">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for config in configs %}
+            <tr>
+              <td>
+                {% if config.is_active %}
+                  <span class="badge bg-success">Activa</span>
+                {% else %}
+                  <span class="badge bg-secondary">Inactiva</span>
+                {% endif %}
+              </td>
+              <td>
+                <div class="fw-medium">{{ config.workspace_name }}</div>
+                <code class="small">{{ config.workspace_id }}</code>
+              </td>
+              <td>
+                <div class="fw-medium">{{ config.dataset_name }}</div>
+                <code class="small">{{ config.dataset_id }}</code>
+              </td>
+              <td>{{ config.empresa.nombre if config.empresa else 'Sin empresa' }}</td>
+              <td><code>{{ hash_fingerprint(config.api_key_hash) }}</code></td>
+              <td>{{ config.created_at.strftime('%Y-%m-%d %H:%M') if config.created_at else '-' }}</td>
+              <td class="text-center">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('mcp_config.detail', config_id=config.id) }}" class="btn btn-sm btn-outline-info" title="Ver detalle">
+                    <i class="bi bi-info-circle"></i>
+                  </a>
+                  <a href="{{ url_for('mcp_config.edit', config_id=config.id) }}" class="btn btn-sm btn-outline-secondary" title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="p-4">
+        <div class="alert alert-info mb-0">
+          <i class="bi bi-info-circle me-2"></i>No hay configuraciones MCP cargadas.
+        </div>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -624,3 +624,25 @@ class WhatsAppContact(db.Model):
 
     report = db.relationship('Report')
     session = db.relationship('ChatSession')
+
+class McpAgentConfig(db.Model):
+    """Configuración dinámica para servidores MCP."""
+
+    __tablename__ = 'mcp_agent_configs'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    api_key_hash = db.Column(db.String(256), unique=True, nullable=False, index=True)
+    
+    # Contexto Power BI
+    workspace_id = db.Column(db.String(120), nullable=False)
+    workspace_name = db.Column(db.String(200), nullable=False)
+    dataset_id = db.Column(db.String(120), nullable=False)
+    dataset_name = db.Column(db.String(200), nullable=False)
+    
+    # Opcional: Para auditoría o facturación
+    empresa_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='SET NULL'), nullable=True)
+    
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    
+    empresa = db.relationship('Empresa')

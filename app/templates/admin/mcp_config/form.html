@@ -1,0 +1,89 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ title }} - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container py-4">
+  <div class="row justify-content-center">
+    <div class="col-lg-8">
+      <div class="card shadow-sm">
+        <div class="card-header bg-primary text-white">
+          <h5 class="mb-0">
+            <i class="bi bi-hdd-network me-2"></i>{{ title }}
+          </h5>
+        </div>
+        <div class="card-body">
+          <form method="post">
+            {{ form.hidden_tag() }}
+
+            <div class="mb-3">
+              {{ form.report_url.label(class="form-label") }}
+              {{ form.report_url(class="form-control" + (" is-invalid" if form.report_url.errors else ""), placeholder="https://app.powerbi.com/groups/.../reports/...") }}
+              {% if form.report_url.errors %}
+              <div class="invalid-feedback">
+                {% for error in form.report_url.errors %}{{ error }}{% endfor %}
+              </div>
+              {% endif %}
+              <div class="form-text">{{ form.report_url.description }}</div>
+            </div>
+
+            <div class="mb-3">
+              {{ form.api_key.label(class="form-label") }}
+              {{ form.api_key(class="form-control" + (" is-invalid" if form.api_key.errors else ""), placeholder="mcp-key-...") }}
+              {% if form.api_key.errors %}
+              <div class="invalid-feedback">
+                {% for error in form.api_key.errors %}{{ error }}{% endfor %}
+              </div>
+              {% endif %}
+              <div class="form-text">{{ form.api_key.description }}</div>
+            </div>
+
+            <div class="row">
+              <div class="col-md-8 mb-3">
+                {{ form.empresa_id.label(class="form-label") }}
+                {{ form.empresa_id(class="form-select" + (" is-invalid" if form.empresa_id.errors else "")) }}
+                {% if form.empresa_id.errors %}
+                <div class="invalid-feedback">
+                  {% for error in form.empresa_id.errors %}{{ error }}{% endfor %}
+                </div>
+                {% endif %}
+              </div>
+              <div class="col-md-4 mb-3 d-flex align-items-end">
+                <div class="form-check form-switch pb-2">
+                  {{ form.is_active(class="form-check-input") }}
+                  {{ form.is_active.label(class="form-check-label") }}
+                </div>
+              </div>
+            </div>
+
+            {% if config %}
+            <div class="alert alert-light border">
+              <div class="fw-semibold mb-2">Metadata actual</div>
+              <div class="row g-2">
+                <div class="col-md-6">
+                  <small class="text-muted d-block">Workspace</small>
+                  <span>{{ config.workspace_name }}</span>
+                  <code class="d-block small">{{ config.workspace_id }}</code>
+                </div>
+                <div class="col-md-6">
+                  <small class="text-muted d-block">Dataset</small>
+                  <span>{{ config.dataset_name }}</span>
+                  <code class="d-block small">{{ config.dataset_id }}</code>
+                </div>
+              </div>
+            </div>
+            {% endif %}
+
+            <div class="d-flex justify-content-between align-items-center">
+              <a href="{{ back_url }}" class="btn btn-secondary">
+                <i class="bi bi-arrow-left me-1"></i>Volver
+              </a>
+              {{ form.submit(class="btn btn-primary") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
