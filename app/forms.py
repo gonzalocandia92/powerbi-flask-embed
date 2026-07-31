@@ -17,7 +17,17 @@ from wtforms import (
     SubmitField,
     TextAreaField,
 )
-from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional
+
+from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional, ValidationError
+
+from app.utils.powerbi import MCP_API_KEY_PREFIX
+
+
+def _validate_mcp_key_prefix(_form, field):
+    value = (field.data or "").strip()
+    if value and not value.startswith(MCP_API_KEY_PREFIX):
+        raise ValidationError(f"La API key debe empezar con {MCP_API_KEY_PREFIX}")
+
 
 
 class LoginForm(FlaskForm):
@@ -146,6 +156,42 @@ class PublicUrlLinkForm(FlaskForm):
     )
     allow_refresh = BooleanField('Permitir actualización de datos', default=False)
     submit = SubmitField("Crear Link Público")
+
+
+class McpConfigCreateForm(FlaskForm):
+    """Form for creating MCP agent configuration from a Power BI report URL."""
+
+    report_url = StringField(
+        "URL canonica del reporte Power BI",
+        validators=[DataRequired(), Length(max=2000)],
+        description="Formato esperado: https://app.powerbi.com/groups/{workspace_id}/reports/{report_id}/...",
+    )
+    api_key = PasswordField(
+        "API key MCP",
+        validators=[DataRequired(), Length(max=512), _validate_mcp_key_prefix],
+        description=f"Debe empezar con {MCP_API_KEY_PREFIX}. Se guarda solamente el hash SHA-256.",
+    )
+    empresa_id = SelectField("Empresa", coerce=int, validators=[Optional()], choices=[])
+    is_active = BooleanField("Configuracion activa", default=True)
+    submit = SubmitField("Crear configuracion")
+
+
+class McpConfigEditForm(FlaskForm):
+    """Form for editing MCP agent configuration."""
+
+    report_url = StringField(
+        "URL canonica del reporte Power BI",
+        validators=[Optional(), Length(max=2000)],
+        description="Opcional. Si se informa, refresca workspace/dataset desde Power BI.",
+    )
+    api_key = PasswordField(
+        "Nueva API key MCP",
+        validators=[Optional(), Length(max=512), _validate_mcp_key_prefix],
+        description=f"Dejar vacia para conservar el hash actual. Si se cambia, debe empezar con {MCP_API_KEY_PREFIX}.",
+    )
+    empresa_id = SelectField("Empresa", coerce=int, validators=[Optional()], choices=[])
+    is_active = BooleanField("Configuracion activa", default=True)
+    submit = SubmitField("Guardar cambios")
 
 
 class FuturaEmpresaForm(FlaskForm):
