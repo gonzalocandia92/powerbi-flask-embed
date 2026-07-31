@@ -1,0 +1,205 @@
+{% extends "layout.html" %}
+
+{% block title %}Usuarios - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-people me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('users.create_user') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-1"></i> Nuevo Usuario
+    </a>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      {% if users %}
+      <!-- Search Filter -->
+      <div class="card mb-3">
+        <div class="card-body py-2 px-3">
+          <div class="row align-items-center">
+            <div class="col">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text bg-transparent border-end-0">
+                  <i class="bi bi-search text-muted"></i>
+                </span>
+                <input type="text" class="form-control border-start-0" id="tableSearch"
+                       placeholder="Buscar en usuarios..." autocomplete="off">
+              </div>
+            </div>
+            <div class="col-auto">
+              <small class="text-muted" id="searchResultCount">{{ users|length }} registros</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Usuario</th>
+              <th>Rol Administrador</th>
+              <th>Roles</th>
+              <th>Estado</th>
+              <th>Creado</th>
+              <th class="text-end">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for user in users %}
+            <tr>
+              <td>{{ user.id }}</td>
+              <td><strong>{{ user.username }}</strong></td>
+              <td>
+                {% if user.is_admin %}
+                <span class="badge bg-danger">Administrador</span>
+                {% else %}
+                <span class="badge bg-secondary">Usuario</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if user.roles %}
+                  {% for role in user.roles %}
+                  <span class="badge bg-info">{{ role.name }}</span>
+                  {% endfor %}
+                {% else %}
+                <span class="text-muted small">Sin roles</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if user.is_active %}
+                <span class="badge bg-success">Activo</span>
+                {% else %}
+                <span class="badge bg-secondary">Inactivo</span>
+                {% endif %}
+              </td>
+              <td>{{ user.created_at.strftime('%Y-%m-%d') if user.created_at else 'N/A' }}</td>
+              <td class="text-end">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('users.edit_user', user_id=user.id) }}" 
+                     class="btn btn-sm btn-outline-primary" title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  
+                  <a href="{{ url_for('users.assign_roles', user_id=user.id) }}" 
+                     class="btn btn-sm btn-outline-info" title="Asignar Roles">
+                    <i class="bi bi-shield-check"></i>
+                  </a>
+                  
+                  <form method="POST" action="{{ url_for('users.toggle_user_status', user_id=user.id) }}" style="display:inline;">
+                    <button type="submit" class="btn btn-sm btn-outline-warning" 
+                            title="{% if user.is_active %}Desactivar{% else %}Activar{% endif %}">
+                      <i class="bi bi-{% if user.is_active %}pause-circle{% else %}play-circle{% endif %}"></i>
+                    </button>
+                  </form>
+                  
+                  <button type="button"
+                          class="btn btn-sm btn-outline-danger delete-user-btn" 
+                          data-action="{{ url_for('users.delete_user', user_id=user.id) }}"
+                          data-username="{{ user.username }}"
+                          title="Eliminar">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle me-2"></i>
+        No hay usuarios registrados. 
+        <a href="{{ url_for('users.create_user') }}" class="alert-link">Crear el primero</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Management Links -->
+  <div class="row mt-4">
+    <div class="col-md-6">
+      <div class="card shadow-sm">
+        <div class="card-body text-center">
+          <i class="bi bi-shield-check" style="font-size: 2.5rem; color: #667eea;"></i>
+          <h5 class="card-title mt-3">Gestionar Roles</h5>
+          <p class="card-text text-muted">Crear, editar y eliminar roles</p>
+          <a href="{{ url_for('users.list_roles') }}" class="btn btn-outline-primary btn-sm">
+            <i class="bi bi-arrow-right me-1"></i>Ir a Roles
+          </a>
+        </div>
+      </div>
+    </div>
+    <div class="col-md-6">
+      <div class="card shadow-sm">
+        <div class="card-body text-center">
+          <i class="bi bi-lock" style="font-size: 2.5rem; color: #667eea;"></i>
+          <h5 class="card-title mt-3">Gestionar Permisos</h5>
+          <p class="card-text text-muted">Crear, editar y eliminar permisos</p>
+          <a href="{{ url_for('users.list_permissions') }}" class="btn btn-outline-primary btn-sm">
+            <i class="bi bi-arrow-right me-1"></i>Ir a Permisos
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Client-side table search
+  const searchInput = document.getElementById('tableSearch');
+  const searchCount = document.getElementById('searchResultCount');
+  if (searchInput) {
+    searchInput.addEventListener('input', function() {
+      const query = this.value.toLowerCase();
+      const rows = document.querySelectorAll('.table tbody tr');
+      let visible = 0;
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const match = text.includes(query);
+        row.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+      if (searchCount) {
+        searchCount.textContent = query ? visible + ' resultado' + (visible !== 1 ? 's' : '') : '{{ users|length }} registros';
+      }
+    });
+  }
+
+  // Delete user confirmation
+  document.querySelectorAll('.delete-user-btn').forEach(button => {
+    button.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const username = this.dataset.username;
+      
+      Swal.fire({
+        title: '¿Está seguro?',
+        html: `¿Desea eliminar el usuario <strong>"${username}"</strong>?<br><small class="text-muted">Esta acción no se puede deshacer.</small>`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  });
+});
+</script>
+{% endblock %}

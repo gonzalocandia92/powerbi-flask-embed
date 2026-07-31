@@ -1,0 +1,171 @@
+{% extends "layout.html" %}
+
+{% block title %}Roles - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="d-flex justify-content-between align-items-center mb-4">
+    <h2><i class="bi bi-shield-check me-2"></i>{{ title }}</h2>
+    <a href="{{ url_for('users.create_role') }}" class="btn btn-primary">
+      <i class="bi bi-plus-circle me-1"></i> Nuevo Rol
+    </a>
+  </div>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      {% if roles %}
+      <!-- Search Filter -->
+      <div class="card mb-3">
+        <div class="card-body py-2 px-3">
+          <div class="row align-items-center">
+            <div class="col">
+              <div class="input-group input-group-sm">
+                <span class="input-group-text bg-transparent border-end-0">
+                  <i class="bi bi-search text-muted"></i>
+                </span>
+                <input type="text" class="form-control border-start-0" id="tableSearch"
+                       placeholder="Buscar en roles..." autocomplete="off">
+              </div>
+            </div>
+            <div class="col-auto">
+              <small class="text-muted" id="searchResultCount">{{ roles|length }} registros</small>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="table-responsive">
+        <table class="table table-hover">
+          <thead class="table-light">
+            <tr>
+              <th>#</th>
+              <th>Nombre</th>
+              <th>Descripción</th>
+              <th>Permisos</th>
+              <th>Usuarios</th>
+              <th>Creado</th>
+              <th class="text-end">Acciones</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for role in roles %}
+            <tr>
+              <td>{{ role.id }}</td>
+              <td><strong>{{ role.name }}</strong></td>
+              <td>{{ role.description or '-' }}</td>
+              <td>
+                {% if role.permissions %}
+                <span class="badge bg-info">{{ role.permissions|length }}</span>
+                {% else %}
+                <span class="text-muted small">Sin permisos</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if role.users %}
+                <span class="badge bg-secondary">{{ role.users|length }}</span>
+                {% else %}
+                <span class="text-muted small">Sin usuarios</span>
+                {% endif %}
+              </td>
+              <td>{{ role.created_at.strftime('%Y-%m-%d') if role.created_at else 'N/A' }}</td>
+              <td class="text-end">
+                <div class="btn-group" role="group">
+                  <a href="{{ url_for('users.edit_role', role_id=role.id) }}" 
+                     class="btn btn-sm btn-outline-primary" title="Editar">
+                    <i class="bi bi-pencil"></i>
+                  </a>
+                  
+                  <a href="{{ url_for('users.assign_permissions', role_id=role.id) }}" 
+                     class="btn btn-sm btn-outline-info" title="Asignar Permisos">
+                    <i class="bi bi-lock"></i>
+                  </a>
+                  
+                  <button type="button"
+                          class="btn btn-sm btn-outline-danger delete-role-btn" 
+                          data-action="{{ url_for('users.delete_role', role_id=role.id) }}"
+                          data-name="{{ role.name }}"
+                          title="Eliminar">
+                    <i class="bi bi-trash"></i>
+                  </button>
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      {% else %}
+      <div class="alert alert-info">
+        <i class="bi bi-info-circle me-2"></i>
+        No hay roles registrados. 
+        <a href="{{ url_for('users.create_role') }}" class="alert-link">Crear el primero</a>
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <div class="mt-4">
+    <a href="{{ url_for('users.list_users') }}" class="btn btn-outline-secondary me-2">
+      <i class="bi bi-arrow-left me-1"></i>Volver a Usuarios
+    </a>
+    <a href="{{ url_for('users.list_permissions') }}" class="btn btn-outline-info">
+      <i class="bi bi-lock me-1"></i>Ver Permisos
+    </a>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  // Client-side table search
+  const searchInput = document.getElementById('tableSearch');
+  const searchCount = document.getElementById('searchResultCount');
+  if (searchInput) {
+    searchInput.addEventListener('input', function() {
+      const query = this.value.toLowerCase();
+      const rows = document.querySelectorAll('.table tbody tr');
+      let visible = 0;
+      rows.forEach(row => {
+        const text = row.textContent.toLowerCase();
+        const match = text.includes(query);
+        row.style.display = match ? '' : 'none';
+        if (match) visible++;
+      });
+      if (searchCount) {
+        searchCount.textContent = query ? visible + ' resultado' + (visible !== 1 ? 's' : '') : '{{ roles|length }} registros';
+      }
+    });
+  }
+
+  // Delete role confirmation
+  document.querySelectorAll('.delete-role-btn').forEach(button => {
+    button.addEventListener('click', function() {
+      const action = this.dataset.action;
+      const name = this.dataset.name;
+      
+      Swal.fire({
+        title: '¿Está seguro?',
+        html: `¿Desea eliminar el rol <strong>"${name}"</strong>?<br><small class="text-muted">Esta acción no se puede deshacer.</small>`,
+        icon: 'warning',
+        showCancelButton: true,
+        confirmButtonColor: '#d33',
+        cancelButtonColor: '#3085d6',
+        confirmButtonText: 'Sí, eliminar',
+        cancelButtonText: 'Cancelar',
+        reverseButtons: true,
+        focusCancel: true
+      }).then((result) => {
+        if (result.isConfirmed) {
+          const form = document.createElement('form');
+          form.method = 'POST';
+          form.action = action;
+          document.body.appendChild(form);
+          form.submit();
+        }
+      });
+    });
+  });
+});
+</script>
+{% endblock %}

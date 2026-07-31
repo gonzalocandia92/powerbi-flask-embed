@@ -21,3 +21,4 @@ msal>=1.30.0
 opentelemetry-instrumentation-anthropic
 voyageai
 pgvector
+email_validator
