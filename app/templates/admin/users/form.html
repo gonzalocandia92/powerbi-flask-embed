@@ -34,6 +34,21 @@
               <small class="form-text text-muted">Min. 3 caracteres, máx. 120</small>
             </div>
 
+            <!-- Email Field -->
+            <div class="mb-3">
+              <label class="form-label" for="email">Email <span class="text-muted small">(opcional, requerido para Login con Google)</span></label>
+              {% if form.email.errors %}
+                {{ form.email(class="form-control is-invalid", id="email", autocomplete="off", placeholder="usuario@dominio.com") }}
+                <div class="invalid-feedback d-block">
+                  {% for error in form.email.errors %}
+                  {{ error }}
+                  {% endfor %}
+                </div>
+              {% else %}
+                {{ form.email(class="form-control", id="email", autocomplete="off", placeholder="usuario@dominio.com") }}
+              {% endif %}
+            </div>
+
             <!-- Password Fields -->
             <div class="row">
               <div class="col-md-6">

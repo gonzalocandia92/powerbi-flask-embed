@@ -41,6 +41,13 @@ def create_user():
             flash("Ya existe un usuario con ese nombre", "danger")
             return render_template('admin/users/form.html', form=form, title='Nuevo Usuario', is_new=True)
         
+        # Check if email already exists
+        if form.email.data:
+            existing_email = User.query.filter_by(email=form.email.data).first()
+            if existing_email:
+                flash("Ya existe un usuario con ese email", "danger")
+                return render_template('admin/users/form.html', form=form, title='Nuevo Usuario', is_new=True)
+        
         # Validate passwords match
         if form.password.data and form.password.data != form.password_confirm.data:
             flash("Las contraseñas no coinciden", "danger")
@@ -48,6 +55,7 @@ def create_user():
         
         user = User(
             username=form.username.data,
+            email=form.email.data or None,
             is_admin=form.is_admin.data,
             is_active=form.is_active.data
         )
@@ -84,7 +92,15 @@ def edit_user(user_id):
             flash("Ya existe otro usuario con ese nombre", "danger")
             return render_template('admin/users/form.html', form=form, title='Editar Usuario', user=user, is_new=False)
         
+        # Check if email already exists (excluding current user)
+        if form.email.data:
+            existing_email = User.query.filter(User.email == form.email.data, User.id != user_id).first()
+            if existing_email:
+                flash("Ya existe otro usuario con ese email", "danger")
+                return render_template('admin/users/form.html', form=form, title='Editar Usuario', user=user, is_new=False)
+        
         user.username = form.username.data
+        user.email = form.email.data or None
         user.is_admin = form.is_admin.data
         user.is_active = form.is_active.data
         

@@ -17,7 +17,7 @@ from wtforms import (
     SubmitField,
     TextAreaField,
 )
-from wtforms.validators import DataRequired, Length, NumberRange, Optional
+from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional
 
 
 class LoginForm(FlaskForm):
@@ -369,6 +369,7 @@ class UserForm(FlaskForm):
     """Form for creating/editing application users."""
 
     username = StringField("Usuario", validators=[DataRequired(), Length(min=3, max=120)])
+    email = StringField("Email", validators=[Optional(), Email(), Length(max=254)])
     password = PasswordField("Contraseña", validators=[Optional(), Length(min=6)])
     password_confirm = PasswordField("Confirmar Contraseña", validators=[Optional()])
     is_admin = BooleanField("Es Administrador")
