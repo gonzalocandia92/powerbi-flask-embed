@@ -8,10 +8,19 @@ import os
 import atexit
 import logging
 import asyncio
-from flask import Flask
+from pathlib import Path
+from urllib.parse import urlparse
+
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
+from flask import Flask, abort, request
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import LoginManager
 from flask_migrate import Migrate
+from flask_wtf.csrf import CSRFProtect
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
 from app.services.observability import init_langfuse
 
@@ -25,6 +34,81 @@ logging.basicConfig(
 db = SQLAlchemy()
 migrate = Migrate()
 login_manager = LoginManager()
+csrf = CSRFProtect()
+limiter = Limiter(key_func=get_remote_address, default_limits=[])
+
+
+def _is_production():
+    return os.getenv('FLASK_ENV', 'development').strip().lower() in {'production', 'prod'}
+
+
+def _validate_public_url(name, value, *, production):
+    parsed = urlparse(value or '')
+    if not parsed.scheme or not parsed.netloc or parsed.fragment:
+        raise RuntimeError(f'{name} must be an absolute URL without a fragment')
+    if production and parsed.scheme != 'https':
+        raise RuntimeError(f'{name} must use HTTPS in production')
+
+
+def _configured_oauth_private_key(app):
+    configured = app.config.get('MCP_OAUTH_PRIVATE_KEY')
+    if configured:
+        return serialization.load_pem_private_key(
+            configured.replace('\\n', '\n').encode(), password=None
+        )
+
+    key_path = app.config.get('MCP_OAUTH_PRIVATE_KEY_FILE')
+    if key_path:
+        path = Path(key_path)
+        if not path.is_file():
+            if _is_production():
+                raise RuntimeError(f'MCP_OAUTH_PRIVATE_KEY_FILE does not exist: {path}')
+            logging.warning(
+                'Ignoring missing development MCP_OAUTH_PRIVATE_KEY_FILE: %s', path
+            )
+            return None
+        return serialization.load_pem_private_key(path.read_bytes(), password=None)
+    return None
+
+
+def _validate_mcp_security_config(app):
+    production = _is_production()
+    _validate_public_url(
+        'MCP_OAUTH_ISSUER', app.config['MCP_OAUTH_ISSUER'], production=production
+    )
+    _validate_public_url(
+        'MCP_RESOURCE_URL', app.config['MCP_RESOURCE_URL'], production=production
+    )
+
+    key = _configured_oauth_private_key(app)
+    if key is not None:
+        if not isinstance(key, rsa.RSAPrivateKey) or key.key_size < 2048:
+            raise RuntimeError('MCP OAuth signing key must be an RSA private key of at least 2048 bits')
+        app.extensions['mcp_oauth_private_key'] = key
+
+    if not production:
+        return
+
+    secret_key = app.config.get('SECRET_KEY') or ''
+    if secret_key == 'dev-secret' or len(secret_key.encode()) < 32:
+        raise RuntimeError('SECRET_KEY must contain at least 32 bytes in production')
+
+    internal_secret = app.config.get('MCP_INTERNAL_JWT_SECRET') or ''
+    if len(internal_secret.encode()) < 32:
+        raise RuntimeError('MCP_INTERNAL_JWT_SECRET must contain at least 32 bytes in production')
+    if key is None:
+        raise RuntimeError(
+            'MCP_OAUTH_PRIVATE_KEY or MCP_OAUTH_PRIVATE_KEY_FILE is required in production'
+        )
+
+    access_ttl = app.config['MCP_OAUTH_ACCESS_TOKEN_TTL']
+    refresh_ttl = app.config['MCP_OAUTH_REFRESH_TOKEN_TTL']
+    if not 60 <= access_ttl <= 3600:
+        raise RuntimeError('MCP_OAUTH_ACCESS_TOKEN_TTL must be between 60 and 3600 seconds')
+    if not access_ttl < refresh_ttl <= 31536000:
+        raise RuntimeError(
+            'MCP_OAUTH_REFRESH_TOKEN_TTL must exceed the access TTL and be at most one year'
+        )
 
 
 def create_app():
@@ -35,10 +119,29 @@ def create_app():
         Flask: Configured Flask application instance
     """
     app = Flask(__name__)
+    trusted_proxy_hops = int(os.getenv('TRUSTED_PROXY_HOPS', '0'))
+    if trusted_proxy_hops:
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app,
+            x_for=trusted_proxy_hops,
+            x_proto=trusted_proxy_hops,
+            x_host=trusted_proxy_hops,
+        )
     
     app.config['SECRET_KEY'] = os.getenv('SECRET_KEY', 'dev-secret')
     app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('SQLALCHEMY_DATABASE_URI')
     app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+    app.config['MCP_OAUTH_ISSUER'] = os.getenv('MCP_OAUTH_ISSUER', 'http://localhost:5000')
+    app.config['MCP_RESOURCE_URL'] = os.getenv(
+        'MCP_RESOURCE_URL', 'http://localhost:8000/mcp'
+    ).rstrip('/')
+    app.config['MCP_OAUTH_PRIVATE_KEY'] = os.getenv('MCP_OAUTH_PRIVATE_KEY')
+    app.config['MCP_OAUTH_PRIVATE_KEY_FILE'] = os.getenv('MCP_OAUTH_PRIVATE_KEY_FILE')
+    app.config['MCP_OAUTH_ACCESS_TOKEN_TTL'] = int(os.getenv('MCP_OAUTH_ACCESS_TOKEN_TTL', '900'))
+    app.config['MCP_OAUTH_REFRESH_TOKEN_TTL'] = int(os.getenv('MCP_OAUTH_REFRESH_TOKEN_TTL', '2592000'))
+    app.config['MCP_INTERNAL_JWT_SECRET'] = os.getenv('MCP_INTERNAL_JWT_SECRET')
+    app.config['MCP_INTERNAL_REQUIRE_MTLS'] = os.getenv('MCP_INTERNAL_REQUIRE_MTLS', 'true').lower() == 'true'
+    _validate_mcp_security_config(app)
     init_langfuse()
     
     db_uri = app.config['SQLALCHEMY_DATABASE_URI']
@@ -60,6 +163,8 @@ def create_app():
     
     db.init_app(app)
     migrate.init_app(app, db)
+    csrf.init_app(app)
+    limiter.init_app(app)
 
     # Flask async views require the 'async' extra. In environments where that
     # dependency is unavailable, provide a lightweight compatibility shim so
@@ -84,7 +189,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config
+    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -104,6 +209,35 @@ def create_app():
     app.register_blueprint(whatsapp.bp)
     app.register_blueprint(users.bp)
     app.register_blueprint(mcp_config.bp)
+    app.register_blueprint(mcp_oauth.bp)
+    app.register_blueprint(mcp_internal.bp)
+    app.register_blueprint(mcp_oauth_admin.bp)
+
+    # Non-browser APIs authenticate independently and must not be subjected to
+    # cookie-session CSRF validation.
+    csrf.exempt(private.bp)
+    csrf.exempt(chatbot.bp)
+    csrf.exempt(whatsapp.bp)
+
+    from app.services.mcp_oauth import init_oauth_server
+    init_oauth_server(app)
+
+    backoffice_blueprints = {
+        'main', 'tenants', 'clients', 'workspaces', 'reports', 'usuarios_pbi',
+        'analytics', 'empresas', 'futuras_empresas', 'api_docs', 'monitor',
+        'ai_config', 'users', 'mcp_config', 'mcp_oauth_admin',
+    }
+
+    @app.before_request
+    def enforce_backoffice_boundary():
+        """OAuth-only users may authenticate but never enter the backoffice."""
+        from flask_login import current_user
+        if (
+            request.blueprint in backoffice_blueprints
+            and current_user.is_authenticated
+            and not current_user.has_permission('backoffice.access')
+        ):
+            abort(403)
 
     # ── Background scheduler for dataset refresh monitoring ──────────────────
     # Avoid double-start in Flask debug/reloader mode
@@ -159,5 +293,39 @@ def create_app():
         db.session.add(user)
         db.session.commit()
         print("Admin user created successfully")
+
+    @app.cli.command('create-mcp-oauth-client')
+    def create_mcp_oauth_client():
+        """Create or update the static Claude OAuth client."""
+        import secrets
+        from app.models import McpOAuthClient
+
+        client_id = os.getenv('MCP_CLAUDE_CLIENT_ID', 'claude-mcp')
+        raw_secret = os.getenv('MCP_CLAUDE_CLIENT_SECRET')
+        client = McpOAuthClient.query.filter_by(client_id=client_id).first()
+        if client is None:
+            client = McpOAuthClient(client_id=client_id, name='Claude MCP')
+            raw_secret = raw_secret or secrets.token_urlsafe(48)
+            db.session.add(client)
+        client.redirect_uris = [
+            'https://claude.ai/api/mcp/auth_callback',
+            'https://claude.com/api/mcp/auth_callback',
+        ]
+        client.allowed_scopes = [
+            'mcp:models:list', 'mcp:models:read', 'mcp:models:query', 'mcp:models:write'
+        ]
+        client.grant_types = ['authorization_code', 'refresh_token']
+        client.response_types = ['code']
+        client.token_endpoint_auth_method = 'client_secret_post'
+        client.is_active = True
+        if raw_secret:
+            client.set_client_secret(raw_secret)
+        db.session.commit()
+        print(f'Client ID: {client_id}')
+        print('Token endpoint authentication: client_secret_post (PKCE required)')
+        if raw_secret:
+            print(f'Client secret (shown once): {raw_secret}')
+        else:
+            print('Existing client secret retained')
     
     return app

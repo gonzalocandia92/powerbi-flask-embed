@@ -27,19 +27,32 @@
               <div class="form-text">{{ form.report_url.description }}</div>
             </div>
 
-            <div class="mb-3">
-              {{ form.api_key.label(class="form-label") }}
-              {{ form.api_key(class="form-control" + (" is-invalid" if form.api_key.errors else ""), placeholder="mcp-key-...") }}
-              {% if form.api_key.errors %}
-              <div class="invalid-feedback">
-                {% for error in form.api_key.errors %}{{ error }}{% endfor %}
+            <div class="row">
+              <div class="col-md-12 mb-3">
+                <div class="form-check form-switch pb-2">
+                  {{ form.is_active(class="form-check-input") }}
+                  {{ form.is_active.label(class="form-check-label") }}
+                </div>
               </div>
-              {% endif %}
-              <div class="form-text">{{ form.api_key.description }}</div>
             </div>
 
-            <div class="row">
-              <div class="col-md-8 mb-3">
+            <details class="border rounded p-3 mb-3" {% if not config or form.api_key.errors or form.empresa_id.errors %}open{% endif %}>
+              <summary class="fw-semibold">Compatibilidad legacy con API key</summary>
+              <p class="text-muted small mt-2 mb-3">
+                Estos campos no controlan el acceso OAuth ni las empresas habilitadas para MCP.
+                La empresa legacy sólo identifica auditoría y facturación de llamadas hechas con API key.
+              </p>
+              <div class="mb-3">
+                {{ form.api_key.label(class="form-label") }}
+                {{ form.api_key(class="form-control" + (" is-invalid" if form.api_key.errors else ""), placeholder="mcp-key-...") }}
+                {% if form.api_key.errors %}
+                <div class="invalid-feedback">
+                  {% for error in form.api_key.errors %}{{ error }}{% endfor %}
+                </div>
+                {% endif %}
+                <div class="form-text">{{ form.api_key.description }}</div>
+              </div>
+              <div>
                 {{ form.empresa_id.label(class="form-label") }}
                 {{ form.empresa_id(class="form-select" + (" is-invalid" if form.empresa_id.errors else "")) }}
                 {% if form.empresa_id.errors %}
@@ -48,13 +61,7 @@
                 </div>
                 {% endif %}
               </div>
-              <div class="col-md-4 mb-3 d-flex align-items-end">
-                <div class="form-check form-switch pb-2">
-                  {{ form.is_active(class="form-check-input") }}
-                  {{ form.is_active.label(class="form-check-label") }}
-                </div>
-              </div>
-            </div>
+            </details>
 
             {% if config %}
             <div class="alert alert-light border">

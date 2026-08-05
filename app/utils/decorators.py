@@ -72,6 +72,11 @@ def admin_required(f):
     return decorated_function
 
 
+def backoffice_required(f):
+    """Require the dedicated backoffice permission, independent of OAuth login."""
+    return permission_required('backoffice.access')(f)
+
+
 def permission_required(permission_name):
     """
     Decorator to require a specific permission.

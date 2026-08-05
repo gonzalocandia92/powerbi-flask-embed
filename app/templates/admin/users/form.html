@@ -15,6 +15,15 @@
 
       <div class="card shadow-sm">
         <div class="card-body">
+          {% if is_new %}
+          <div class="alert alert-info">
+            <i class="bi bi-info-circle me-2"></i>
+            Esta pantalla crea la identidad que usará MCP. Después de guardarla se asignan
+            sus empresas, modelos y roles. El <code>client_secret</code> identifica al conector
+            OAuth y se administra por separado en
+            <a class="alert-link" href="{{ url_for('mcp_oauth_admin.index') }}">OAuth MCP</a>.
+          </div>
+          {% endif %}
           <form method="POST" novalidate>
             {{ form.hidden_tag() }}
 
@@ -89,7 +98,7 @@
 
             <!-- Checkboxes -->
             <div class="row">
-              <div class="col-md-6">
+              <div class="col-md-6" {% if not is_new %}hidden{% endif %}>
                 <div class="mb-3">
                   <div class="form-check">
                     {{ form.is_admin(class="form-check-input", id="is_admin") }}
@@ -97,7 +106,7 @@
                       Es Administrador
                     </label>
                   </div>
-                  <small class="form-text text-muted">Los administradores tienen acceso total</small>
+                  <small class="form-text text-muted">Luego se administra junto con empresas y accesos MCP</small>
                 </div>
               </div>
               <div class="col-md-6">

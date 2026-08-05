@@ -482,6 +482,7 @@
     }
   </style>
   {% block styles %}{% endblock %}
+  <meta name="csrf-token" content="{{ csrf_token() }}">
 </head>
 <body class="bg-light">
 <nav class="navbar navbar-expand-lg navbar-dark">
@@ -547,8 +548,10 @@
           </a>
           <ul class="dropdown-menu" aria-labelledby="navbarAdmin">
             <li><a class="dropdown-item" href="{{ url_for('users.list_users') }}"><i class="bi bi-people me-2"></i>Usuarios</a></li>
-            <li><a class="dropdown-item" href="{{ url_for('users.list_roles') }}"><i class="bi bi-shield-check me-2"></i>Roles</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('users.list_roles') }}"><i class="bi bi-shield-check me-2"></i>Roles y permisos</a></li>
             <li><a class="dropdown-item" href="{{ url_for('users.list_permissions') }}"><i class="bi bi-lock me-2"></i>Permisos</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="{{ url_for('mcp_oauth_admin.index') }}"><i class="bi bi-key me-2"></i>OAuth MCP</a></li>
           </ul>
         </li>
         {% endif %}
@@ -672,5 +675,15 @@ function showInfo(message) {
 }
 </script>
 {% block scripts %}{% endblock %}
+  <script>
+    document.querySelectorAll('form').forEach(function (form) {
+      if ((form.method || '').toLowerCase() !== 'post' || form.querySelector('input[name="csrf_token"]')) return;
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'csrf_token';
+      input.value = document.querySelector('meta[name="csrf-token"]').content;
+      form.appendChild(input);
+    });
+  </script>
 </body>
 </html>

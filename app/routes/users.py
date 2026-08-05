@@ -7,8 +7,18 @@ from flask_login import login_required
 from wtforms.validators import ValidationError
 
 from app import db
-from app.models import User, Role, Permission
-from app.forms import UserForm, UserRoleForm, RoleForm, PermissionForm, RolePermissionForm
+from app.models import (
+    Empresa,
+    McpAgentConfig,
+    McpConfigEmpresa,
+    McpModelGrant,
+    McpModelRole,
+    Permission,
+    Role,
+    User,
+    UserEmpresa,
+)
+from app.forms import UserForm, RoleForm, PermissionForm, RolePermissionForm
 from app.utils.decorators import retry_on_db_error, admin_required
 
 bp = Blueprint('users', __name__, url_prefix='/admin/users')
@@ -70,8 +80,11 @@ def create_user():
         db.session.commit()
         
         logging.debug(f"User created: {user.username} (ID: {user.id})")
-        flash("Usuario creado exitosamente", "success")
-        return redirect(url_for('users.list_users'))
+        flash(
+            "Usuario creado. Ahora asignale empresas, modelos y roles para habilitar su acceso MCP.",
+            "success",
+        )
+        return redirect(url_for('users.manage_access', user_id=user.id))
     
     return render_template('admin/users/form.html', form=form, title='Nuevo Usuario', is_new=True)
 
@@ -101,7 +114,6 @@ def edit_user(user_id):
         
         user.username = form.username.data
         user.email = form.email.data or None
-        user.is_admin = form.is_admin.data
         user.is_active = form.is_active.data
         
         # Only update password if provided
@@ -157,44 +169,121 @@ def toggle_user_status(user_id):
 @admin_required
 @retry_on_db_error(max_retries=3, delay=1)
 def assign_roles(user_id):
-    """Assign roles to a user."""
-    user = User.query.get_or_404(user_id)
-    form = UserRoleForm()
-    
-    # Populate role choices
-    all_roles = Role.query.order_by(Role.name).all()
-    form.roles.choices = [(r.id, r.name) for r in all_roles]
-    role_details = [
-        {
-            'id': role.id,
-            'name': role.name,
-            'description': role.description,
-        }
-        for role in all_roles
-    ]
-    
-    if form.validate_on_submit():
-        # Clear existing roles
-        user.roles = []
-        
-        # Assign selected roles
-        selected_roles = Role.query.filter(Role.id.in_(form.roles.data)).all()
-        user.roles = selected_roles
-        
-        db.session.commit()
-        logging.debug(f"Roles assigned to user: {user.username}")
-        flash("Roles asignados correctamente", "success")
-        return redirect(url_for('users.list_users'))
-    
-    # Pre-select current roles
-    form.roles.data = [r.id for r in user.roles]
-    
-    return render_template(
-        'admin/users/assign_roles.html',
-        form=form,
-        user=user,
-        role_details=role_details,
+    """Compatibility redirect to the canonical access screen."""
+    User.query.get_or_404(user_id)
+    flash('Los roles ahora se administran junto con empresas y accesos MCP.', 'info')
+    return redirect(url_for('users.manage_access', user_id=user_id))
+
+
+def _access_view_data(user):
+    backoffice_roles = Role.query.order_by(Role.name).all()
+    model_roles = McpModelRole.query.order_by(McpModelRole.name).all()
+    companies = Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all()
+    links = (
+        McpConfigEmpresa.query
+        .join(McpAgentConfig, McpAgentConfig.id == McpConfigEmpresa.config_id)
+        .filter(McpAgentConfig.is_active.is_(True))
+        .order_by(McpAgentConfig.dataset_name, McpAgentConfig.id)
+        .all()
     )
+    models_by_company = {company.id: [] for company in companies}
+    for link in links:
+        if link.empresa_id in models_by_company:
+            models_by_company[link.empresa_id].append(link.config)
+
+    memberships = {membership.empresa_id for membership in user.empresa_memberships}
+    grants = {
+        (grant.empresa_id, grant.config_id): grant
+        for grant in user.mcp_grants
+        if grant.is_active
+    }
+    return {
+        'user': user,
+        'backoffice_roles': backoffice_roles,
+        'model_roles': model_roles,
+        'companies': companies,
+        'models_by_company': models_by_company,
+        'membership_ids': memberships,
+        'grant_by_pair': grants,
+    }
+
+
+@bp.route('/<int:user_id>/access', methods=['GET', 'POST'])
+@login_required
+@admin_required
+@retry_on_db_error(max_retries=3, delay=1)
+def manage_access(user_id):
+    """Manage backoffice roles, companies and company-scoped MCP grants together."""
+    user = User.query.get_or_404(user_id)
+
+    if request.method == 'POST':
+        role_ids = {
+            int(value) for value in request.form.getlist('backoffice_role_ids')
+            if value.isdigit()
+        }
+        selected_roles = Role.query.filter(Role.id.in_(role_ids)).all() if role_ids else []
+        user.roles = selected_roles
+        user.is_admin = request.form.get('is_admin') == 'on'
+
+        requested_company_ids = {
+            int(value) for value in request.form.getlist('company_ids')
+            if value.isdigit()
+        }
+        selected_companies = Empresa.query.filter(
+            Empresa.id.in_(requested_company_ids),
+            Empresa.estado_activo.is_(True),
+        ).all() if requested_company_ids else []
+        selected_company_ids = {company.id for company in selected_companies}
+
+        memberships = {item.empresa_id: item for item in user.empresa_memberships}
+        for empresa_id in selected_company_ids - set(memberships):
+            db.session.add(UserEmpresa(user_id=user.id, empresa_id=empresa_id))
+        for empresa_id in set(memberships) - selected_company_ids:
+            db.session.delete(memberships[empresa_id])
+
+        model_roles = {role.id: role for role in McpModelRole.query.all()}
+        valid_links = (
+            McpConfigEmpresa.query
+            .join(McpAgentConfig, McpAgentConfig.id == McpConfigEmpresa.config_id)
+            .filter(
+                McpConfigEmpresa.empresa_id.in_(selected_company_ids),
+                McpAgentConfig.is_active.is_(True),
+            )
+            .all()
+        ) if selected_company_ids else []
+        valid_pairs = {(link.empresa_id, link.config_id) for link in valid_links}
+        existing_grants = {
+            (grant.empresa_id, grant.config_id): grant for grant in user.mcp_grants
+        }
+
+        for pair, grant in existing_grants.items():
+            if pair not in valid_pairs:
+                grant.is_active = False
+
+        for empresa_id, config_id in valid_pairs:
+            value = request.form.get(f'grant_{empresa_id}_{config_id}', '0')
+            role_id = int(value) if value.isdigit() else 0
+            grant = existing_grants.get((empresa_id, config_id))
+            if role_id not in model_roles:
+                if grant is not None:
+                    grant.is_active = False
+                continue
+            if grant is None:
+                grant = McpModelGrant(
+                    user_id=user.id,
+                    empresa_id=empresa_id,
+                    config_id=config_id,
+                )
+                db.session.add(grant)
+            grant.role_id = role_id
+            grant.is_active = True
+
+        db.session.commit()
+        logging.debug('Access matrix updated for user %s', user.username)
+        flash('Accesos del usuario actualizados correctamente.', 'success')
+        return redirect(url_for('users.manage_access', user_id=user.id))
+
+    return render_template('admin/users/access.html', **_access_view_data(user))
 
 
 # ── Role Management Routes ────────────────────────────────────────────────────
@@ -204,9 +293,15 @@ def assign_roles(user_id):
 @admin_required
 @retry_on_db_error(max_retries=3, delay=1)
 def list_roles():
-    """List all roles."""
+    """List backoffice and MCP model roles as clearly separated categories."""
     roles = Role.query.order_by(Role.name).all()
-    return render_template('admin/roles/list.html', roles=roles, title='Roles')
+    model_roles = McpModelRole.query.order_by(McpModelRole.name).all()
+    return render_template(
+        'admin/roles/list.html',
+        roles=roles,
+        model_roles=model_roles,
+        title='Roles y permisos',
+    )
 
 
 @bp.route('/roles/new', methods=['GET', 'POST'])

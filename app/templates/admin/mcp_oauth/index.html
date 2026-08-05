@@ -1,0 +1,38 @@
+{% extends "layout.html" %}
+{% block title %}OAuth MCP{% endblock %}
+{% block body %}
+<div class="container-fluid py-4">
+  <h2>OAuth MCP</h2>
+  <div class="row g-4">
+    <div class="col-lg-5"><div class="card"><div class="card-header"><strong>Cliente estático</strong></div><div class="card-body">
+      <form method="post" action="{{ url_for('mcp_oauth_admin.save_client') }}">
+        <label class="form-label">Client ID</label><input class="form-control mb-2" name="client_id" value="claude-mcp" required>
+        <label class="form-label">Nombre</label><input class="form-control mb-2" name="name" value="Claude MCP" required>
+        <label class="form-label">Redirect URIs (una por línea)</label><textarea class="form-control mb-2" name="redirect_uris" rows="3">https://claude.ai/api/mcp/auth_callback
+https://claude.com/api/mcp/auth_callback</textarea>
+        <label class="form-label">Scopes</label><textarea class="form-control mb-2" name="allowed_scopes" rows="2">mcp:models:list mcp:models:read mcp:models:query mcp:models:write</textarea>
+        <label class="form-label">Tipo de cliente</label>
+        <select class="form-select mb-2" name="token_endpoint_auth_method">
+          <option value="client_secret_post" selected>Confidencial con secret en POST (Claude)</option>
+          <option value="client_secret_basic">Confidencial con client secret</option>
+          <option value="none">Público con PKCE</option>
+        </select>
+        <label class="form-label">Nuevo secret (sólo clientes confidenciales)</label><input class="form-control mb-1" type="password" name="client_secret">
+        <div class="form-text mb-3">Claude envía el secret en el cuerpo del token request. Se genera al crear y se conserva al editar.</div>
+        <div class="form-check mb-3"><input class="form-check-input" type="checkbox" name="is_active" id="active" checked><label class="form-check-label" for="active">Activo</label></div>
+        <button class="btn btn-primary">Guardar cliente</button>
+      </form>
+    </div></div></div>
+    <div class="col-lg-7"><div class="card"><div class="card-header"><strong>Clientes registrados</strong></div><div class="card-body table-responsive">
+      <table class="table table-sm"><thead><tr><th>ID</th><th>Nombre</th><th>Tipo</th><th>Estado</th><th>Redirects</th><th></th></tr></thead><tbody>
+      {% for client in clients %}<tr><td><code>{{ client.client_id }}</code></td><td>{{ client.name }}</td><td><code>{{ client.token_endpoint_auth_method }}</code></td><td>{{ 'Activo' if client.is_active else 'Inactivo' }}</td><td>{{ client.redirect_uris|join(', ') }}</td><td class="text-end">{% if client.token_endpoint_auth_method != 'none' %}<form method="post" action="{{ url_for('mcp_oauth_admin.regenerate_client_secret', client_pk=client.id) }}" onsubmit="return confirm('¿Regenerar el client secret? El valor anterior dejará de funcionar.');"><button class="btn btn-sm btn-outline-warning" type="submit"><i class="bi bi-arrow-clockwise"></i> Regenerar secret</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="6">Sin clientes.</td></tr>{% endfor %}
+      </tbody></table>
+    </div></div></div>
+  </div>
+  <div class="card mt-4"><div class="card-header"><strong>Últimas sesiones</strong></div><div class="card-body table-responsive">
+    <table class="table table-sm align-middle"><thead><tr><th>Sesión</th><th>Usuario</th><th>Cliente</th><th>Creada</th><th>Estado</th><th></th></tr></thead><tbody>
+    {% for session in sessions %}<tr><td><code>{{ session.public_id }}</code></td><td>{{ session.user.username }}</td><td>{{ session.client_id }}</td><td>{{ session.created_at }}</td><td>{{ 'Revocada' if session.revoked_at else 'Activa' }}</td><td>{% if not session.revoked_at %}<form method="post" action="{{ url_for('mcp_oauth_admin.revoke_session', session_public_id=session.public_id) }}"><button class="btn btn-sm btn-outline-danger">Revocar</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="6">Sin sesiones.</td></tr>{% endfor %}
+    </tbody></table>
+  </div></div>
+</div>
+{% endblock %}

@@ -40,8 +40,8 @@
             <tr>
               <th>#</th>
               <th>Usuario</th>
-              <th>Rol Administrador</th>
-              <th>Roles</th>
+              <th>Acceso backoffice</th>
+              <th>Empresas / MCP</th>
               <th>Estado</th>
               <th>Creado</th>
               <th class="text-end">Acciones</th>
@@ -55,17 +55,18 @@
               <td>
                 {% if user.is_admin %}
                 <span class="badge bg-danger">Administrador</span>
+                {% elif user.has_permission('backoffice.access') %}
+                  {% for role in user.roles %}<span class="badge bg-info">{{ role.name }}</span>{% endfor %}
                 {% else %}
-                <span class="badge bg-secondary">Usuario</span>
+                <span class="badge bg-secondary">Sin acceso</span>
                 {% endif %}
               </td>
               <td>
-                {% if user.roles %}
-                  {% for role in user.roles %}
-                  <span class="badge bg-info">{{ role.name }}</span>
-                  {% endfor %}
+                {% if user.empresa_memberships %}
+                  <span class="badge bg-primary">{{ user.empresa_memberships|length }} empresa(s)</span>
+                  <span class="badge bg-secondary">{{ user.mcp_grants|selectattr('is_active')|list|length }} acceso(s) MCP</span>
                 {% else %}
-                <span class="text-muted small">Sin roles</span>
+                <span class="text-muted small">Sin empresas asignadas</span>
                 {% endif %}
               </td>
               <td>
@@ -83,9 +84,9 @@
                     <i class="bi bi-pencil"></i>
                   </a>
                   
-                  <a href="{{ url_for('users.assign_roles', user_id=user.id) }}" 
-                     class="btn btn-sm btn-outline-info" title="Asignar Roles">
-                    <i class="bi bi-shield-check"></i>
+                  <a href="{{ url_for('users.manage_access', user_id=user.id) }}"
+                     class="btn btn-sm btn-outline-info" title="Administrar accesos">
+                    <i class="bi bi-person-lock"></i>
                   </a>
                   
                   <form method="POST" action="{{ url_for('users.toggle_user_status', user_id=user.id) }}" style="display:inline;">
@@ -125,8 +126,8 @@
       <div class="card shadow-sm">
         <div class="card-body text-center">
           <i class="bi bi-shield-check" style="font-size: 2.5rem; color: #667eea;"></i>
-          <h5 class="card-title mt-3">Gestionar Roles</h5>
-          <p class="card-text text-muted">Crear, editar y eliminar roles</p>
+          <h5 class="card-title mt-3">Roles y permisos</h5>
+          <p class="card-text text-muted">Roles de backoffice y roles MCP claramente separados</p>
           <a href="{{ url_for('users.list_roles') }}" class="btn btn-outline-primary btn-sm">
             <i class="bi bi-arrow-right me-1"></i>Ir a Roles
           </a>

@@ -2,14 +2,16 @@
 import logging
 
 import requests
-from flask import Blueprint, flash, redirect, render_template, url_for
+from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import login_required
 from sqlalchemy.orm import joinedload
 
 from app import db
 from app.forms import McpConfigCreateForm, McpConfigEditForm
-from app.models import Empresa, McpAgentConfig, Report, Workspace
-from app.utils.decorators import retry_on_db_error
+from app.models import (
+    Empresa, McpAgentConfig, McpConfigEmpresa, McpModelGrant, Report, Workspace,
+)
+from app.utils.decorators import permission_required, retry_on_db_error
 from app.utils.powerbi import get_mcp_metadata_for_report, hash_mcp_api_key, parse_powerbi_url
 
 
@@ -24,6 +26,13 @@ def _empresa_choices():
 
 def _selected_empresa_id(value):
     return value or None
+
+
+def _ensure_company_link(config, empresa_id):
+    if not empresa_id:
+        return
+    if not McpConfigEmpresa.query.filter_by(config_id=config.id, empresa_id=empresa_id).first():
+        db.session.add(McpConfigEmpresa(config_id=config.id, empresa_id=empresa_id))
 
 
 def _hash_fingerprint(value):
@@ -77,7 +86,10 @@ def _powerbi_error_message(exc):
 
 def _resolve_metadata_from_url(report_url):
     report = _find_report_from_url(report_url)
-    return get_mcp_metadata_for_report(report)
+    metadata = get_mcp_metadata_for_report(report)
+    metadata['credential_report_id_fk'] = report.id
+    metadata['workspace_id_fk'] = report.workspace.id
+    return metadata
 
 
 def _set_api_key_hash(config, raw_api_key):
@@ -93,6 +105,8 @@ def _apply_metadata(config, metadata):
     config.workspace_name = metadata["workspace_name"]
     config.dataset_id = metadata["dataset_id"]
     config.dataset_name = metadata["dataset_name"]
+    config.workspace_id_fk = metadata.get('workspace_id_fk')
+    config.credential_report_id_fk = metadata.get('credential_report_id_fk')
 
 
 def _add_value_error_to_form(form, exc):
@@ -111,7 +125,10 @@ def _add_value_error_to_form(form, exc):
 def list():
     configs = (
         McpAgentConfig.query
-        .options(joinedload(McpAgentConfig.empresa))
+        .options(
+            joinedload(McpAgentConfig.empresa),
+            joinedload(McpAgentConfig.empresa_links).joinedload(McpConfigEmpresa.empresa),
+        )
         .order_by(McpAgentConfig.created_at.desc(), McpAgentConfig.id.desc())
         .all()
     )
@@ -169,7 +186,13 @@ def new():
 def detail(config_id):
     config = (
         McpAgentConfig.query
-        .options(joinedload(McpAgentConfig.empresa))
+        .options(
+            joinedload(McpAgentConfig.empresa),
+            joinedload(McpAgentConfig.empresa_links).joinedload(McpConfigEmpresa.empresa),
+            joinedload(McpAgentConfig.grants).joinedload(McpModelGrant.user),
+            joinedload(McpAgentConfig.grants).joinedload(McpModelGrant.empresa),
+            joinedload(McpAgentConfig.grants).joinedload(McpModelGrant.role),
+        )
         .get_or_404(config_id)
     )
     return render_template(
@@ -177,6 +200,8 @@ def detail(config_id):
         config=config,
         hash_fingerprint=_hash_fingerprint,
         title='Detalle MCP Config',
+        empresas=Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all(),
+        enabled_company_ids={link.empresa_id for link in config.empresa_links},
     )
 
 
@@ -246,3 +271,36 @@ def delete(config_id):
     db.session.commit()
     flash("Configuracion MCP eliminada.", "success")
     return redirect(url_for('mcp_config.list'))
+
+
+@bp.route('/<int:config_id>/companies', methods=['POST'])
+@login_required
+@permission_required('mcp.config.manage')
+def add_company(config_id):
+    config = McpAgentConfig.query.get_or_404(config_id)
+    empresa = Empresa.query.get_or_404(request.form.get('empresa_id', type=int))
+    _ensure_company_link(config, empresa.id)
+    db.session.commit()
+    flash('Empresa habilitada para este modelo.', 'success')
+    return redirect(url_for('mcp_config.detail', config_id=config.id))
+
+
+@bp.route('/<int:config_id>/companies/<int:empresa_id>/remove', methods=['POST'])
+@login_required
+@permission_required('mcp.config.manage')
+def remove_company(config_id, empresa_id):
+    config = McpAgentConfig.query.get_or_404(config_id)
+    link = McpConfigEmpresa.query.filter_by(
+        config_id=config.id,
+        empresa_id=empresa_id,
+    ).first_or_404()
+
+    McpModelGrant.query.filter_by(
+        config_id=config.id,
+        empresa_id=empresa_id,
+        is_active=True,
+    ).update({'is_active': False}, synchronize_session=False)
+    db.session.delete(link)
+    db.session.commit()
+    flash('Empresa deshabilitada; sus accesos MCP fueron revocados.', 'success')
+    return redirect(url_for('mcp_config.detail', config_id=config.id))

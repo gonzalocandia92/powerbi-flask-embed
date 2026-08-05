@@ -171,7 +171,12 @@ class McpConfigCreateForm(FlaskForm):
         validators=[DataRequired(), Length(max=512), _validate_mcp_key_prefix],
         description=f"Debe empezar con {MCP_API_KEY_PREFIX}. Se guarda solamente el hash SHA-256.",
     )
-    empresa_id = SelectField("Empresa", coerce=int, validators=[Optional()], choices=[])
+    empresa_id = SelectField(
+        "Empresa legacy para API key",
+        coerce=int,
+        validators=[Optional()],
+        choices=[],
+    )
     is_active = BooleanField("Configuracion activa", default=True)
     submit = SubmitField("Crear configuracion")
 
@@ -189,7 +194,12 @@ class McpConfigEditForm(FlaskForm):
         validators=[Optional(), Length(max=512), _validate_mcp_key_prefix],
         description=f"Dejar vacia para conservar el hash actual. Si se cambia, debe empezar con {MCP_API_KEY_PREFIX}.",
     )
-    empresa_id = SelectField("Empresa", coerce=int, validators=[Optional()], choices=[])
+    empresa_id = SelectField(
+        "Empresa legacy para API key",
+        coerce=int,
+        validators=[Optional()],
+        choices=[],
+    )
     is_active = BooleanField("Configuracion activa", default=True)
     submit = SubmitField("Guardar cambios")
 

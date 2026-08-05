@@ -4,6 +4,7 @@ Authentication routes for login and logout.
 import os
 import secrets
 import requests
+from urllib.parse import urljoin, urlparse
 from flask import Blueprint, render_template, redirect, url_for, flash, request, session
 from flask_login import login_user, logout_user, login_required
 
@@ -28,14 +29,25 @@ def login():
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
         
-        if user and user.check_password(form.password.data):
+        if user and user.is_active and user.check_password(form.password.data):
             login_user(user, remember=form.remember.data)
+            next_url = request.args.get('next') or request.form.get('next')
+            if next_url and _is_safe_redirect(next_url):
+                return redirect(next_url)
             return redirect(url_for('main.index'))
         
         flash('Usuario o contraseña inválidos', 'danger')
     
     google_enabled = bool(os.getenv('GOOGLE_CLIENT_ID') and os.getenv('GOOGLE_CLIENT_SECRET'))
-    return render_template('login.html', form=form, google_enabled=google_enabled)
+    return render_template(
+        'login.html', form=form, google_enabled=google_enabled, next_url=request.args.get('next', '')
+    )
+
+
+def _is_safe_redirect(target):
+    reference = urlparse(request.host_url)
+    candidate = urlparse(urljoin(request.host_url, target))
+    return candidate.scheme in ('http', 'https') and candidate.netloc == reference.netloc
 
 
 @bp.route('/login/google')
@@ -48,6 +60,8 @@ def google_login():
 
     state = secrets.token_urlsafe(32)
     session['oauth_state'] = state
+    if request.args.get('next') and _is_safe_redirect(request.args['next']):
+        session['login_next'] = request.args['next']
 
     redirect_uri = url_for('auth.google_callback', _external=True)
     params = {
@@ -132,7 +146,8 @@ def google_callback():
         return redirect(url_for('auth.login'))
 
     login_user(user)
-    return redirect(url_for('main.index'))
+    next_url = session.pop('login_next', None)
+    return redirect(next_url if next_url and _is_safe_redirect(next_url) else url_for('main.index'))
 
 
 @bp.route('/logout')

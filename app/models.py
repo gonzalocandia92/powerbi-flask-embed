@@ -6,7 +6,11 @@ Domain hierarchy:
   Report (M) ↔ (N) Empresa
 """
 from datetime import datetime, timezone
+import hashlib
+import secrets
+import uuid
 import sqlalchemy as sa
+from authlib.oauth2.rfc6749 import AuthorizationCodeMixin, ClientMixin, TokenMixin
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
 from cryptography.fernet import Fernet, InvalidToken
@@ -37,6 +41,20 @@ fernet = Fernet(FERNET_KEY.encode() if isinstance(FERNET_KEY, str) else FERNET_K
 def _utcnow():
     """Return current UTC time (timezone-aware)."""
     return datetime.now(timezone.utc)
+
+
+def _as_utc(value):
+    if value is None or value.tzinfo is not None:
+        return value
+    return value.replace(tzinfo=timezone.utc)
+
+
+def _uuid4():
+    return str(uuid.uuid4())
+
+
+def _bigint_pk():
+    return db.BigInteger().with_variant(db.Integer, 'sqlite')
 
 
 # Association table for many-to-many relationship between User and Role
@@ -102,13 +120,19 @@ class User(db.Model, UserMixin):
     username = db.Column(db.String(120), unique=True, nullable=False)
     email = db.Column(db.String(254), unique=True, nullable=True, index=True)
     password_hash = db.Column(db.String(256), nullable=True)
-    is_admin = db.Column(db.Boolean, default=True)
+    is_admin = db.Column(db.Boolean, default=False, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     # Relationships
     roles = db.relationship('Role', secondary='user_role', back_populates='users')
+    empresa_memberships = db.relationship(
+        'UserEmpresa', back_populates='user', cascade='all, delete-orphan'
+    )
+    mcp_grants = db.relationship(
+        'McpModelGrant', back_populates='user', cascade='all, delete-orphan'
+    )
 
     def set_password(self, password):
         """Hash and store the password."""
@@ -295,6 +319,12 @@ class Empresa(db.Model):
     reports_facturados = db.relationship('Report', foreign_keys='Report.empresa_facturadora_id', back_populates='empresa_facturadora')
     whatsapp_authorized_numbers = db.relationship(
         'WhatsAppAuthorizedNumber', back_populates='empresa', cascade='all, delete-orphan'
+    )
+    user_memberships = db.relationship(
+        'UserEmpresa', back_populates='empresa', cascade='all, delete-orphan'
+    )
+    mcp_config_links = db.relationship(
+        'McpConfigEmpresa', back_populates='empresa', cascade='all, delete-orphan'
     )
 
 
@@ -709,6 +739,7 @@ class McpAgentConfig(db.Model):
     __tablename__ = 'mcp_agent_configs'
 
     id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, default=_uuid4, index=True)
     api_key_hash = db.Column(db.String(256), unique=True, nullable=False, index=True)
     
     # Contexto Power BI
@@ -716,11 +747,307 @@ class McpAgentConfig(db.Model):
     workspace_name = db.Column(db.String(200), nullable=False)
     dataset_id = db.Column(db.String(120), nullable=False)
     dataset_name = db.Column(db.String(200), nullable=False)
+    model_key = db.Column(db.String(200), nullable=True, index=True)
+    description = db.Column(db.Text, nullable=True)
+    domain = db.Column(db.String(200), nullable=True)
+    workspace_id_fk = db.Column(
+        db.BigInteger, db.ForeignKey('workspaces.id', ondelete='SET NULL'), nullable=True
+    )
+    credential_report_id_fk = db.Column(
+        db.BigInteger, db.ForeignKey('reports.id', ondelete='SET NULL'), nullable=True
+    )
     
     # Opcional: Para auditoría o facturación
     empresa_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='SET NULL'), nullable=True)
     
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     
     empresa = db.relationship('Empresa')
+    workspace = db.relationship('Workspace')
+    credential_report = db.relationship('Report')
+    empresa_links = db.relationship(
+        'McpConfigEmpresa', back_populates='config', cascade='all, delete-orphan'
+    )
+    grants = db.relationship(
+        'McpModelGrant', back_populates='config', cascade='all, delete-orphan'
+    )
+
+
+class UserEmpresa(db.Model):
+    """Explicit company membership used as the MCP tenancy boundary."""
+
+    __tablename__ = 'user_empresa'
+
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), primary_key=True)
+    empresa_id = db.Column(
+        db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='CASCADE'), primary_key=True
+    )
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    user = db.relationship('User', back_populates='empresa_memberships')
+    empresa = db.relationship('Empresa', back_populates='user_memberships')
+
+
+class McpConfigEmpresa(db.Model):
+    """Companies in which a semantic model can be granted."""
+
+    __tablename__ = 'mcp_config_empresas'
+
+    config_id = db.Column(
+        _bigint_pk(), db.ForeignKey('mcp_agent_configs.id', ondelete='CASCADE'), primary_key=True
+    )
+    empresa_id = db.Column(
+        db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='CASCADE'), primary_key=True
+    )
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    config = db.relationship('McpAgentConfig', back_populates='empresa_links')
+    empresa = db.relationship('Empresa', back_populates='mcp_config_links')
+
+
+mcp_model_role_permission = db.Table(
+    'mcp_model_role_permissions',
+    db.Column(
+        'role_id', _bigint_pk(), db.ForeignKey('mcp_model_roles.id', ondelete='CASCADE'), primary_key=True
+    ),
+    db.Column(
+        'permission_id',
+        _bigint_pk(),
+        db.ForeignKey('permissions.id', ondelete='CASCADE'),
+        primary_key=True,
+    ),
+)
+
+
+class McpModelRole(db.Model):
+    """Model-scoped role, intentionally separate from backoffice roles."""
+
+    __tablename__ = 'mcp_model_roles'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    name = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    description = db.Column(db.String(500), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    permissions = db.relationship('Permission', secondary=mcp_model_role_permission)
+    grants = db.relationship('McpModelGrant', back_populates='role')
+
+    def has_permission(self, permission_name):
+        return any(permission.name == permission_name for permission in self.permissions)
+
+
+class McpModelGrant(db.Model):
+    """A user's permission set for one model in one company context."""
+
+    __tablename__ = 'mcp_model_grants'
+    __table_args__ = (
+        db.UniqueConstraint(
+            'user_id', 'config_id', 'empresa_id', name='uq_mcp_grant_user_config_empresa'
+        ),
+    )
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, default=_uuid4, index=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    config_id = db.Column(
+        _bigint_pk(), db.ForeignKey('mcp_agent_configs.id', ondelete='CASCADE'), nullable=False
+    )
+    empresa_id = db.Column(
+        db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='CASCADE'), nullable=False
+    )
+    role_id = db.Column(
+        _bigint_pk(), db.ForeignKey('mcp_model_roles.id', ondelete='RESTRICT'), nullable=False
+    )
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    user = db.relationship('User', back_populates='mcp_grants')
+    config = db.relationship('McpAgentConfig', back_populates='grants')
+    empresa = db.relationship('Empresa')
+    role = db.relationship('McpModelRole', back_populates='grants')
+
+
+class McpOAuthClient(db.Model, ClientMixin):
+    """Pre-registered OAuth client. Dynamic client registration is not supported."""
+
+    __tablename__ = 'mcp_oauth_clients'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    client_id = db.Column(db.String(120), unique=True, nullable=False, index=True)
+    client_secret_hash = db.Column(db.String(256), nullable=False)
+    name = db.Column(db.String(200), nullable=False)
+    redirect_uris = db.Column(db.JSON, nullable=False, default=list)
+    allowed_scopes = db.Column(db.JSON, nullable=False, default=list)
+    grant_types = db.Column(db.JSON, nullable=False, default=lambda: ['authorization_code', 'refresh_token'])
+    response_types = db.Column(db.JSON, nullable=False, default=lambda: ['code'])
+    token_endpoint_auth_method = db.Column(db.String(40), nullable=False, default='client_secret_basic')
+    is_active = db.Column(db.Boolean, default=True, nullable=False)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    def get_client_id(self):
+        return self.client_id
+
+    def get_default_redirect_uri(self):
+        return (self.redirect_uris or [None])[0]
+
+    def get_allowed_scope(self, scope):
+        requested = (scope or ' '.join(self.allowed_scopes or [])).split()
+        allowed = set(self.allowed_scopes or [])
+        return ' '.join(item for item in requested if item in allowed)
+
+    def check_redirect_uri(self, redirect_uri):
+        return redirect_uri in (self.redirect_uris or [])
+
+    def set_client_secret(self, raw_secret):
+        self.client_secret_hash = generate_password_hash(raw_secret)
+
+    def check_client_secret(self, client_secret):
+        return bool(client_secret) and check_password_hash(self.client_secret_hash, client_secret)
+
+    def check_endpoint_auth_method(self, method, endpoint):
+        return endpoint != 'token' or secrets.compare_digest(self.token_endpoint_auth_method, method)
+
+    def check_response_type(self, response_type):
+        return response_type in (self.response_types or [])
+
+    def check_grant_type(self, grant_type):
+        return grant_type in (self.grant_types or [])
+
+
+class McpOAuthAuthorizationRequest(db.Model):
+    """Short-lived, single-use authorization state kept server-side."""
+
+    __tablename__ = 'mcp_oauth_authorization_requests'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    request_id = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    client_id = db.Column(db.String(120), nullable=False, index=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    resource = db.Column(db.String(2048), nullable=False)
+    request_uri = db.Column(db.Text, nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    consumed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+
+
+class McpAuthorizationCode(db.Model, AuthorizationCodeMixin):
+    __tablename__ = 'mcp_authorization_codes'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    code_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    client_id = db.Column(db.String(120), nullable=False, index=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    resource = db.Column(db.String(2048), nullable=False)
+    redirect_uri = db.Column(db.Text, nullable=True)
+    scope = db.Column(db.Text, nullable=True)
+    nonce = db.Column(db.String(255), nullable=True)
+    code_challenge = db.Column(db.String(255), nullable=True)
+    code_challenge_method = db.Column(db.String(20), nullable=True)
+    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    consumed_at = db.Column(db.DateTime(timezone=True), nullable=True)
+
+    user = db.relationship('User')
+
+    @staticmethod
+    def digest(value):
+        return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+    def get_redirect_uri(self):
+        return self.redirect_uri
+
+    def get_scope(self):
+        return self.scope
+
+    def get_auth_time(self):
+        return int(self.created_at.timestamp())
+
+    def get_nonce(self):
+        return self.nonce
+
+
+class McpOAuthSession(db.Model):
+    __tablename__ = 'mcp_oauth_sessions'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    public_id = db.Column(db.String(36), unique=True, nullable=False, default=_uuid4, index=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    client_id = db.Column(db.String(120), nullable=False, index=True)
+    resource = db.Column(db.String(2048), nullable=False, index=True)
+    scope = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+    last_used_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+    revoked_at = db.Column(db.DateTime(timezone=True), nullable=True, index=True)
+    revoke_reason = db.Column(db.String(200), nullable=True)
+
+    user = db.relationship('User')
+
+    @property
+    def is_active(self):
+        return self.revoked_at is None and bool(self.user and self.user.is_active)
+
+
+class McpRefreshToken(db.Model, TokenMixin):
+    __tablename__ = 'mcp_refresh_tokens'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    token_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    session_id = db.Column(
+        _bigint_pk(), db.ForeignKey('mcp_oauth_sessions.id', ondelete='CASCADE'), nullable=False
+    )
+    family_id = db.Column(db.String(36), nullable=False, default=_uuid4, index=True)
+    client_id = db.Column(db.String(120), nullable=False, index=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='CASCADE'), nullable=False)
+    resource = db.Column(db.String(2048), nullable=False)
+    scope = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False)
+    expires_at = db.Column(db.DateTime(timezone=True), nullable=False)
+    revoked_at = db.Column(db.DateTime(timezone=True), nullable=True)
+    replaced_by_hash = db.Column(db.String(64), nullable=True)
+
+    oauth_session = db.relationship('McpOAuthSession')
+    user = db.relationship('User')
+
+    @staticmethod
+    def digest(value):
+        return hashlib.sha256(value.encode('utf-8')).hexdigest()
+
+    def check_client(self, client):
+        return self.client_id == client.get_client_id()
+
+    def get_scope(self):
+        return self.scope
+
+    def get_expires_in(self):
+        return max(0, int((_as_utc(self.expires_at) - _utcnow()).total_seconds()))
+
+    def is_expired(self):
+        return _as_utc(self.expires_at) <= _utcnow()
+
+    def is_revoked(self):
+        return self.revoked_at is not None or not self.oauth_session.is_active
+
+    def get_user(self):
+        return self.user
+
+    def get_client(self):
+        return McpOAuthClient.query.filter_by(client_id=self.client_id).first()
+
+
+class McpSecurityAuditLog(db.Model):
+    __tablename__ = 'mcp_security_audit_log'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    event_type = db.Column(db.String(120), nullable=False, index=True)
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    client_id = db.Column(db.String(120), nullable=True, index=True)
+    session_public_id = db.Column(db.String(36), nullable=True, index=True)
+    grant_public_id = db.Column(db.String(36), nullable=True, index=True)
+    empresa_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='SET NULL'))
+    outcome = db.Column(db.String(40), nullable=False, default='success')
+    details = db.Column(db.JSON, nullable=False, default=dict)
+    created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False, index=True)

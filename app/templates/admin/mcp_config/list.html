@@ -37,8 +37,7 @@
               <th>Estado</th>
               <th>Workspace</th>
               <th>Dataset</th>
-              <th>Empresa</th>
-              <th>API key hash</th>
+              <th>Empresas habilitadas</th>
               <th>Creada</th>
               <th class="text-center">Acciones</th>
             </tr>
@@ -61,8 +60,13 @@
                 <div class="fw-medium">{{ config.dataset_name }}</div>
                 <code class="small">{{ config.dataset_id }}</code>
               </td>
-              <td>{{ config.empresa.nombre if config.empresa else 'Sin empresa' }}</td>
-              <td><code>{{ hash_fingerprint(config.api_key_hash) }}</code></td>
+              <td>
+                {% for link in config.empresa_links %}
+                  <span class="badge bg-light text-dark border">{{ link.empresa.nombre }}</span>
+                {% else %}
+                  <span class="badge bg-danger-subtle text-danger">Sin empresas</span>
+                {% endfor %}
+              </td>
               <td>{{ config.created_at.strftime('%Y-%m-%d %H:%M') if config.created_at else '-' }}</td>
               <td class="text-center">
                 <div class="btn-group" role="group">

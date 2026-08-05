@@ -4,42 +4,35 @@
 
 {% block body %}
 <div class="container-fluid py-4">
-  <div class="row">
+  <div class="row g-4">
     <div class="col-md-8">
-      <div class="card">
+      <div class="card h-100">
         <div class="card-header">
-          <h5 class="mb-0">
-            <i class="bi bi-hdd-network me-2"></i>MCP Config #{{ config.id }}
-          </h5>
+          <h5 class="mb-0"><i class="bi bi-hdd-network me-2"></i>MCP Config #{{ config.id }}</h5>
         </div>
         <div class="card-body">
           <dl class="row mb-0">
             <dt class="col-sm-3">Estado</dt>
             <dd class="col-sm-9">
-              {% if config.is_active %}
-                <span class="badge bg-success">Activa</span>
-              {% else %}
-                <span class="badge bg-secondary">Inactiva</span>
-              {% endif %}
+              <span class="badge {{ 'bg-success' if config.is_active else 'bg-secondary' }}">
+                {{ 'Activa' if config.is_active else 'Inactiva' }}
+              </span>
             </dd>
 
             <dt class="col-sm-3">Workspace</dt>
-            <dd class="col-sm-9">
-              <div>{{ config.workspace_name }}</div>
-              <code>{{ config.workspace_id }}</code>
-            </dd>
+            <dd class="col-sm-9"><div>{{ config.workspace_name }}</div><code>{{ config.workspace_id }}</code></dd>
 
             <dt class="col-sm-3">Dataset</dt>
+            <dd class="col-sm-9"><div>{{ config.dataset_name }}</div><code>{{ config.dataset_id }}</code></dd>
+
+            <dt class="col-sm-3">Empresas habilitadas</dt>
             <dd class="col-sm-9">
-              <div>{{ config.dataset_name }}</div>
-              <code>{{ config.dataset_id }}</code>
+              {% for link in config.empresa_links %}
+                <span class="badge bg-light text-dark border">{{ link.empresa.nombre }}</span>
+              {% else %}
+                <span class="text-danger">Sin empresas; este modelo no puede recibir accesos.</span>
+              {% endfor %}
             </dd>
-
-            <dt class="col-sm-3">Empresa</dt>
-            <dd class="col-sm-9">{{ config.empresa.nombre if config.empresa else 'Sin empresa' }}</dd>
-
-            <dt class="col-sm-3">API key hash</dt>
-            <dd class="col-sm-9"><code>{{ hash_fingerprint(config.api_key_hash) }}</code></dd>
 
             <dt class="col-sm-3">Creada</dt>
             <dd class="col-sm-9">{{ config.created_at.strftime('%Y-%m-%d %H:%M') if config.created_at else '-' }}</dd>
@@ -50,15 +43,11 @@
 
     <div class="col-md-4">
       <div class="card">
-        <div class="card-header">
-          <h6 class="mb-0">
-            <i class="bi bi-lightning me-2"></i>Acciones
-          </h6>
-        </div>
+        <div class="card-header"><h6 class="mb-0"><i class="bi bi-lightning me-2"></i>Acciones</h6></div>
         <div class="card-body">
           <div class="d-grid gap-2">
             <a href="{{ url_for('mcp_config.edit', config_id=config.id) }}" class="btn btn-outline-secondary">
-              <i class="bi bi-pencil me-2"></i>Editar
+              <i class="bi bi-pencil me-2"></i>Editar configuración
             </a>
             <form method="post" action="{{ url_for('mcp_config.toggle_active', config_id=config.id) }}">
               <button type="submit" class="btn btn-outline-primary w-100">
@@ -69,11 +58,98 @@
               <i class="bi bi-arrow-left me-2"></i>Volver al listado
             </a>
             <hr>
-            <form method="post" action="{{ url_for('mcp_config.delete', config_id=config.id) }}" onsubmit="return confirm('Eliminar esta configuracion MCP?');">
-              <button type="submit" class="btn btn-outline-danger w-100">
-                <i class="bi bi-trash me-2"></i>Eliminar
-              </button>
+            <form method="post" action="{{ url_for('mcp_config.delete', config_id=config.id) }}" onsubmit="return confirm('¿Eliminar esta configuración MCP?');">
+              <button type="submit" class="btn btn-outline-danger w-100"><i class="bi bi-trash me-2"></i>Eliminar</button>
             </form>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-4 mt-1">
+    <div class="col-lg-5">
+      <div class="card">
+        <div class="card-header"><strong>Empresas habilitadas para este modelo</strong></div>
+        <div class="card-body">
+          <p class="text-muted small">
+            Habilitar una empresa permite asignar este modelo a sus usuarios. No asigna usuarios automáticamente.
+          </p>
+          <div class="list-group mb-3">
+            {% for link in config.empresa_links %}
+            <div class="list-group-item d-flex justify-content-between align-items-center">
+              <span>{{ link.empresa.nombre }}</span>
+              <form method="post" action="{{ url_for('mcp_config.remove_company', config_id=config.id, empresa_id=link.empresa_id) }}" onsubmit="return confirm('¿Deshabilitar esta empresa? Sus accesos a este modelo serán revocados.');">
+                <button type="submit" class="btn btn-sm btn-outline-danger" title="Deshabilitar empresa">
+                  <i class="bi bi-x-lg"></i>
+                </button>
+              </form>
+            </div>
+            {% else %}
+            <div class="list-group-item text-danger">Todavía no hay empresas habilitadas.</div>
+            {% endfor %}
+          </div>
+          <form method="post" action="{{ url_for('mcp_config.add_company', config_id=config.id) }}" class="d-flex gap-2">
+            <select name="empresa_id" class="form-select" aria-label="Empresa a habilitar" required>
+              <option value="" selected disabled>Seleccionar empresa…</option>
+              {% for empresa in empresas %}
+                {% if empresa.id not in enabled_company_ids %}
+                <option value="{{ empresa.id }}">{{ empresa.nombre }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+            <button type="submit" class="btn btn-outline-primary">Habilitar</button>
+          </form>
+        </div>
+      </div>
+
+      <details class="card mt-4">
+        <summary class="card-header fw-semibold">Compatibilidad legacy con API key</summary>
+        <div class="card-body small">
+          <p class="text-muted">Estos valores no controlan OAuth ni los accesos de usuarios.</p>
+          <dl class="row mb-0">
+            <dt class="col-sm-5">Empresa legacy</dt>
+            <dd class="col-sm-7">{{ config.empresa.nombre if config.empresa else 'Sin empresa' }}</dd>
+            <dt class="col-sm-5">API key hash</dt>
+            <dd class="col-sm-7"><code>{{ hash_fingerprint(config.api_key_hash) }}</code></dd>
+          </dl>
+        </div>
+      </details>
+    </div>
+
+    <div class="col-lg-7">
+      <div class="card">
+        <div class="card-header d-flex justify-content-between align-items-center">
+          <strong>Resumen de accesos de usuarios</strong>
+          <span class="badge bg-light text-dark">Sólo lectura</span>
+        </div>
+        <div class="card-body">
+          <p class="text-muted small">
+            Los roles MCP y la pertenencia a empresas se editan desde el acceso de cada usuario.
+          </p>
+          <div class="table-responsive">
+            <table class="table table-sm align-middle">
+              <thead><tr><th>Usuario</th><th>Empresa</th><th>Rol MCP</th><th>Estado</th><th></th></tr></thead>
+              <tbody>
+                {% for grant in config.grants|sort(attribute='user.username') %}
+                <tr>
+                  <td>{{ grant.user.username }}</td>
+                  <td>{{ grant.empresa.nombre }}</td>
+                  <td>{{ grant.role.name }}</td>
+                  <td>
+                    <span class="badge {{ 'bg-success' if grant.is_active else 'bg-secondary' }}">
+                      {{ 'Activo' if grant.is_active else 'Revocado' }}
+                    </span>
+                  </td>
+                  <td class="text-end">
+                    <a href="{{ url_for('users.manage_access', user_id=grant.user_id) }}" class="btn btn-sm btn-outline-primary">Gestionar acceso</a>
+                  </td>
+                </tr>
+                {% else %}
+                <tr><td colspan="5" class="text-muted text-center py-3">No hay accesos asignados a este modelo.</td></tr>
+                {% endfor %}
+              </tbody>
+            </table>
           </div>
         </div>
       </div>
