@@ -17,7 +17,17 @@ from wtforms import (
     SubmitField,
     TextAreaField,
 )
-from wtforms.validators import DataRequired, Length, NumberRange, Optional
+
+from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional, ValidationError
+
+from app.utils.powerbi import MCP_API_KEY_PREFIX
+
+
+def _validate_mcp_key_prefix(_form, field):
+    value = (field.data or "").strip()
+    if value and not value.startswith(MCP_API_KEY_PREFIX):
+        raise ValidationError(f"La API key debe empezar con {MCP_API_KEY_PREFIX}")
+
 
 
 class LoginForm(FlaskForm):
@@ -146,6 +156,52 @@ class PublicUrlLinkForm(FlaskForm):
     )
     allow_refresh = BooleanField('Permitir actualización de datos', default=False)
     submit = SubmitField("Crear Link Público")
+
+
+class McpConfigCreateForm(FlaskForm):
+    """Form for creating MCP agent configuration from a Power BI report URL."""
+
+    report_url = StringField(
+        "URL canonica del reporte Power BI",
+        validators=[DataRequired(), Length(max=2000)],
+        description="Formato esperado: https://app.powerbi.com/groups/{workspace_id}/reports/{report_id}/...",
+    )
+    api_key = PasswordField(
+        "API key MCP",
+        validators=[DataRequired(), Length(max=512), _validate_mcp_key_prefix],
+        description=f"Debe empezar con {MCP_API_KEY_PREFIX}. Se guarda solamente el hash SHA-256.",
+    )
+    empresa_id = SelectField(
+        "Empresa legacy para API key",
+        coerce=int,
+        validators=[Optional()],
+        choices=[],
+    )
+    is_active = BooleanField("Configuracion activa", default=True)
+    submit = SubmitField("Crear configuracion")
+
+
+class McpConfigEditForm(FlaskForm):
+    """Form for editing MCP agent configuration."""
+
+    report_url = StringField(
+        "URL canonica del reporte Power BI",
+        validators=[Optional(), Length(max=2000)],
+        description="Opcional. Si se informa, refresca workspace/dataset desde Power BI.",
+    )
+    api_key = PasswordField(
+        "Nueva API key MCP",
+        validators=[Optional(), Length(max=512), _validate_mcp_key_prefix],
+        description=f"Dejar vacia para conservar el hash actual. Si se cambia, debe empezar con {MCP_API_KEY_PREFIX}.",
+    )
+    empresa_id = SelectField(
+        "Empresa legacy para API key",
+        coerce=int,
+        validators=[Optional()],
+        choices=[],
+    )
+    is_active = BooleanField("Configuracion activa", default=True)
+    submit = SubmitField("Guardar cambios")
 
 
 class FuturaEmpresaForm(FlaskForm):
@@ -363,3 +419,45 @@ class AnalyticsSkillForm(FlaskForm):
     validation_notes = TextAreaField("Notas de validacion", validators=[Optional()])
     is_active = BooleanField("Skill activa", default=True)
     submit = SubmitField("Guardar skill")
+
+
+class UserForm(FlaskForm):
+    """Form for creating/editing application users."""
+
+    username = StringField("Usuario", validators=[DataRequired(), Length(min=3, max=120)])
+    email = StringField("Email", validators=[Optional(), Email(), Length(max=254)])
+    password = PasswordField("Contraseña", validators=[Optional(), Length(min=6)])
+    password_confirm = PasswordField("Confirmar Contraseña", validators=[Optional()])
+    is_admin = BooleanField("Es Administrador")
+    is_active = BooleanField("Activo", default=True)
+    submit = SubmitField("Guardar")
+
+
+class UserRoleForm(FlaskForm):
+    """Form for assigning roles to users."""
+
+    roles = SelectMultipleField("Roles", coerce=int, validators=[])
+    submit = SubmitField("Asignar Roles")
+
+
+class RoleForm(FlaskForm):
+    """Form for creating/editing roles."""
+
+    name = StringField("Nombre del Rol", validators=[DataRequired(), Length(min=3, max=120)])
+    description = StringField("Descripción", validators=[Optional(), Length(max=500)])
+    submit = SubmitField("Guardar")
+
+
+class PermissionForm(FlaskForm):
+    """Form for creating/editing permissions."""
+
+    name = StringField("Nombre del Permiso", validators=[DataRequired(), Length(min=3, max=120)])
+    description = StringField("Descripción", validators=[Optional(), Length(max=500)])
+    submit = SubmitField("Guardar")
+
+
+class RolePermissionForm(FlaskForm):
+    """Form for assigning permissions to roles."""
+
+    permissions = SelectMultipleField("Permisos", coerce=int, validators=[])
+    submit = SubmitField("Asignar Permisos")

@@ -26,12 +26,13 @@ instance/
 # VSCode settings
 .vscode/
 .env*
+!.env.example
 
 # SQLite database files
 *.db
 *.db-journal
 *.sqlite
-*.sqlite3=2.7.0
+*.sqlite3
 .env
 
 #GenAi
@@ -49,3 +50,7 @@ agent_core_debug.txt
 .evolution-db/
 .evolution-redis/
 .evolution-redis/
+
+# MCP build artifacts
+services/mcp_aklara/lib/
+Microsoft.AnalysisServices*.zip

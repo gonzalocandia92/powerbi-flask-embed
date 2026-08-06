@@ -839,11 +839,6 @@ def _skill_import_query_for_natural_key(data):
 
 
 def _find_skill_for_import(data):
-    import_id = data.get("import_id")
-    if import_id:
-        skill = AnalyticsSkill.query.get(import_id)
-        if skill:
-            return skill
     return _skill_import_query_for_natural_key(data).first()
 
 

@@ -11,6 +11,12 @@ from app.utils.decorators import retry_on_db_error
 bp = Blueprint('main', __name__)
 
 
+@bp.route('/healthz')
+def healthz():
+    """Lightweight container health check that does not query the database."""
+    return {'status': 'ok'}
+
+
 @bp.route('/')
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)

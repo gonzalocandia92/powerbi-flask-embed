@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+{% block title %}Autorizar acceso MCP{% endblock %}
+{% block body %}
+<div class="container py-5" style="max-width: 680px;">
+  <div class="card shadow-sm">
+    <div class="card-body p-4">
+      <h1 class="h4 mb-3">Autorizar {{ client.name }}</h1>
+      <p>Esta aplicación solicita acceso a los modelos semánticos que te hayan asignado.</p>
+      <ul class="mb-4">
+        {% for scope in scopes %}<li><code>{{ scope }}</code></li>{% endfor %}
+      </ul>
+      <form method="post" action="{{ url_for('mcp_oauth.authorize') }}">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <input type="hidden" name="request_id" value="{{ request_id }}">
+        {% for key in oauth_parameters %}
+          {% for value in oauth_parameters.getlist(key) %}
+          <input type="hidden" name="{{ key }}" value="{{ value }}">
+          {% endfor %}
+        {% endfor %}
+        <button class="btn btn-primary" name="decision" value="approve" type="submit">Autorizar</button>
+        <button class="btn btn-outline-secondary" name="decision" value="deny" type="submit">Cancelar</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
