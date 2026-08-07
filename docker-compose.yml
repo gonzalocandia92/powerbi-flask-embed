@@ -1,11 +1,85 @@
 services:
   flask-powerbi:
-    build: .
-    container_name: flask_powerbi_embed
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
-      - "2052:2052"
+      - "127.0.0.1:${FLASK_HOST_PORT:-2052}:2052"
     env_file:
       - .env
-    volumes:
-      - .:/app
+    environment:
+      MCP_INTERNAL_REQUIRE_MTLS: "${MCP_INTERNAL_REQUIRE_MTLS:-false}"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:2052/healthz', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - edge
+      - broker
     restart: unless-stopped
+
+  mcp-aklara:
+    build:
+      context: .
+      dockerfile: services/mcp_aklara/Dockerfile
+    ports:
+      - "127.0.0.1:${MCP_HOST_PORT:-8000}:8000"
+    environment:
+      MCP_OAUTH_ISSUER: "${MCP_OAUTH_ISSUER:-http://localhost:2052}"
+      MCP_PUBLIC_URL: "${MCP_PUBLIC_URL:-http://localhost:8000/mcp}"
+      MCP_ALLOWED_HOSTS: "${MCP_ALLOWED_HOSTS:-}"
+      MCP_ALLOWED_ORIGINS: "${MCP_ALLOWED_ORIGINS:-https://claude.ai,https://claude.com}"
+      MCP_BROKER_URL: "${MCP_BROKER_URL_DOCKER:-http://flask-powerbi:2052}"
+      MCP_INTERNAL_JWT_SECRET: "${MCP_INTERNAL_JWT_SECRET:?Set MCP_INTERNAL_JWT_SECRET to a 32+ byte random value}"
+      MCP_SERVICE_ID: "${MCP_SERVICE_ID:-mcp-aklara}"
+      MCP_ENABLE_LEGACY_API_KEYS: "${MCP_ENABLE_LEGACY_API_KEYS:-true}"
+      SQLALCHEMY_DATABASE_URI: "${SQLALCHEMY_DATABASE_URI}"
+      POWERBI_CLIENT_ID: "${POWERBI_CLIENT_ID:-}"
+      POWERBI_CLIENT_SECRET: "${POWERBI_CLIENT_SECRET:-}"
+      POWERBI_TENANT_ID: "${POWERBI_TENANT_ID:-}"
+      MCP_API_KEY: "${MCP_API_KEY:-}"
+      MCP_INTERNAL_CLIENT_CERT: "${MCP_INTERNAL_CLIENT_CERT:-}"
+      MCP_INTERNAL_CLIENT_KEY: "${MCP_INTERNAL_CLIENT_KEY:-}"
+    depends_on:
+      flask-powerbi:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=5)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - edge
+      - broker
+    restart: unless-stopped
+
+  gateway:
+    image: nginx:alpine
+    ports:
+      - "127.0.0.1:${GATEWAY_HOST_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx.local.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      flask-powerbi:
+        condition: service_healthy
+      mcp-aklara:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    networks:
+      - edge
+    restart: unless-stopped
+
+networks:
+  edge:
+    driver: bridge
+  broker:
+    driver: bridge
+    internal: true

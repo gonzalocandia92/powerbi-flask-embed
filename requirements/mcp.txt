@@ -1,0 +1,8 @@
+-r common.txt
+
+fastapi>=0.139.2
+fastmcp>=3.4.4,<3.5
+httpx>=0.28.1
+pydantic-settings>=2.14.2
+pythonnet>=3.1.0
+uvicorn>=0.51.0
