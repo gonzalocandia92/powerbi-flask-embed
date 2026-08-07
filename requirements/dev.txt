@@ -1,0 +1,2 @@
+-r web.txt
+-r mcp.txt

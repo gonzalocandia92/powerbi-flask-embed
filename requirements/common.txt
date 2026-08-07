@@ -1,0 +1,7 @@
+SQLAlchemy>=2.0.51
+psycopg2-binary>=2.9.12
+python-dotenv>=1.2.2
+cryptography>=41.0
+PyJWT>=2.10.1
+msal>=1.37.0
+mcp>=1.28.1,<2
