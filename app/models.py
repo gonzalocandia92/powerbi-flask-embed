@@ -756,6 +756,12 @@ class McpAgentConfig(db.Model):
     credential_report_id_fk = db.Column(
         db.BigInteger, db.ForeignKey('reports.id', ondelete='SET NULL'), nullable=True
     )
+    skill_report_id_fk = db.Column(
+        db.BigInteger,
+        db.ForeignKey('reports.id', ondelete='SET NULL'),
+        nullable=True,
+        index=True,
+    )
     
     # Opcional: Para auditoría o facturación
     empresa_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='SET NULL'), nullable=True)
@@ -766,7 +772,10 @@ class McpAgentConfig(db.Model):
     
     empresa = db.relationship('Empresa')
     workspace = db.relationship('Workspace')
-    credential_report = db.relationship('Report')
+    credential_report = db.relationship(
+        'Report', foreign_keys=[credential_report_id_fk]
+    )
+    skill_report = db.relationship('Report', foreign_keys=[skill_report_id_fk])
     empresa_links = db.relationship(
         'McpConfigEmpresa', back_populates='config', cascade='all, delete-orphan'
     )

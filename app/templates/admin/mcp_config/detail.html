@@ -25,6 +25,16 @@
             <dt class="col-sm-3">Dataset</dt>
             <dd class="col-sm-9"><div>{{ config.dataset_name }}</div><code>{{ config.dataset_id }}</code></dd>
 
+            <dt class="col-sm-3">Contexto de skills</dt>
+            <dd class="col-sm-9">
+              <span class="{{ 'text-danger' if skill_context.is_error else '' }}">
+                {{ skill_context.message }}
+              </span>
+              {% if skill_context.association_count %}
+                <small class="text-muted d-block">Reportes asociados al dataset: {{ skill_context.association_count }}</small>
+              {% endif %}
+            </dd>
+
             <dt class="col-sm-3">Empresas habilitadas</dt>
             <dd class="col-sm-9">
               {% for link in config.empresa_links %}

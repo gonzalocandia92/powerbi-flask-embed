@@ -1,4 +1,5 @@
 """Private broker API used by mcp-aklara; never expose it directly."""
+import asyncio
 
 from datetime import datetime, timezone
 from functools import wraps
@@ -10,6 +11,18 @@ from app import csrf, db, limiter
 from app.models import McpSecurityAuditLog
 from app.services.mcp_access_service import list_user_grants, resolve_grant
 from app.services.mcp_jwt_service import audit, validate_access_token
+from app.services.mcp_skill_service import (
+    SkillReportContextError,
+    SkillSelectionProviderError,
+    list_grant_skills,
+    resolve_mcp_skill_scope,
+    select_grant_skills,
+)
+from app.services.mcp_schema_service import get_grant_relevant_schema
+from app.services.schema_retrieval_service import (
+    RelevantSchemaProviderError,
+    SchemaEmbeddingsUnavailable,
+)
 from app.utils.powerbi import _get_access_token
 
 
@@ -111,6 +124,7 @@ def resolve_access():
     body = request.get_json(silent=True) or {}
     scope_by_permission = {
         'mcp.model.schema.read': 'mcp:models:read',
+        'mcp.model.skills.read': 'mcp:models:read',
         'mcp.model.query.execute': 'mcp:models:query',
         'mcp.model.measure.create': 'mcp:models:write',
         'mcp.model.measure.update': 'mcp:models:write',
@@ -157,6 +171,325 @@ def resolve_access():
         'permissions': sorted(permissions),
         'powerbi_access_token': powerbi_token,
     }), 200, {'Cache-Control': 'no-store', 'Pragma': 'no-cache'}
+
+
+def _authorized_skill_grant(body):
+    auth, error = _user_token(['mcp:models:read'])
+    if error:
+        return None, None, error
+    claims, oauth_session = auth
+    grant_public_id = body.get('grant_public_id')
+    if not isinstance(grant_public_id, str) or not grant_public_id.strip():
+        return None, oauth_session, (jsonify({'error': 'grant_public_id_required'}), 400)
+    grant, reason = resolve_grant(
+        int(claims['sub']), grant_public_id, 'mcp.model.skills.read'
+    )
+    if grant is None:
+        audit(
+            'mcp.access.denied', oauth_session=oauth_session, outcome='denied',
+            details={'reason': reason, 'grant_public_id': grant_public_id},
+        )
+        db.session.commit()
+        status = 403 if reason == 'permission_denied' else 404
+        return None, oauth_session, (jsonify({'error': reason}), status)
+    return grant, oauth_session, None
+
+
+def _authorized_schema_grant(body):
+    auth, error = _user_token(['mcp:models:read'])
+    if error:
+        return None, None, error
+    claims, oauth_session = auth
+    grant_public_id = body.get('grant_public_id')
+    if not isinstance(grant_public_id, str) or not grant_public_id.strip():
+        return None, oauth_session, (jsonify({'error': 'grant_public_id_required'}), 400)
+    grant, reason = resolve_grant(
+        int(claims['sub']), grant_public_id, 'mcp.model.schema.read'
+    )
+    if grant is None:
+        audit(
+            'mcp.access.denied', oauth_session=oauth_session, outcome='denied',
+            details={'reason': reason, 'grant_public_id': grant_public_id},
+        )
+        db.session.commit()
+        status = 403 if reason == 'permission_denied' else 404
+        return None, oauth_session, (jsonify({'error': reason}), status)
+    return grant, oauth_session, None
+
+
+def _skill_context_audit_details(resolution=None):
+    if resolution is None:
+        return {}
+    return {
+        'report_context_source': resolution.source,
+        'report_association_count': resolution.association_count,
+    }
+
+
+@bp.route('/list-skills', methods=['POST'])
+@csrf.exempt
+@limiter.limit('300 per minute')
+@_service_required
+def list_skills():
+    body = request.get_json(silent=True) or {}
+    grant, oauth_session, error = _authorized_skill_grant(body)
+    if error:
+        return error
+    domain_key = body.get('domain_key')
+    if domain_key is not None and not isinstance(domain_key, str):
+        return jsonify({'error': 'invalid_domain_key'}), 400
+
+    resolution = None
+    try:
+        resolution = resolve_mcp_skill_scope(grant.config, grant.empresa_id)
+        result = list_grant_skills(
+            grant, domain_key=domain_key, resolution=resolution
+        )
+        audit(
+            'mcp.skills.listed', oauth_session=oauth_session, grant=grant,
+            details={
+                'count': len(result['skills']),
+                'domain_filtered': bool(domain_key),
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify(result), 200, {'Cache-Control': 'no-store', 'Pragma': 'no-cache'}
+    except SkillReportContextError as exc:
+        db.session.rollback()
+        current_app.logger.warning(
+            'MCP skill report context could not be resolved: source=%s associations=%s',
+            exc.source,
+            exc.association_count,
+        )
+        audit(
+            'mcp.skills.list_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': exc.code,
+                'report_context_source': exc.source,
+                'report_association_count': exc.association_count,
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': exc.code, 'error_description': str(exc)}), 409
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed to list MCP analytics skills')
+        audit(
+            'mcp.skills.list_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'internal_error',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': 'skill_catalog_unavailable'}), 503
+
+
+@bp.route('/select-skills', methods=['POST'])
+@csrf.exempt
+@limiter.limit('60 per minute')
+@_service_required
+def select_skills():
+    body = request.get_json(silent=True) or {}
+    grant, oauth_session, error = _authorized_skill_grant(body)
+    if error:
+        return error
+
+    resolution = None
+    try:
+        resolution = resolve_mcp_skill_scope(grant.config, grant.empresa_id)
+        result = asyncio.run(
+            select_grant_skills(
+                grant,
+                question=body.get('question'),
+                candidate_skill_keys=body.get('candidate_skill_keys'),
+                resolution=resolution,
+            )
+        )
+        audit(
+            'mcp.skills.selected', oauth_session=oauth_session, grant=grant,
+            details={
+                'count': len(result['skills']),
+                'matched': result['selection']['matched'],
+                'truncated': result['truncated'],
+                'candidate_filter': body.get('candidate_skill_keys') is not None,
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify(result), 200, {'Cache-Control': 'no-store', 'Pragma': 'no-cache'}
+    except ValueError as exc:
+        db.session.rollback()
+        audit(
+            'mcp.skills.selection_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'invalid_request',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': 'invalid_skill_request', 'error_description': str(exc)}), 400
+    except SkillReportContextError as exc:
+        db.session.rollback()
+        current_app.logger.warning(
+            'MCP skill report context could not be resolved: source=%s associations=%s',
+            exc.source,
+            exc.association_count,
+        )
+        audit(
+            'mcp.skills.selection_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': exc.code,
+                'report_context_source': exc.source,
+                'report_association_count': exc.association_count,
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': exc.code, 'error_description': str(exc)}), 409
+    except SkillSelectionProviderError:
+        audit(
+            'mcp.skills.selection_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'provider_error',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': 'skill_selection_unavailable'}), 503
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed to select MCP analytics skills')
+        audit(
+            'mcp.skills.selection_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'internal_error',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': 'skill_selection_unavailable'}), 503
+
+
+@bp.route('/relevant-schema', methods=['POST'])
+@csrf.exempt
+@limiter.limit('60 per minute')
+@_service_required
+def relevant_schema():
+    body = request.get_json(silent=True) or {}
+    grant, oauth_session, error = _authorized_schema_grant(body)
+    if error:
+        return error
+
+    resolution = None
+    try:
+        resolution = resolve_mcp_skill_scope(grant.config, grant.empresa_id)
+        result, selected_skill_count = asyncio.run(
+            get_grant_relevant_schema(
+                grant,
+                question=body.get('question'),
+                selected_skill_keys=body.get('selected_skill_keys'),
+                resolution=resolution,
+            )
+        )
+        retrieval = result['retrieval']
+        audit(
+            'mcp.schema.relevant_retrieved',
+            oauth_session=oauth_session,
+            grant=grant,
+            details={
+                'table_count': retrieval['table_count'],
+                'measure_count': retrieval['measure_count'],
+                'matched': retrieval['matched'],
+                'selected_skill_count': selected_skill_count,
+                'missing_required_count': len(result['missing_required_items']),
+                'truncated': retrieval['truncated'],
+                'fallback_recommended': retrieval['fallback_recommended'],
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify(result), 200, {'Cache-Control': 'no-store', 'Pragma': 'no-cache'}
+    except ValueError as exc:
+        db.session.rollback()
+        audit(
+            'mcp.schema.relevant_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'invalid_request',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({
+            'error': 'invalid_relevant_schema_request',
+            'error_description': str(exc),
+        }), 400
+    except SkillReportContextError as exc:
+        db.session.rollback()
+        audit(
+            'mcp.schema.relevant_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': exc.code,
+                'report_context_source': exc.source,
+                'report_association_count': exc.association_count,
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': exc.code, 'error_description': str(exc)}), 409
+    except SchemaEmbeddingsUnavailable:
+        db.session.rollback()
+        audit(
+            'mcp.schema.relevant_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'schema_embeddings_unavailable',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({
+            'error': 'schema_embeddings_unavailable',
+            'error_description': (
+                'No hay un indice de schema disponible; usa get_powerbi_schema.'
+            ),
+        }), 409
+    except RelevantSchemaProviderError:
+        audit(
+            'mcp.schema.relevant_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'relevant_schema_unavailable',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({
+            'error': 'relevant_schema_unavailable',
+            'error_description': (
+                'No se pudo consultar el indice de schema; usa get_powerbi_schema.'
+            ),
+        }), 503
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception('Failed to retrieve relevant MCP schema')
+        audit(
+            'mcp.schema.relevant_failed', oauth_session=oauth_session, grant=grant,
+            outcome='failure',
+            details={
+                'error_code': 'internal_error',
+                **_skill_context_audit_details(resolution),
+            },
+        )
+        db.session.commit()
+        return jsonify({'error': 'relevant_schema_unavailable'}), 503
 
 
 @bp.route('/audit-result', methods=['POST'])

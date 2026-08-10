@@ -200,6 +200,17 @@ class McpConfigEditForm(FlaskForm):
         validators=[Optional()],
         choices=[],
     )
+    skill_report_id = SelectField(
+        "Contexto de reporte para skills",
+        coerce=int,
+        validators=[Optional()],
+        choices=[],
+        default=0,
+        description=(
+            "Automatico usa el reporte cuando el dataset tiene una unica asociacion. "
+            "Selecciona uno explicitamente si el dataset corresponde a varios reportes."
+        ),
+    )
     is_active = BooleanField("Configuracion activa", default=True)
     submit = SubmitField("Guardar cambios")
 

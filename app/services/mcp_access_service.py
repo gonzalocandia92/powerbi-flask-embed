@@ -5,6 +5,7 @@ from app.models import McpConfigEmpresa, McpModelGrant, UserEmpresa
 
 MODEL_PERMISSIONS = {
     'mcp.model.schema.read',
+    'mcp.model.skills.read',
     'mcp.model.query.execute',
     'mcp.model.measure.create',
     'mcp.model.measure.update',
@@ -42,4 +43,3 @@ def list_user_grants(user_id):
         if resolved is not None:
             result.append((resolved, permissions))
     return result
-

@@ -9,7 +9,13 @@ from sqlalchemy.orm import joinedload
 from app import db
 from app.forms import McpConfigCreateForm, McpConfigEditForm
 from app.models import (
-    Empresa, McpAgentConfig, McpConfigEmpresa, McpModelGrant, Report, Workspace,
+    Empresa, McpAgentConfig, McpConfigEmpresa, McpModelGrant, Report,
+    Workspace,
+)
+from app.services.mcp_skill_service import (
+    SkillReportContextError,
+    report_ids_for_dataset,
+    resolve_mcp_skill_scope,
 )
 from app.utils.decorators import permission_required, retry_on_db_error
 from app.utils.powerbi import get_mcp_metadata_for_report, hash_mcp_api_key, parse_powerbi_url
@@ -22,6 +28,54 @@ LOG = logging.getLogger(__name__)
 def _empresa_choices():
     empresas = Empresa.query.order_by(Empresa.nombre).all()
     return [(0, "Sin empresa")] + [(empresa.id, empresa.nombre) for empresa in empresas]
+
+
+def _skill_report_choices(dataset_id):
+    report_ids = report_ids_for_dataset(dataset_id)
+    if not report_ids:
+        return [(0, "Automatico")]
+    reports = (
+        Report.query
+        .options(joinedload(Report.workspace))
+        .filter(Report.id.in_(report_ids))
+        .order_by(Report.name, Report.id)
+        .all()
+    )
+    choices = [(0, "Automatico")]
+    for report in reports:
+        workspace_name = report.workspace.name if report.workspace else "Sin workspace"
+        choices.append((report.id, f"{report.name} ({workspace_name})"))
+    return choices
+
+
+def _skill_context_view(config):
+    try:
+        resolution = resolve_mcp_skill_scope(config, None)
+    except SkillReportContextError as exc:
+        return {
+            'source': exc.source,
+            'association_count': exc.association_count,
+            'message': str(exc),
+            'is_error': True,
+        }
+
+    report = (
+        db.session.get(Report, resolution.context.report_id)
+        if resolution.context.report_id is not None
+        else None
+    )
+    if resolution.source == 'explicit':
+        message = f"Explicito: {report.name}" if report else "Explicito"
+    elif resolution.source == 'dataset_unique':
+        message = f"Automatico: {report.name}" if report else "Automatico"
+    else:
+        message = "Sin reporte asociado; se usan skills globales, de empresa y dataset."
+    return {
+        'source': resolution.source,
+        'association_count': resolution.association_count,
+        'message': message,
+        'is_error': False,
+    }
 
 
 def _selected_empresa_id(value):
@@ -189,6 +243,7 @@ def detail(config_id):
         .options(
             joinedload(McpAgentConfig.empresa),
             joinedload(McpAgentConfig.empresa_links).joinedload(McpConfigEmpresa.empresa),
+            joinedload(McpAgentConfig.skill_report),
             joinedload(McpAgentConfig.grants).joinedload(McpModelGrant.user),
             joinedload(McpAgentConfig.grants).joinedload(McpModelGrant.empresa),
             joinedload(McpAgentConfig.grants).joinedload(McpModelGrant.role),
@@ -202,6 +257,7 @@ def detail(config_id):
         title='Detalle MCP Config',
         empresas=Empresa.query.filter_by(estado_activo=True).order_by(Empresa.nombre).all(),
         enabled_company_ids={link.empresa_id for link in config.empresa_links},
+        skill_context=_skill_context_view(config),
     )
 
 
@@ -212,6 +268,7 @@ def edit(config_id):
     config = McpAgentConfig.query.get_or_404(config_id)
     form = McpConfigEditForm()
     form.empresa_id.choices = _empresa_choices()
+    form.skill_report_id.choices = _skill_report_choices(config.dataset_id)
 
     if form.validate_on_submit():
         try:
@@ -231,6 +288,24 @@ def edit(config_id):
             LOG.exception("Could not update MCP config")
             flash(_powerbi_error_message(exc), "danger")
         else:
+            selected_skill_report_id = (
+                form.skill_report_id.data or None
+                if 'skill_report_id' in request.form
+                else config.skill_report_id_fk
+            )
+            valid_report_ids = set(report_ids_for_dataset(config.dataset_id))
+            if (
+                selected_skill_report_id is not None
+                and selected_skill_report_id not in valid_report_ids
+            ):
+                config.skill_report_id_fk = None
+                flash(
+                    "El reporte de skills anterior no corresponde al nuevo dataset; "
+                    "se cambio el contexto a Automatico.",
+                    "warning",
+                )
+            else:
+                config.skill_report_id_fk = selected_skill_report_id
             config.empresa_id = _selected_empresa_id(form.empresa_id.data)
             config.is_active = bool(form.is_active.data)
             db.session.commit()
@@ -239,6 +314,7 @@ def edit(config_id):
 
     elif form.is_submitted() is False:
         form.empresa_id.data = config.empresa_id or 0
+        form.skill_report_id.data = config.skill_report_id_fk or 0
         form.is_active.data = config.is_active
 
     return render_template(
