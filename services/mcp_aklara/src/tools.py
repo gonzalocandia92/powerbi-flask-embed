@@ -7,12 +7,43 @@ from time import perf_counter
 from fastmcp import FastMCP
 from fastmcp.server.auth import require_scopes
 from fastmcp.server.dependencies import get_access_token
+from mcp.types import ToolAnnotations
 
-from .auth.broker import audit_result, list_access, resolve_access
+from .auth.broker import (
+    audit_result,
+    get_relevant_schema as broker_get_relevant_schema,
+    list_access,
+    list_analytics_skills as broker_list_analytics_skills,
+    resolve_access,
+    select_analytics_skills as broker_select_analytics_skills,
+)
 from .powerbi.rest_api import execute_dax_query
 from .powerbi.xmla_tom import create_measure as create_measure_tom
 from .powerbi.xmla_tom import get_semantic_model_schema_tom
 from .powerbi.xmla_tom import update_measure as update_measure_tom
+
+
+SERVER_INSTRUCTIONS = """
+Este servidor permite consultar y modificar modelos semanticos de Power BI.
+
+Flujo preferido para preguntas analiticas y operaciones DAX:
+1. Si el modelo no esta identificado, usa list_semantic_models.
+2. Llama primero a select_analytics_skills con la pregunta original del usuario.
+3. Si vas a construir, revisar o modificar DAX, llama despues a get_relevant_schema
+   para recuperar las medidas y tablas relacionadas. Pasa las claves devueltas por
+   select_analytics_skills cuando existan skills seleccionadas.
+4. Construye DAX usando las instrucciones seleccionadas y objetos confirmados en
+   el schema; nunca inventes medidas, tablas ni columnas.
+5. Usa execute_dax unicamente despues de completar los pasos anteriores.
+6. Usa get_powerbi_schema cuando get_relevant_schema recomiende fallback, falle el
+   indice, necesites una inspeccion exhaustiva o el usuario pida el schema completo.
+7. Antes de create_measure o update_measure, selecciona skills y consulta primero
+   el schema relevante; usa el schema completo como fallback.
+
+list_analytics_skills es opcional y sirve para explorar el catalogo; no hace falta
+llamarla antes de select_analytics_skills. No uses tools analiticas para preguntas
+sobre las tools, funciones o configuracion del propio conector MCP.
+""".strip()
 
 
 def _public_models(access_list: list[dict]) -> list[dict]:
@@ -80,11 +111,26 @@ async def _audit(token, grant_public_id, operation, started, error=None, row_cou
 
 
 def create_mcp(auth_provider) -> FastMCP:
-    server = FastMCP("PowerBI_Aklara", auth=auth_provider)
+    server = FastMCP(
+        "PowerBI_Aklara",
+        auth=auth_provider,
+        instructions=SERVER_INSTRUCTIONS,
+    )
 
-    @server.tool(auth=require_scopes("mcp:models:list"))
+    @server.tool(
+        auth=require_scopes("mcp:models:list"),
+        description=(
+            "Paso 0 opcional: lista los modelos semanticos disponibles. Usala solo "
+            "cuando el usuario no haya identificado claramente el modelo."
+        ),
+        annotations=ToolAnnotations(
+            title="Listar modelos semanticos",
+            readOnlyHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
     async def list_semantic_models() -> str:
-        """Lista los modelos disponibles sin exponer ids ni metadatos internos."""
         access_list = await list_access(_user_token())
         return json.dumps(
             {"semantic_models": _public_models(access_list)},
@@ -92,11 +138,110 @@ def create_mcp(auth_provider) -> FastMCP:
             indent=2,
         )
 
-    @server.tool(auth=require_scopes("mcp:models:read"))
+    @server.tool(
+        auth=require_scopes("mcp:models:read"),
+        description=(
+            "Exploracion opcional: lista capacidades analiticas del modelo. No es "
+            "un requisito previo para select_analytics_skills y no debe usarse para "
+            "listar tools, funciones u operaciones del conector MCP."
+        ),
+        annotations=ToolAnnotations(
+            title="Listar skills analiticas",
+            readOnlyHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def list_analytics_skills(
+        model_name: str,
+        company_name: str | None = None,
+        domain_key: str | None = None,
+    ) -> str:
+        token = _user_token()
+        grant_public_id = await _resolve_model_selector(token, model_name, company_name)
+        result = await broker_list_analytics_skills(
+            token, grant_public_id, domain_key=domain_key
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    @server.tool(
+        auth=require_scopes("mcp:models:read"),
+        description=(
+            "Paso 1 requerido para preguntas analiticas: selecciona las skills usando "
+            "la pregunta original antes de consultar el schema, construir DAX o llamar "
+            "a execute_dax. No usar para preguntas sobre el conector ni sus tools."
+        ),
+        annotations=ToolAnnotations(
+            title="Seleccionar skills analiticas",
+            readOnlyHint=True,
+            idempotentHint=False,
+            openWorldHint=True,
+        ),
+    )
+    async def select_analytics_skills(
+        model_name: str,
+        question: str,
+        company_name: str | None = None,
+        candidate_skill_keys: list[str] | None = None,
+    ) -> str:
+        token = _user_token()
+        grant_public_id = await _resolve_model_selector(token, model_name, company_name)
+        result = await broker_select_analytics_skills(
+            token,
+            grant_public_id,
+            question,
+            candidate_skill_keys=candidate_skill_keys,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    @server.tool(
+        auth=require_scopes("mcp:models:read"),
+        description=(
+            "Paso 2 preferido para construir o revisar DAX: recupera mediante embeddings "
+            "solo las tablas y medidas relacionadas con la pregunta. Llamala despues de "
+            "select_analytics_skills y pasa selected_skill_keys cuando haya seleccion. "
+            "Si recomienda fallback o falla el indice, usa get_powerbi_schema."
+        ),
+        annotations=ToolAnnotations(
+            title="Obtener schema relevante",
+            readOnlyHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
+    async def get_relevant_schema(
+        model_name: str,
+        question: str,
+        company_name: str | None = None,
+        selected_skill_keys: list[str] | None = None,
+    ) -> str:
+        token = _user_token()
+        grant_public_id = await _resolve_model_selector(token, model_name, company_name)
+        result = await broker_get_relevant_schema(
+            token,
+            grant_public_id,
+            question,
+            selected_skill_keys=selected_skill_keys,
+        )
+        return json.dumps(result, ensure_ascii=False, indent=2)
+
+    @server.tool(
+        auth=require_scopes("mcp:models:read"),
+        description=(
+            "Fallback de schema completo: devuelve todo el modelo cuando "
+            "get_relevant_schema no esta disponible, recomienda fallback, faltan objetos, "
+            "se necesita una inspeccion exhaustiva o el usuario lo solicita expresamente."
+        ),
+        annotations=ToolAnnotations(
+            title="Obtener schema completo de Power BI",
+            readOnlyHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
     async def get_powerbi_schema(
         model_name: str, company_name: str | None = None
     ) -> str:
-        """Obtiene el esquema usando el nombre visible del modelo."""
         token, started, error = _user_token(), perf_counter(), None
         grant_public_id = None
         try:
@@ -119,11 +264,24 @@ def create_mcp(auth_provider) -> FastMCP:
             if grant_public_id:
                 await _audit(token, grant_public_id, "schema.read", started, error)
 
-    @server.tool(auth=require_scopes("mcp:models:query"))
+    @server.tool(
+        auth=require_scopes("mcp:models:query"),
+        description=(
+            "Paso final: ejecuta una consulta DAX de solo lectura. Antes debes llamar "
+            "a select_analytics_skills con la pregunta original y confirmar los objetos "
+            "con get_relevant_schema. Usa get_powerbi_schema si hubo fallback. Nunca "
+            "inventes objetos del modelo."
+        ),
+        annotations=ToolAnnotations(
+            title="Ejecutar consulta DAX",
+            readOnlyHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
     async def execute_dax(
         model_name: str, query: str, company_name: str | None = None
     ) -> str:
-        """Ejecuta DAX en el modelo identificado por su nombre visible."""
         token, started, error, row_count = (
             _user_token(),
             perf_counter(),
@@ -156,7 +314,21 @@ def create_mcp(auth_provider) -> FastMCP:
                     token, grant_public_id, "query.execute", started, error, row_count
                 )
 
-    @server.tool(auth=require_scopes("mcp:models:write"))
+    @server.tool(
+        auth=require_scopes("mcp:models:write"),
+        description=(
+            "Crea una medida. Antes debes llamar a select_analytics_skills con el "
+            "cambio solicitado y luego a get_relevant_schema para confirmar la tabla y "
+            "los objetos usados. Usa get_powerbi_schema si se recomienda fallback."
+        ),
+        annotations=ToolAnnotations(
+            title="Crear medida",
+            readOnlyHint=False,
+            destructiveHint=False,
+            idempotentHint=False,
+            openWorldHint=True,
+        ),
+    )
     async def create_measure(
         model_name: str,
         table_name: str,
@@ -165,7 +337,6 @@ def create_mcp(auth_provider) -> FastMCP:
         description: str = "",
         company_name: str | None = None,
     ) -> str:
-        """Crea una medida en el modelo identificado por su nombre visible."""
         token, started, error = _user_token(), perf_counter(), None
         grant_public_id = None
         try:
@@ -192,7 +363,21 @@ def create_mcp(auth_provider) -> FastMCP:
             if grant_public_id:
                 await _audit(token, grant_public_id, "measure.create", started, error)
 
-    @server.tool(auth=require_scopes("mcp:models:write"))
+    @server.tool(
+        auth=require_scopes("mcp:models:write"),
+        description=(
+            "Actualiza y reemplaza la definicion de una medida existente. Antes debes "
+            "llamar a select_analytics_skills y get_relevant_schema para confirmar la "
+            "medida y sus objetos. Usa get_powerbi_schema si se recomienda fallback."
+        ),
+        annotations=ToolAnnotations(
+            title="Actualizar medida",
+            readOnlyHint=False,
+            destructiveHint=True,
+            idempotentHint=True,
+            openWorldHint=True,
+        ),
+    )
     async def update_measure(
         model_name: str,
         table_name: str,
@@ -201,7 +386,6 @@ def create_mcp(auth_provider) -> FastMCP:
         description: str = "",
         company_name: str | None = None,
     ) -> str:
-        """Actualiza una medida en el modelo identificado por su nombre visible."""
         token, started, error = _user_token(), perf_counter(), None
         grant_public_id = None
         try:

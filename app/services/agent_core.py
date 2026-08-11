@@ -21,6 +21,11 @@ from zoneinfo import ZoneInfo
 
 from app.models import SchemaEmbedding
 from app.services.observability import hash_identifier, observation_preview, start_observation
+from app.services.schema_retrieval_service import (
+    RelevantSchemaProviderError,
+    SchemaEmbeddingsUnavailable,
+    retrieve_relevant_schema,
+)
 from app.services.skill_router import (
     RouteDecision,
     SkillRouterSettings,
@@ -451,7 +456,7 @@ async def _rewrite_query_for_reranker(
             return user_message
 
 
-async def _fetch_schema_context(
+async def _fetch_schema_context_legacy(
     *,
     dataset_id: str,
     powerbi_credentials: Dict[str, Any],
@@ -691,6 +696,129 @@ async def _fetch_schema_context(
                 observation.update(output={"error": observation_preview(repr(exc), max_length=500)})
             _debug_print("tool:get_schema_context:error", repr(exc), enabled=debug_enabled)
             return ""
+
+
+async def _fetch_schema_context(
+    *,
+    dataset_id: str,
+    powerbi_credentials: Dict[str, Any],
+    question: str,
+    settings: RuntimeSettings,
+    debug_enabled: bool,
+    required: bool,
+    report_id: Optional[int] = None,
+    table_context_limit: int = DEFAULT_TABLE_CONTEXT_LIMIT,
+    measure_context_limit: int = DEFAULT_MEASURE_CONTEXT_LIMIT,
+    required_schema_items: Optional[List[Dict[str, Any]]] = None,
+    preferred_measures: Optional[List[str]] = None,
+    preferred_tables: Optional[List[str]] = None,
+    usage_totals: Optional[Dict[str, int]] = None,
+    ai_usage_events: Optional[List[Dict[str, Any]]] = None,
+) -> str:
+    """Chat adapter over the shared schema retrieval service."""
+
+    del powerbi_credentials, required
+
+    def _record_usage(*, status: str, input_tokens: int, estimated: bool) -> None:
+        _add_usage_totals(usage_totals, input_tokens=input_tokens, output_tokens=0)
+        _append_ai_usage_event(
+            ai_usage_events,
+            provider="voyageai",
+            model=VOYAGE_QUERY_EMBEDDING_MODEL,
+            event_type="embedding",
+            source_type="retrieval",
+            trigger_type="user_request",
+            operation_name="voyage-query-embedding",
+            status=status,
+            input_tokens=input_tokens,
+            output_tokens=0,
+            total_tokens=input_tokens,
+            metadata_json={
+                "input_type": "query",
+                "estimated_usage": estimated,
+                **(
+                    {"error_type": "voyage_provider_error"}
+                    if status == "error"
+                    else {}
+                ),
+            },
+        )
+
+    with start_observation(
+        name="fetch-schema-context",
+        as_type="retriever",
+        input={"question": question},
+    ) as observation:
+        if observation is not None:
+            observation.update(
+                metadata={"datasethash": hash_identifier(dataset_id, prefix="dataset")}
+            )
+        try:
+            result = await retrieve_relevant_schema(
+                dataset_id=dataset_id,
+                question=question,
+                report_id=report_id,
+                table_limit=table_context_limit,
+                measure_limit=measure_context_limit,
+                required_schema_items=required_schema_items,
+                preferred_measures=preferred_measures,
+                preferred_tables=preferred_tables,
+                timeout_seconds=settings.schema_context_timeout_seconds,
+            )
+        except SchemaEmbeddingsUnavailable:
+            if observation is not None:
+                observation.update(output={"schema_embeddings_available": False})
+            return ""
+        except RelevantSchemaProviderError as exc:
+            _record_usage(
+                status="error",
+                input_tokens=exc.usage.input_tokens,
+                estimated=exc.usage.estimated,
+            )
+            logging.exception("Failed to fetch vector schema context")
+            if observation is not None:
+                observation.update(
+                    output={"error": observation_preview(repr(exc), max_length=500)}
+                )
+            return ""
+        except Exception as exc:
+            logging.exception("Failed to fetch vector schema context")
+            if observation is not None:
+                observation.update(
+                    output={"error": observation_preview(repr(exc), max_length=500)}
+                )
+            _debug_print(
+                "tool:get_schema_context:error", repr(exc), enabled=debug_enabled
+            )
+            return ""
+
+        _record_usage(
+            status="success",
+            input_tokens=result.usage.input_tokens,
+            estimated=result.usage.estimated,
+        )
+        payload = {
+            "tables": [item.content for item in result.tables],
+            "measures": [item.content for item in result.measures],
+        }
+        fetched_schema_text = json.dumps(
+            payload, ensure_ascii=False, separators=(",", ":")
+        )
+        if observation is not None:
+            observation.update(
+                output={
+                    "table_matches": len(result.tables),
+                    "measure_matches": len(result.measures),
+                    "missing_required_count": len(result.missing_required_items),
+                    "truncated": result.truncated,
+                }
+            )
+        _debug_print(
+            "tool:get_schema_context:response",
+            fetched_schema_text,
+            enabled=debug_enabled,
+        )
+        return fetched_schema_text
 
 
 def _minify_schema_text(schema_text: str) -> str:

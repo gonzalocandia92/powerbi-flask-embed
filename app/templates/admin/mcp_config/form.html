@@ -64,6 +64,17 @@
             </details>
 
             {% if config %}
+            <div class="mb-3">
+              {{ form.skill_report_id.label(class="form-label") }}
+              {{ form.skill_report_id(class="form-select" + (" is-invalid" if form.skill_report_id.errors else "")) }}
+              {% if form.skill_report_id.errors %}
+              <div class="invalid-feedback">
+                {% for error in form.skill_report_id.errors %}{{ error }}{% endfor %}
+              </div>
+              {% endif %}
+              <div class="form-text">{{ form.skill_report_id.description }}</div>
+            </div>
+
             <div class="alert alert-light border">
               <div class="fw-semibold mb-2">Metadata actual</div>
               <div class="row g-2">
