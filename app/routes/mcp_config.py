@@ -1,5 +1,6 @@
 """Administration routes for MCP agent configurations."""
 import logging
+import secrets
 
 import requests
 from flask import Blueprint, flash, redirect, render_template, request, url_for
@@ -140,6 +141,10 @@ def _powerbi_error_message(exc):
 
 def _resolve_metadata_from_url(report_url):
     report = _find_report_from_url(report_url)
+    return _resolve_metadata_from_report(report)
+
+
+def _resolve_metadata_from_report(report):
     metadata = get_mcp_metadata_for_report(report)
     metadata['credential_report_id_fk'] = report.id
     metadata['workspace_id_fk'] = report.workspace.id
@@ -152,6 +157,12 @@ def _set_api_key_hash(config, raw_api_key):
     if duplicate is not None and duplicate.id != config.id:
         raise ValueError("Ya existe una configuracion MCP con esa API key.")
     config.api_key_hash = api_key_hash
+
+
+def _set_generated_api_key_hash(config):
+    """Set a non-recoverable legacy API key hash for OAuth-only configurations."""
+    raw_api_key = f"mcp-key-{secrets.token_urlsafe(32)}"
+    config.api_key_hash = hash_mcp_api_key(raw_api_key)
 
 
 def _apply_metadata(config, metadata):
@@ -232,6 +243,54 @@ def new():
         config=None,
         back_url=url_for('mcp_config.list'),
     )
+
+
+@bp.route('/from-report/<int:report_id>', methods=['POST'])
+@login_required
+@permission_required('mcp.config.manage')
+@retry_on_db_error(max_retries=3, delay=1)
+def create_from_report(report_id):
+    """Create or reuse an MCP model configuration from an existing report."""
+    report = Report.query.options(
+        joinedload(Report.workspace).joinedload(Workspace.tenant),
+        joinedload(Report.usuario_pbi),
+    ).get_or_404(report_id)
+
+    try:
+        metadata = _resolve_metadata_from_report(report)
+    except Exception as exc:
+        db.session.rollback()
+        LOG.exception("Could not create MCP config from report %s", report.id)
+        flash(_powerbi_error_message(exc), "danger")
+        return redirect(url_for('reports.detail', report_id=report.id))
+
+    existing = (
+        McpAgentConfig.query
+        .filter_by(
+            workspace_id=metadata['workspace_id'],
+            dataset_id=metadata['dataset_id'],
+        )
+        .order_by(McpAgentConfig.is_active.desc(), McpAgentConfig.id.asc())
+        .first()
+    )
+    if existing is not None:
+        flash("El modelo semantico ya estaba configurado en MCP.", "info")
+        return redirect(url_for('mcp_config.detail', config_id=existing.id))
+
+    config = McpAgentConfig(
+        model_key=metadata['dataset_id'],
+        is_active=True,
+    )
+    _set_generated_api_key_hash(config)
+    _apply_metadata(config, metadata)
+    db.session.add(config)
+    db.session.commit()
+
+    flash(
+        "Modelo MCP habilitado. Ahora selecciona las empresas que podran usarlo.",
+        "success",
+    )
+    return redirect(url_for('mcp_config.detail', config_id=config.id))
 
 
 @bp.route('/<int:config_id>')
