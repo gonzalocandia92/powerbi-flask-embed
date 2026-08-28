@@ -8,9 +8,16 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from app import db
+from flask import has_app_context
+
 from app.models import AnalyticsSkill
 from app.services.observability import hash_identifier, observation_preview, start_observation
+from app.services.skill_catalog import (
+    SkillScopeContext,
+    list_effective_skills,
+    skill_scope_priority,
+    unknown_skill_keys,
+)
 from app.services.skill_vector_service import VOYAGE_SKILL_MODEL, build_skill_routing_document, search_skill_candidates
 
 LOG = logging.getLogger(__name__)
@@ -236,7 +243,7 @@ def _estimate_tokens(text: str) -> int:
 
 
 def _scope_priority(scope: str) -> int:
-    return {"global": 0, "empresa": 1, "dataset": 2, "report": 3}.get(scope, 0)
+    return skill_scope_priority(scope)
 
 
 def _operator_priority(priority: Optional[str]) -> int:
@@ -449,40 +456,18 @@ def _append_candidate_context(
     return True
 
 
-def _scope_filter_conditions(report_id: int, empresa_id: Optional[int], dataset_id: Optional[str]) -> Any:
-    filters = [
-        db.and_(
-            AnalyticsSkill.report_id_fk.is_(None),
-            AnalyticsSkill.empresa_id_fk.is_(None),
-            AnalyticsSkill.dataset_id.is_(None),
-        ),
-        AnalyticsSkill.report_id_fk == report_id,
-    ]
-    if empresa_id is not None:
-        filters.append(AnalyticsSkill.empresa_id_fk == empresa_id)
-    if dataset_id:
-        filters.append(AnalyticsSkill.dataset_id == str(dataset_id))
-    return db.or_(*filters)
-
-
 def _resolve_companion_candidates(
     *,
     skill_keys: List[str],
-    report_id: int,
+    report_id: Optional[int],
     empresa_id: Optional[int],
     dataset_id: Optional[str],
 ) -> Dict[str, Dict[str, Any]]:
     if not skill_keys:
         return {}
-    normalized_keys = {key.casefold(): key for key in skill_keys}
-    rows = (
-        AnalyticsSkill.query
-        .filter(
-            AnalyticsSkill.is_active.is_(True),
-            db.func.lower(AnalyticsSkill.skill_key).in_(list(normalized_keys.keys())),
-            _scope_filter_conditions(report_id, empresa_id, dataset_id),
-        )
-        .all()
+    rows = list_effective_skills(
+        SkillScopeContext(report_id=report_id, empresa_id=empresa_id, dataset_id=dataset_id),
+        skill_keys=skill_keys,
     )
     best_by_key: Dict[str, Dict[str, Any]] = {}
     for skill in rows:
@@ -501,7 +486,7 @@ def _resolve_companion_candidates(
 def _expand_required_companions(
     decision: RouteDecision,
     *,
-    report_id: int,
+    report_id: Optional[int],
     empresa_id: Optional[int],
     dataset_id: Optional[str],
 ) -> RouteDecision:
@@ -1034,17 +1019,38 @@ def _build_selector_decision(
 async def resolve_skill_route(
     *,
     user_message: str,
-    report_id: int,
+    report_id: Optional[int],
     empresa_id: Optional[int],
     dataset_id: Optional[str],
     settings: Optional[SkillRouterSettings] = None,
     usage_totals: Optional[Dict[str, int]] = None,
     ai_usage_events: Optional[List[Dict[str, Any]]] = None,
+    candidate_skill_keys: Optional[List[str]] = None,
+    force_enabled: bool = False,
 ) -> RouteDecision:
     """Resolve a route from the original user message without interrupting chat."""
     router_settings = settings or build_skill_router_settings()
-    if not router_settings.enabled:
+    if not router_settings.enabled and not force_enabled:
         return RouteDecision(strategy="router_disabled", confidence=0.0, fallback_reason="router_disabled")
+
+    effective_skill_ids: Optional[List[int]] = None
+    if has_app_context():
+        scope_context = SkillScopeContext(
+            report_id=report_id,
+            empresa_id=empresa_id,
+            dataset_id=dataset_id,
+        )
+        effective_skills = list_effective_skills(scope_context)
+        if candidate_skill_keys is not None:
+            unknown = unknown_skill_keys(candidate_skill_keys, effective_skills)
+            if unknown:
+                raise ValueError("Una o mas skills solicitadas no estan disponibles para este modelo.")
+            effective_skills = list_effective_skills(scope_context, skill_keys=candidate_skill_keys)
+        effective_skill_ids = [int(skill.id) for skill in effective_skills]
+        if not effective_skill_ids:
+            return RouteDecision(strategy="no_skill_match", confidence=0.0, fallback_reason="no_candidates")
+    elif candidate_skill_keys is not None:
+        raise RuntimeError("An application context is required to validate candidate skills.")
 
     with start_observation(
         name="resolve-skill-route",
@@ -1054,7 +1060,7 @@ async def resolve_skill_route(
         if observation is not None:
             observation.update(
                 metadata={
-                    "reportid": str(report_id),
+                    "reportid": str(report_id) if report_id is not None else None,
                     "datasethash": hash_identifier(dataset_id, prefix="dataset") if dataset_id else None,
                     "routermode": router_settings.mode,
                     "routerenabled": "true",
@@ -1146,6 +1152,7 @@ async def resolve_skill_route(
                     empresa_id=empresa_id,
                     dataset_id=dataset_id,
                     limit=search_limit,
+                    effective_skill_ids=effective_skill_ids,
                 )
                 if search_observation is not None:
                     search_observation.update(output={"candidate_count": len(candidates)})

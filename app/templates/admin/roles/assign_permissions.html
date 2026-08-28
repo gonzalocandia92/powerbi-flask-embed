@@ -1,0 +1,85 @@
+{% extends "layout.html" %}
+
+{% block title %}Asignar Permisos - {{ role.name }} - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid">
+  <div class="row">
+    <div class="col-lg-8 mx-auto">
+      <div class="d-flex align-items-center mb-4">
+        <a href="{{ url_for('users.list_roles') }}" class="btn btn-link text-decoration-none me-2">
+          <i class="bi bi-arrow-left me-1"></i>Volver
+        </a>
+        <h2 class="mb-0"><i class="bi bi-lock me-2"></i>Asignar Permisos</h2>
+      </div>
+
+      <div class="card shadow-sm mb-4">
+        <div class="card-body">
+          <h5 class="card-title">Rol: <strong>{{ role.name }}</strong></h5>
+          <p class="text-muted mb-0">Seleccione los permisos que desea asignar a este rol</p>
+        </div>
+      </div>
+
+      <div class="card shadow-sm">
+        <div class="card-body">
+          <form method="POST" novalidate>
+            {{ form.hidden_tag() }}
+
+            <!-- Permissions Selection -->
+            <div class="mb-3">
+              <label class="form-label" for="permissions">Permisos Disponibles</label>
+              {% if form.permissions.errors %}
+                {{ form.permissions(class="form-select is-invalid", id="permissions", multiple=True) }}
+                <div class="invalid-feedback d-block">
+                  {% for error in form.permissions.errors %}
+                  {{ error }}
+                  {% endfor %}
+                </div>
+              {% else %}
+                {{ form.permissions(class="form-select", id="permissions", multiple=True, size=10) }}
+              {% endif %}
+              <small class="form-text text-muted">
+                Mantén Ctrl (Cmd en Mac) presionado para seleccionar múltiples permisos. 
+                {% if role.permissions %}Actualmente tiene {{ role.permissions|length }} permiso(s){% endif %}
+              </small>
+            </div>
+
+            <!-- Permission Info -->
+            {% if form.permissions.choices %}
+            <div class="alert alert-info" role="alert">
+              <i class="bi bi-info-circle me-2"></i>
+              <strong>Permisos Disponibles:</strong>
+              <div class="mt-2">
+                <small>
+                  <ul class="mb-0 mt-2">
+                    {% for perm_id, perm_name in form.permissions.choices %}
+                    <li>
+                      <strong>{{ perm_name }}</strong>
+                    </li>
+                    {% endfor %}
+                  </ul>
+                </small>
+              </div>
+            </div>
+            {% else %}
+            <div class="alert alert-warning" role="alert">
+              <i class="bi bi-exclamation-circle me-2"></i>
+              No hay permisos disponibles. 
+              <a href="{{ url_for('users.create_permission') }}" class="alert-link">Crear el primero</a>
+            </div>
+            {% endif %}
+
+            <!-- Submit Button -->
+            <div class="d-grid gap-2 d-md-flex justify-content-md-end">
+              <a href="{{ url_for('users.list_roles') }}" class="btn btn-outline-secondary">
+                Cancelar
+              </a>
+              {{ form.submit(class="btn btn-primary", value="Asignar Permisos") }}
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

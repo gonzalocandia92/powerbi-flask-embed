@@ -1,0 +1,21 @@
+-r common.txt
+
+Flask>=2.2
+Flask-Login>=0.6
+Flask-WTF>=1.1.1
+Authlib>=1.7,<2
+Flask-Limiter[redis]>=3.12,<4
+requests>=2.31
+jinja2>=3.1
+flask_sqlalchemy
+flask-migrate
+user-agents>=2.2
+geoip2>=4.7
+APScheduler>=3.10
+anthropic>=0.40.0
+litellm>=1.74.0
+langfuse
+opentelemetry-instrumentation-anthropic
+voyageai
+pgvector
+email_validator

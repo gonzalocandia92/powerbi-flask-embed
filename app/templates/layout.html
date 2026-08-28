@@ -482,6 +482,7 @@
     }
   </style>
   {% block styles %}{% endblock %}
+  <meta name="csrf-token" content="{{ csrf_token() }}">
 </head>
 <body class="bg-light">
 <nav class="navbar navbar-expand-lg navbar-dark">
@@ -534,11 +535,26 @@
             <li><a class="dropdown-item" href="{{ url_for('usuarios_pbi.list') }}"><i class="bi bi-person-circle me-2"></i>Usuarios PBI</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="{{ url_for('ai_config.index') }}"><i class="bi bi-cpu me-2"></i>Configuracion AI</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('mcp_config.list') }}"><i class="bi bi-hdd-network me-2"></i>MCP Config</a></li>
             <li><hr class="dropdown-divider"></li>
             <li><a class="dropdown-item" href="{{ url_for('reports.from_url') }}"><i class="bi bi-link me-2"></i>Agregar desde URL</a></li>
             <li><a class="dropdown-item" href="{{ url_for('empresas.list') }}"><i class="bi bi-building me-2"></i>Empresas</a></li>
           </ul>
         </li>
+        {% if current_user.is_authenticated and current_user.is_admin %}
+        <li class="nav-item dropdown">
+          <a class="nav-link dropdown-toggle" href="#" id="navbarAdmin" role="button" data-bs-toggle="dropdown" aria-expanded="false">
+            <i class="bi bi-shield-check me-1"></i>Administración
+          </a>
+          <ul class="dropdown-menu" aria-labelledby="navbarAdmin">
+            <li><a class="dropdown-item" href="{{ url_for('users.list_users') }}"><i class="bi bi-people me-2"></i>Usuarios</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('users.list_roles') }}"><i class="bi bi-shield-check me-2"></i>Roles y permisos</a></li>
+            <li><a class="dropdown-item" href="{{ url_for('users.list_permissions') }}"><i class="bi bi-lock me-2"></i>Permisos</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="{{ url_for('mcp_oauth_admin.index') }}"><i class="bi bi-key me-2"></i>OAuth MCP</a></li>
+          </ul>
+        </li>
+        {% endif %}
         <li class="nav-item dropdown">
           <a class="nav-link dropdown-toggle" href="#" id="navbarFuturas" role="button" data-bs-toggle="dropdown" aria-expanded="false">
             <i class="bi bi-building-check me-1"></i>Futuras Empresas
@@ -659,5 +675,15 @@ function showInfo(message) {
 }
 </script>
 {% block scripts %}{% endblock %}
+  <script>
+    document.querySelectorAll('form').forEach(function (form) {
+      if ((form.method || '').toLowerCase() !== 'post' || form.querySelector('input[name="csrf_token"]')) return;
+      const input = document.createElement('input');
+      input.type = 'hidden';
+      input.name = 'csrf_token';
+      input.value = document.querySelector('meta[name="csrf-token"]').content;
+      form.appendChild(input);
+    });
+  </script>
 </body>
 </html>

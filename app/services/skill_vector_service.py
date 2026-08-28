@@ -243,15 +243,16 @@ def trigger_all_skill_reindex_update(*, force: bool = False) -> bool:
     return True
 
 
-def _scope_filter(report_id: int, empresa_id: Optional[int], dataset_id: Optional[str]):
+def _scope_filter(report_id: Optional[int], empresa_id: Optional[int], dataset_id: Optional[str]):
     filters = [
         db.and_(
             AnalyticsSkill.report_id_fk.is_(None),
             AnalyticsSkill.empresa_id_fk.is_(None),
             AnalyticsSkill.dataset_id.is_(None),
         ),
-        AnalyticsSkill.report_id_fk == report_id,
     ]
+    if report_id is not None:
+        filters.append(AnalyticsSkill.report_id_fk == report_id)
     if empresa_id is not None:
         filters.append(AnalyticsSkill.empresa_id_fk == empresa_id)
     if dataset_id:
@@ -262,18 +263,25 @@ def _scope_filter(report_id: int, empresa_id: Optional[int], dataset_id: Optiona
 def search_skill_candidates(
     *,
     query_embedding: List[float],
-    report_id: int,
+    report_id: Optional[int],
     empresa_id: Optional[int],
     dataset_id: Optional[str],
     limit: int,
+    effective_skill_ids: Optional[Iterable[int]] = None,
 ) -> List[Dict[str, Any]]:
     """Search active skill candidates compatible with the current scope."""
     bind = db.session.get_bind()
-    base_query = AnalyticsSkill.query.filter(
+    filters = [
         AnalyticsSkill.is_active.is_(True),
         AnalyticsSkill.embedding.isnot(None),
         _scope_filter(report_id, empresa_id, dataset_id),
-    )
+    ]
+    if effective_skill_ids is not None:
+        resolved_ids = [int(skill_id) for skill_id in effective_skill_ids]
+        if not resolved_ids:
+            return []
+        filters.append(AnalyticsSkill.id.in_(resolved_ids))
+    base_query = AnalyticsSkill.query.filter(*filters)
     if bind is not None and bind.dialect.name == "sqlite":
         rows = base_query.order_by(AnalyticsSkill.id).limit(limit).all()
         return [
@@ -284,11 +292,7 @@ def search_skill_candidates(
     distance = AnalyticsSkill.embedding.cosine_distance(query_embedding).label("cosine_distance")
     rows = (
         db.session.query(AnalyticsSkill, distance)
-        .filter(
-            AnalyticsSkill.is_active.is_(True),
-            AnalyticsSkill.embedding.isnot(None),
-            _scope_filter(report_id, empresa_id, dataset_id),
-        )
+        .filter(*filters)
         .order_by(distance)
         .limit(limit)
         .all()

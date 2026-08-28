@@ -2,40 +2,32 @@
 Report management routes.
 Handles CRUD for reports, public link management, and URL-based report creation.
 """
-import re
 import uuid
 import logging
 import requests as _requests_lib
-from urllib.parse import urlparse, parse_qs
 from flask import Blueprint, render_template, redirect, url_for, flash, request, jsonify
 from flask_login import login_required
 
 from app import db
-from app.models import Report, Workspace, Tenant, UsuarioPBI, PublicLink, Empresa, DatasetRefreshLog
+from app.models import (
+    DatasetRefreshLog,
+    Empresa,
+    McpAgentConfig,
+    PublicLink,
+    Report,
+    Tenant,
+    UsuarioPBI,
+    Workspace,
+)
 from app.forms import (
     ReportForm, PublicLinkForm,
     PublicUrlForm, PublicUrlWorkspaceForm, PublicUrlReportForm, PublicUrlLinkForm
 )
 from app.services.vector_service import trigger_schema_embedding_update
 from app.utils.decorators import retry_on_db_error
-from app.utils.powerbi import get_current_dataset_id, get_embed_for_report, refresh_dataset
+from app.utils.powerbi import get_current_dataset_id, get_embed_for_report, parse_powerbi_url, refresh_dataset
 
 bp = Blueprint('reports', __name__, url_prefix='/reports')
-
-# Regex to parse Power BI URLs
-POWERBI_URL_PATTERN = re.compile(
-    r'https?://app\.powerbi\.com/groups/([0-9a-f\-]{36})/reports/([0-9a-f\-]{36})',
-    re.IGNORECASE
-)
-
-
-def parse_powerbi_url(url):
-    """Parse a Power BI URL and extract workspace_id and report_id GUIDs."""
-    url = url.strip()
-    match = POWERBI_URL_PATTERN.search(url)
-    if not match:
-        return None, None
-    return match.group(1), match.group(2)
 
 
 def _get_latest_successful_dataset_id(report_id):
@@ -273,11 +265,18 @@ def detail(report_id):
     ).get_or_404(report_id)
     
     public_links = PublicLink.query.filter_by(report_id_fk=report_id, is_active=True).all()
+    mcp_config = (
+        McpAgentConfig.query
+        .filter_by(credential_report_id_fk=report_id)
+        .order_by(McpAgentConfig.is_active.desc(), McpAgentConfig.id.asc())
+        .first()
+    )
     
     return render_template(
         'reports/detail.html',
         report=report,
         public_links=public_links,
+        mcp_config=mcp_config,
         title=f'Report: {report.name}'
     )
 
