@@ -135,12 +135,16 @@ def create_app():
     app.config['MCP_RESOURCE_URL'] = os.getenv(
         'MCP_RESOURCE_URL', 'http://localhost:8000/mcp'
     ).rstrip('/')
+    app.config['MCP_OAUTH_DCR_ENABLED'] = os.getenv(
+        'MCP_OAUTH_DCR_ENABLED', 'false'
+    ).strip().lower() == 'true'
     app.config['MCP_OAUTH_PRIVATE_KEY'] = os.getenv('MCP_OAUTH_PRIVATE_KEY')
     app.config['MCP_OAUTH_PRIVATE_KEY_FILE'] = os.getenv('MCP_OAUTH_PRIVATE_KEY_FILE')
     app.config['MCP_OAUTH_ACCESS_TOKEN_TTL'] = int(os.getenv('MCP_OAUTH_ACCESS_TOKEN_TTL', '900'))
     app.config['MCP_OAUTH_REFRESH_TOKEN_TTL'] = int(os.getenv('MCP_OAUTH_REFRESH_TOKEN_TTL', '2592000'))
     app.config['MCP_INTERNAL_JWT_SECRET'] = os.getenv('MCP_INTERNAL_JWT_SECRET')
     app.config['MCP_INTERNAL_REQUIRE_MTLS'] = os.getenv('MCP_INTERNAL_REQUIRE_MTLS', 'true').lower() == 'true'
+    app.config['RATELIMIT_STORAGE_URI'] = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
     _validate_mcp_security_config(app)
     init_langfuse()
     
@@ -304,9 +308,13 @@ def create_app():
         raw_secret = os.getenv('MCP_CLAUDE_CLIENT_SECRET')
         client = McpOAuthClient.query.filter_by(client_id=client_id).first()
         if client is None:
-            client = McpOAuthClient(client_id=client_id, name='Claude MCP')
+            client = McpOAuthClient(
+                client_id=client_id, name='Claude MCP', registration_method='static'
+            )
             raw_secret = raw_secret or secrets.token_urlsafe(48)
             db.session.add(client)
+        elif client.registration_method != 'static':
+            raise RuntimeError('The requested client ID belongs to a dynamic client')
         client.redirect_uris = [
             'https://claude.ai/api/mcp/auth_callback',
             'https://claude.com/api/mcp/auth_callback',
