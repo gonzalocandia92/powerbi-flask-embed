@@ -71,7 +71,14 @@ def _create_report(session, workspace, usuario, **kwargs):
     return report
 
 
-def _create_public_link(session, report, allow_refresh=False, is_active=True, slug=None):
+def _create_public_link(
+    session,
+    report,
+    allow_refresh=False,
+    allow_reset_to_default=False,
+    is_active=True,
+    slug=None
+):
     """Create a test PublicLink."""
     if slug is None:
         slug = f"test-slug-{_id()}"
@@ -82,6 +89,7 @@ def _create_public_link(session, report, allow_refresh=False, is_active=True, sl
         report_id_fk=report.id,
         is_active=is_active,
         allow_refresh=allow_refresh,
+        allow_reset_to_default=allow_reset_to_default,
     )
     session.add(link)
     session.flush()
@@ -308,6 +316,123 @@ class TestPublicLinkModelAllowRefresh(_BaseTestCase):
 
             fetched = PublicLink.query.filter_by(custom_slug='refresh-enabled-slug').first()
             self.assertTrue(fetched.allow_refresh)
+
+
+class TestPublicLinkModelResetToDefault(_BaseTestCase):
+    """Tests for the allow_reset_to_default field on PublicLink model."""
+
+    def test_public_link_model_allow_reset_to_default_default(self):
+        """PublicLink created without allow_reset_to_default defaults to False."""
+        with self.app.app_context():
+            _, _, workspace, usuario = _create_test_hierarchy(db.session)
+            report = _create_report(db.session, workspace, usuario)
+            link = PublicLink(
+                id=_id(),
+                token=uuid.uuid4().hex[:16],
+                custom_slug='default-reset-slug',
+                report_id_fk=report.id,
+                is_active=True,
+            )
+            db.session.add(link)
+            db.session.commit()
+
+            fetched = PublicLink.query.filter_by(custom_slug='default-reset-slug').first()
+            self.assertFalse(fetched.allow_reset_to_default)
+
+    def test_public_link_model_allow_reset_to_default_true(self):
+        """PublicLink created with allow_reset_to_default=True persists correctly."""
+        with self.app.app_context():
+            _, _, workspace, usuario = _create_test_hierarchy(db.session)
+            report = _create_report(db.session, workspace, usuario)
+            link = PublicLink(
+                id=_id(),
+                token=uuid.uuid4().hex[:16],
+                custom_slug='reset-enabled-slug',
+                report_id_fk=report.id,
+                is_active=True,
+                allow_reset_to_default=True,
+            )
+            db.session.add(link)
+            db.session.commit()
+
+            fetched = PublicLink.query.filter_by(custom_slug='reset-enabled-slug').first()
+            self.assertTrue(fetched.allow_reset_to_default)
+
+
+class TestPublicResetToDefaultSupport(_BaseTestCase):
+    """Tests for public reset-to-default support rendering and persistence."""
+
+    def _setup_report(self):
+        with self.app.app_context():
+            _, _, workspace, usuario = _create_test_hierarchy(db.session)
+            report = _create_report(db.session, workspace, usuario)
+            db.session.commit()
+            return report.id
+
+    def _setup_link(self, allow_reset_to_default):
+        with self.app.app_context():
+            _, _, workspace, usuario = _create_test_hierarchy(db.session)
+            report = _create_report(db.session, workspace, usuario)
+            link = _create_public_link(
+                db.session,
+                report,
+                allow_reset_to_default=allow_reset_to_default,
+                slug=f'reset-support-{uuid.uuid4().hex[:8]}',
+            )
+            db.session.commit()
+            return link.custom_slug
+
+    def _login_admin(self):
+        with self.app.app_context():
+            user = User(id=_id(), username='admin-reset', is_admin=True)
+            user.set_password('adminpass')
+            db.session.add(user)
+            db.session.commit()
+
+        self.http.post('/login', data={'username': 'admin-reset', 'password': 'adminpass'})
+
+    def test_new_link_form_exposes_allow_reset_to_default(self):
+        """GET public link creation form shows the reset-to-default option."""
+        report_id = self._setup_report()
+        self._login_admin()
+
+        resp = self.http.get(f'/reports/{report_id}/link/new')
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('Permitir restablecer a valores predeterminados', html)
+        self.assertIn('allow_reset_to_default', html)
+
+    @patch('app.routes.public.track_visit')
+    @patch('app.routes.public.get_embed_for_report')
+    def test_public_view_hides_reset_support_when_disabled(self, mock_embed, _mock_track_visit):
+        """Public report HTML omits reset support when the link setting is disabled."""
+        mock_embed.return_value = ('token', 'https://app.powerbi.com/reportEmbed', 'report-id')
+        slug = self._setup_link(allow_reset_to_default=False)
+
+        resp = self.http.get(f'/p/{slug}')
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertNotIn('id="resetDefaultsBtn"', html)
+        self.assertIn('persistentFiltersEnabled: false', html)
+
+    @patch('app.routes.public.track_visit')
+    @patch('app.routes.public.get_embed_for_report')
+    def test_public_view_renders_reset_support_when_enabled(self, mock_embed, _mock_track_visit):
+        """Public report HTML includes official persistent filters support when enabled."""
+        mock_embed.return_value = ('token', 'https://app.powerbi.com/reportEmbed', 'report-id')
+        slug = self._setup_link(allow_reset_to_default=True)
+
+        resp = self.http.get(f'/p/{slug}')
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('id="resetDefaultsBtn"', html)
+        self.assertIn('Restablecer a valores predeterminados', html)
+        self.assertIn('persistentFiltersEnabled: true', html)
+        self.assertIn('arePersistentFiltersApplied', html)
+        self.assertIn('resetPersistentFilters', html)
 
 
 if __name__ == '__main__':

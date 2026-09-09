@@ -224,6 +224,32 @@
             cursor: not-allowed;
             transform: none;
         }
+
+        .reset-btn {
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            padding: 8px 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+        }
+
+        .reset-btn:hover {
+            background: #5c636a;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .reset-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
         
         .fullscreen-controls {
             position: fixed;
@@ -669,6 +695,12 @@
                                     <i class="fas fa-expand"></i>
                                     Pantalla completa
                                 </button>
+                                {% if show_reset_to_default %}
+                                <button id="resetDefaultsBtn" class="reset-btn" title="Restablecer filtros y segmentaciones">
+                                    <i class="fas fa-rotate-left"></i>
+                                    Restablecer
+                                </button>
+                                {% endif %}
                                 {% if allow_refresh %}
                                 <button id="refreshDatasetBtn" class="refresh-btn" title="Actualizar modelo de datos">
                                     <i class="fas fa-sync-alt"></i>
@@ -696,6 +728,13 @@
                             </div>
                         </div>
                     </div>
+
+                    {% if show_reset_to_default %}
+                    <div id="resetFeedback" class="alert alert-dismissible fade show m-3" style="display: none;" role="alert">
+                        <span id="resetFeedbackMessage"></span>
+                        <button type="button" class="btn-close" aria-label="Cerrar"></button>
+                    </div>
+                    {% endif %}
                     
                     <!-- Report Container (wrapped in panViewport for fullscreen zoom/pan) -->
                     <div id="panViewport">
@@ -729,6 +768,26 @@
         <input type="range" id="vSlider" min="0" max="0" value="0" step="1">
     </div>
 
+    {% if show_reset_to_default %}
+    <div class="modal fade" id="resetDefaultsModal" tabindex="-1" aria-labelledby="resetDefaultsModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="resetDefaultsModalLabel">Restablecer a valores predeterminados</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
+                </div>
+                <div class="modal-body">
+                    ¿Quiere restablecer los filtros, las segmentaciones y otros cambios de vista aplicados a este reporte?
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+                    <button type="button" class="btn btn-primary" id="confirmResetDefaultsBtn">Restablecer</button>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <script>
         // Wait for DOM to be fully loaded
         document.addEventListener('DOMContentLoaded', function() {
@@ -739,9 +798,17 @@
             const errorMessage = document.getElementById("errorMessage");
             const fullscreenBtn = document.getElementById("fullscreenBtn");
             const exitFullscreenBtn = document.getElementById("exitFullscreenBtn");
+            const resetBtn = document.getElementById("resetDefaultsBtn");
+            const resetFeedback = document.getElementById("resetFeedback");
+            const resetFeedbackMessage = document.getElementById("resetFeedbackMessage");
+            const resetFeedbackDismissBtn = resetFeedback ? resetFeedback.querySelector('.btn-close') : null;
+            const resetModalElement = document.getElementById("resetDefaultsModal");
+            const resetConfirmBtn = document.getElementById("confirmResetDefaultsBtn");
+            const resetModal = resetModalElement ? new bootstrap.Modal(resetModalElement) : null;
             const body = document.body;
             let isFullscreen = false;
             let report; // Variable global para el reporte
+            let resetVisibilityPoller;
             
             // Hide error display initially
             errorDisplay.style.display = 'none';
@@ -769,10 +836,76 @@
                             visible: {% if is_public %}false{% else %}true{% endif %}
                         } 
                     },
+                    persistentFiltersEnabled: {% if show_reset_to_default %}true{% else %}false{% endif %},
                     background: models.BackgroundType.Default,
                     hideErrors: {% if is_public %}true{% else %}false{% endif %}
                 }
             };
+
+            function hideResetFeedback() {
+                if (!resetFeedback) return;
+                resetFeedback.style.display = 'none';
+                resetFeedback.classList.remove('alert-success', 'alert-danger');
+            }
+
+            function showResetFeedback(message, type) {
+                if (!resetFeedback || !resetFeedbackMessage) return;
+                resetFeedbackMessage.textContent = message;
+                resetFeedback.classList.remove('alert-success', 'alert-danger');
+                resetFeedback.classList.add(type === 'success' ? 'alert-success' : 'alert-danger');
+                resetFeedback.style.display = 'block';
+            }
+
+            function setResetButtonVisible(visible) {
+                if (!resetBtn) return;
+                resetBtn.style.display = visible ? 'inline-flex' : 'none';
+            }
+
+            async function updateResetButtonVisibility() {
+                if (!resetBtn || !report || typeof report.arePersistentFiltersApplied !== 'function') {
+                    setResetButtonVisible(false);
+                    return;
+                }
+
+                try {
+                    const hasPersistentFilters = await report.arePersistentFiltersApplied();
+                    setResetButtonVisible(Boolean(hasPersistentFilters));
+                } catch (error) {
+                    console.error('Persistent filters visibility error:', error);
+                    setResetButtonVisible(false);
+                }
+            }
+
+            async function resetToDefault() {
+                if (!report || typeof report.resetPersistentFilters !== 'function') {
+                    showResetFeedback(
+                        'No fue posible restablecer los valores predeterminados en este reporte.',
+                        'danger'
+                    );
+                    setResetButtonVisible(false);
+                    return;
+                }
+
+                hideResetFeedback();
+                resetConfirmBtn.disabled = true;
+                resetConfirmBtn.innerHTML = 'Restableciendo...';
+
+                try {
+                    await report.resetPersistentFilters();
+                    showResetFeedback('Se restablecieron los valores predeterminados del reporte.', 'success');
+                    resetModal.hide();
+                    await updateResetButtonVisibility();
+                } catch (error) {
+                    console.error('Reset persistent filters error:', error);
+                    showResetFeedback(
+                        'No fue posible restablecer los valores predeterminados en este reporte.',
+                        'danger'
+                    );
+                } finally {
+                    resetConfirmBtn.disabled = false;
+                    resetConfirmBtn.innerHTML = 'Restablecer';
+                }
+            }
 
             // Función para entrar en pantalla completa
             function enterFullscreen() {
@@ -830,6 +963,18 @@
             // Event listeners para los botones de pantalla completa
             fullscreenBtn.addEventListener('click', enterFullscreen);
             exitFullscreenBtn.addEventListener('click', exitFullscreen);
+            if (resetFeedbackDismissBtn) {
+                resetFeedbackDismissBtn.addEventListener('click', hideResetFeedback);
+            }
+            if (resetBtn && resetModal) {
+                resetBtn.addEventListener('click', function() {
+                    hideResetFeedback();
+                    resetModal.show();
+                });
+            }
+            if (resetConfirmBtn) {
+                resetConfirmBtn.addEventListener('click', resetToDefault);
+            }
             
             // También soporte para la tecla ESC
             document.addEventListener('keydown', function(e) {
@@ -986,6 +1131,12 @@
                 report.on("loaded", function() {
                     console.log("Report loaded successfully");
                     loadingOverlay.style.display = 'none';
+                    if (resetBtn) {
+                        updateResetButtonVisibility();
+                        if (!resetVisibilityPoller) {
+                            resetVisibilityPoller = window.setInterval(updateResetButtonVisibility, 5000);
+                        }
+                    }
                 });
                 
                 report.on("error", function(event) {
