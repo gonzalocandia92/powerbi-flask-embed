@@ -865,7 +865,7 @@
 
             async function updateResetButtonVisibility() {
                 if (!resetBtn || !report || typeof report.arePersistentFiltersApplied !== 'function') {
-                    setResetButtonState(keepResetButtonVisible, false);
+                    setResetButtonState(keepResetButtonVisible, keepResetButtonVisible);
                     return;
                 }
 
@@ -873,11 +873,11 @@
                     const hasPersistentFilters = await report.arePersistentFiltersApplied();
                     setResetButtonState(
                         keepResetButtonVisible || Boolean(hasPersistentFilters),
-                        Boolean(hasPersistentFilters)
+                        keepResetButtonVisible || Boolean(hasPersistentFilters)
                     );
                 } catch (error) {
                     console.error('Persistent filters visibility error:', error);
-                    setResetButtonState(keepResetButtonVisible, false);
+                    setResetButtonState(keepResetButtonVisible, keepResetButtonVisible);
                 }
             }
 
@@ -887,7 +887,7 @@
                         'No fue posible restablecer los valores predeterminados en este reporte.',
                         'danger'
                     );
-                    setResetButtonState(keepResetButtonVisible, false);
+                    setResetButtonState(keepResetButtonVisible, keepResetButtonVisible);
                     return;
                 }
 

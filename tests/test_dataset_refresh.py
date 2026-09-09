@@ -468,6 +468,7 @@ class TestPrivateResetToDefaultSupport(_BaseTestCase):
         self.assertIn('id="resetDefaultsBtn"', html)
         self.assertIn('persistentFiltersEnabled: true', html)
         self.assertIn('const keepResetButtonVisible = true;', html)
+        self.assertIn('keepResetButtonVisible || Boolean(hasPersistentFilters)', html)
 
 
 if __name__ == '__main__':
