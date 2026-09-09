@@ -806,6 +806,7 @@
             const resetConfirmBtn = document.getElementById("confirmResetDefaultsBtn");
             const resetModal = resetModalElement ? new bootstrap.Modal(resetModalElement) : null;
             const body = document.body;
+            const keepResetButtonVisible = {% if show_reset_to_default and not is_public %}true{% else %}false{% endif %};
             let isFullscreen = false;
             let report; // Variable global para el reporte
             let resetVisibilityPoller;
@@ -856,23 +857,27 @@
                 resetFeedback.style.display = 'block';
             }
 
-            function setResetButtonVisible(visible) {
+            function setResetButtonState(visible, enabled) {
                 if (!resetBtn) return;
                 resetBtn.style.display = visible ? 'inline-flex' : 'none';
+                resetBtn.disabled = !enabled;
             }
 
             async function updateResetButtonVisibility() {
                 if (!resetBtn || !report || typeof report.arePersistentFiltersApplied !== 'function') {
-                    setResetButtonVisible(false);
+                    setResetButtonState(keepResetButtonVisible, false);
                     return;
                 }
 
                 try {
                     const hasPersistentFilters = await report.arePersistentFiltersApplied();
-                    setResetButtonVisible(Boolean(hasPersistentFilters));
+                    setResetButtonState(
+                        keepResetButtonVisible || Boolean(hasPersistentFilters),
+                        Boolean(hasPersistentFilters)
+                    );
                 } catch (error) {
                     console.error('Persistent filters visibility error:', error);
-                    setResetButtonVisible(false);
+                    setResetButtonState(keepResetButtonVisible, false);
                 }
             }
 
@@ -882,7 +887,7 @@
                         'No fue posible restablecer los valores predeterminados en este reporte.',
                         'danger'
                     );
-                    setResetButtonVisible(false);
+                    setResetButtonState(keepResetButtonVisible, false);
                     return;
                 }
 

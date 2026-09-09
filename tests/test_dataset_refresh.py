@@ -435,5 +435,40 @@ class TestPublicResetToDefaultSupport(_BaseTestCase):
         self.assertIn('resetPersistentFilters', html)
 
 
+class TestPrivateResetToDefaultSupport(_BaseTestCase):
+    """Tests for reset-to-default support in the logged-in admin report view."""
+
+    def _setup_report(self):
+        with self.app.app_context():
+            _, _, workspace, usuario = _create_test_hierarchy(db.session)
+            report = _create_report(db.session, workspace, usuario)
+            db.session.commit()
+            return report.id
+
+    def _login_admin(self):
+        with self.app.app_context():
+            user = User(id=_id(), username='admin-private-reset', is_admin=True)
+            user.set_password('adminpass')
+            db.session.add(user)
+            db.session.commit()
+
+        self.http.post('/login', data={'username': 'admin-private-reset', 'password': 'adminpass'})
+
+    @patch('app.routes.reports.get_embed_for_report')
+    def test_private_view_always_renders_reset_support(self, mock_embed):
+        """Logged-in report view always renders reset support."""
+        mock_embed.return_value = ('token', 'https://app.powerbi.com/reportEmbed', 'report-id')
+        report_id = self._setup_report()
+        self._login_admin()
+
+        resp = self.http.get(f'/reports/{report_id}/view')
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('id="resetDefaultsBtn"', html)
+        self.assertIn('persistentFiltersEnabled: true', html)
+        self.assertIn('const keepResetButtonVisible = true;', html)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -307,6 +307,7 @@ def view_report(report_id):
         config_name=report.name,
         is_public=False,
         allow_refresh=True,
+        show_reset_to_default=True,
         refresh_url=url_for('reports.refresh_report', report_id=report.id),
     )
 
