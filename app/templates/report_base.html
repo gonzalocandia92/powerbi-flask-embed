@@ -806,7 +806,7 @@
             const resetConfirmBtn = document.getElementById("confirmResetDefaultsBtn");
             const resetModal = resetModalElement ? new bootstrap.Modal(resetModalElement) : null;
             const body = document.body;
-            const keepResetButtonVisible = {% if show_reset_to_default and not is_public %}true{% else %}false{% endif %};
+            const keepResetButtonVisible = {% if show_reset_to_default %}true{% else %}false{% endif %};
             let isFullscreen = false;
             let report; // Variable global para el reporte
             let resetVisibilityPoller;
