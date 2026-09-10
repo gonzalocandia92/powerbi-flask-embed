@@ -159,7 +159,7 @@ class SkillSelectorDecision:
     rejected_skill_ids: List[int] = field(default_factory=list)
     confidence: float = 0.0
     reason: str = ""
-    no_skill_match: bool = False
+    no_skill_match: Optional[bool] = False
     status: str = "success"
     error_type: Optional[str] = None
 
@@ -169,7 +169,7 @@ class SkillSelectorDecision:
             "rejected_skill_ids": list(self.rejected_skill_ids),
             "confidence": round(float(self.confidence or 0.0), 4),
             "reason": self.reason,
-            "no_skill_match": bool(self.no_skill_match),
+            "no_skill_match": self.no_skill_match,
             "status": self.status,
             "error_type": self.error_type,
         }
@@ -658,7 +658,7 @@ def _selector_error_decision(error_type: str, reason: str = "") -> SkillSelector
         status="error",
         error_type=error_type,
         reason=reason[:1000],
-        no_skill_match=True,
+        no_skill_match=None,
     )
 
 
@@ -725,7 +725,7 @@ async def _select_skill_candidates(
                     client.messages.create(
                         model=settings.selector_model,
                         max_tokens=500,
-                        temperature=0.0,
+                        extra_body={"temperature": 0.0},
                         system=system_prompt,
                         messages=[
                             {
@@ -892,6 +892,7 @@ def _build_decision(
     candidates: List[Dict[str, Any]],
     settings: SkillRouterSettings,
     fallback_reason: Optional[str] = None,
+    selection_limit: Optional[int] = None,
 ) -> RouteDecision:
     if fallback_reason:
         return RouteDecision(strategy="fallback", confidence=0.0, fallback_reason=fallback_reason)
@@ -918,7 +919,8 @@ def _build_decision(
             fallback_reason="score_below_soft_threshold",
         )
 
-    selected_candidates = sorted_candidates[: settings.max_selected_skills]
+    max_selected = settings.max_selected_skills if selection_limit is None else max(1, int(selection_limit))
+    selected_candidates = sorted_candidates[:max_selected]
     selected_skills: List[RoutedSkill] = []
     canonical_measures: List[str] = []
     required_items: List[Dict[str, str]] = []
@@ -1201,9 +1203,19 @@ async def resolve_skill_route(
                 )
                 if router_settings.selector_mode == "active":
                     if selector_decision.status == "error":
-                        if decision.fallback_reason is None:
+                        # Candidate retrieval is intentionally broad. If the final
+                        # selector is unavailable, inject only the strongest vector
+                        # candidate; declared companion skills are expanded below.
+                        decision = _build_decision(
+                            candidates=vector_candidates,
+                            settings=router_settings,
+                            selection_limit=1,
+                        )
+                        if decision.selected_skills:
                             decision.fallback_reason = "selector_failed_used_vector_routing"
-                        decision_source = "vector" if decision.selected_skills else "none"
+                            decision_source = "vector"
+                        else:
+                            decision_source = "none"
                     elif selector_decision.no_skill_match:
                         decision = RouteDecision(
                             strategy="no_skill_match",
