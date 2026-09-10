@@ -43,6 +43,23 @@ def _cleanup_refresh_timestamps():
         del _refresh_timestamps[slug]
 
 
+def _supports_public_reset_to_default(link, report):
+    """Return whether reset-to-default can be offered for this public link."""
+    if not link.allow_reset_to_default or not report.es_publico:
+        return False
+
+    workspace = report.workspace
+    tenant = workspace.tenant if workspace else None
+    client = tenant.client if tenant else None
+
+    return bool(
+        report.usuario_pbi_id and
+        workspace and workspace.workspace_id and
+        tenant and tenant.tenant_id and
+        client and client.client_id
+    )
+
+
 @bp.route('/<custom_slug>')
 @retry_on_db_error(max_retries=3, delay=1)
 def view(custom_slug):
@@ -82,6 +99,7 @@ def view(custom_slug):
         config_name=report.name,
         is_public=True,
         allow_refresh=link.allow_refresh,
+        show_reset_to_default=_supports_public_reset_to_default(link, report),
         refresh_url=url_for('public.refresh', custom_slug=custom_slug),
         slug=custom_slug,
         chatbot_enabled=report.chatbot_enabled,

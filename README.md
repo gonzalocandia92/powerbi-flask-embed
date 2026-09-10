@@ -206,7 +206,21 @@ The application will be available at `http://localhost:2052`
 2. Find the configuration you want to share
 3. Click **New Link**
 4. Enter a custom slug (e.g., `sales-report-2024`)
-5. Share the generated URL: `https://yourdomain.com/p/sales-report-2024`
+5. Optionally enable **Permitir restablecer a valores predeterminados** only when the report supports Power BI Persistent Filters
+6. Optionally enable **Permitir actualización de datos** if you want public viewers to trigger dataset refreshes
+7. Share the generated URL: `https://yourdomain.com/p/sales-report-2024`
+
+#### Reset to Default for Public Links
+
+The public viewer can show a **Restablecer** button only when all of the following are true:
+
+- The public link has `allow_reset_to_default` enabled
+- The application is embedding the report with Azure AD (`TokenType.Aad`)
+- The embed config enables `persistentFiltersEnabled: true`
+- Power BI Persistent Filters are enabled for the report
+- The Azure AD app has the permissions required by Microsoft for persistent user state (for example `UserState.ReadWrite.All`)
+
+When those prerequisites are not met, the application keeps the button hidden instead of showing a non-functional control.
 
 ### Viewing Reports
 

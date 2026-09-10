@@ -40,6 +40,19 @@
                                 </small>
                             </div>
                         </div>
+
+                        <div class="mb-3">
+                            <div class="form-check">
+                                {{ form.allow_reset_to_default(class="form-check-input") }}
+                                <label class="form-check-label" for="allow_reset_to_default">
+                                    <i class="fas fa-rotate-left me-1"></i>
+                                    Permitir restablecer a valores predeterminados
+                                </label>
+                                <small class="form-text text-muted d-block mt-1">
+                                    Requiere soporte de Power BI Persistent Filters y permisos de estado de usuario en Azure AD.
+                                </small>
+                            </div>
+                        </div>
                         
                         {% with messages = get_flashed_messages(with_categories=true) %}
                             {% if messages %}
