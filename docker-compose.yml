@@ -65,8 +65,10 @@ services:
     depends_on:
       flask-powerbi:
         condition: service_healthy
+        restart: true
       mcp-aklara:
         condition: service_healthy
+        restart: true
     healthcheck:
       test: ["CMD", "nginx", "-t"]
       interval: 15s
