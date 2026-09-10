@@ -13,6 +13,9 @@
     
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- SweetAlert2 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -729,13 +732,6 @@
                         </div>
                     </div>
 
-                    {% if show_reset_to_default %}
-                    <div id="resetFeedback" class="alert alert-dismissible fade show m-3" style="display: none;" role="alert">
-                        <span id="resetFeedbackMessage"></span>
-                        <button type="button" class="btn-close" aria-label="Cerrar"></button>
-                    </div>
-                    {% endif %}
-                    
                     <!-- Report Container (wrapped in panViewport for fullscreen zoom/pan) -->
                     <div id="panViewport">
                         <div id="reportContainer" class="report-container"></div>
@@ -768,26 +764,6 @@
         <input type="range" id="vSlider" min="0" max="0" value="0" step="1">
     </div>
 
-    {% if show_reset_to_default %}
-    <div class="modal fade" id="resetDefaultsModal" tabindex="-1" aria-labelledby="resetDefaultsModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-dialog-centered">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title" id="resetDefaultsModalLabel">Restablecer a valores predeterminados</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Cerrar"></button>
-                </div>
-                <div class="modal-body">
-                    ¿Quiere restablecer los filtros, las segmentaciones y otros cambios de vista aplicados a este reporte?
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
-                    <button type="button" class="btn btn-primary" id="confirmResetDefaultsBtn">Restablecer</button>
-                </div>
-            </div>
-        </div>
-    </div>
-    {% endif %}
-
     <script>
         // Wait for DOM to be fully loaded
         document.addEventListener('DOMContentLoaded', function() {
@@ -799,12 +775,6 @@
             const fullscreenBtn = document.getElementById("fullscreenBtn");
             const exitFullscreenBtn = document.getElementById("exitFullscreenBtn");
             const resetBtn = document.getElementById("resetDefaultsBtn");
-            const resetFeedback = document.getElementById("resetFeedback");
-            const resetFeedbackMessage = document.getElementById("resetFeedbackMessage");
-            const resetFeedbackDismissBtn = resetFeedback ? resetFeedback.querySelector('.btn-close') : null;
-            const resetModalElement = document.getElementById("resetDefaultsModal");
-            const resetConfirmBtn = document.getElementById("confirmResetDefaultsBtn");
-            const resetModal = resetModalElement ? new bootstrap.Modal(resetModalElement) : null;
             const body = document.body;
             const keepResetButtonVisible = {% if show_reset_to_default %}true{% else %}false{% endif %};
             let isFullscreen = false;
@@ -843,18 +813,15 @@
                 }
             };
 
-            function hideResetFeedback() {
-                if (!resetFeedback) return;
-                resetFeedback.style.display = 'none';
-                resetFeedback.classList.remove('alert-success', 'alert-danger');
-            }
-
             function showResetFeedback(message, type) {
-                if (!resetFeedback || !resetFeedbackMessage) return;
-                resetFeedbackMessage.textContent = message;
-                resetFeedback.classList.remove('alert-success', 'alert-danger');
-                resetFeedback.classList.add(type === 'success' ? 'alert-success' : 'alert-danger');
-                resetFeedback.style.display = 'block';
+                if (typeof Swal !== 'undefined' && typeof Swal.fire === 'function') {
+                    return Swal.fire({
+                        title: type === 'success' ? 'Listo' : 'No fue posible completar la acción',
+                        text: message,
+                        icon: type === 'success' ? 'success' : 'error',
+                        confirmButtonText: 'Entendido',
+                    });
+                }
             }
 
             function setResetButtonState(visible, enabled) {
@@ -883,7 +850,7 @@
 
             async function resetToDefault() {
                 if (!report || typeof report.resetPersistentFilters !== 'function') {
-                    showResetFeedback(
+                    await showResetFeedback(
                         'No fue posible restablecer los valores predeterminados en este reporte.',
                         'danger'
                     );
@@ -891,24 +858,22 @@
                     return;
                 }
 
-                hideResetFeedback();
-                resetConfirmBtn.disabled = true;
-                resetConfirmBtn.innerHTML = 'Restableciendo...';
+                resetBtn.disabled = true;
+                resetBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Restableciendo...';
 
                 try {
                     await report.resetPersistentFilters();
-                    showResetFeedback('Se restablecieron los valores predeterminados del reporte.', 'success');
-                    resetModal.hide();
+                    await showResetFeedback('Se restablecieron los valores predeterminados del reporte.', 'success');
                     await updateResetButtonVisibility();
                 } catch (error) {
                     console.error('Reset persistent filters error:', error);
-                    showResetFeedback(
+                    await showResetFeedback(
                         'No fue posible restablecer los valores predeterminados en este reporte.',
                         'danger'
                     );
                 } finally {
-                    resetConfirmBtn.disabled = false;
-                    resetConfirmBtn.innerHTML = 'Restablecer';
+                    resetBtn.innerHTML = '<i class="fas fa-rotate-left"></i> Restablecer';
+                    resetBtn.disabled = false;
                 }
             }
 
@@ -968,17 +933,31 @@
             // Event listeners para los botones de pantalla completa
             fullscreenBtn.addEventListener('click', enterFullscreen);
             exitFullscreenBtn.addEventListener('click', exitFullscreen);
-            if (resetFeedbackDismissBtn) {
-                resetFeedbackDismissBtn.addEventListener('click', hideResetFeedback);
-            }
-            if (resetBtn && resetModal) {
-                resetBtn.addEventListener('click', function() {
-                    hideResetFeedback();
-                    resetModal.show();
+            if (resetBtn) {
+                resetBtn.addEventListener('click', async function() {
+                    if (resetBtn.disabled) return;
+
+                    if (typeof Swal === 'undefined' || typeof Swal.fire !== 'function') {
+                        await resetToDefault();
+                        return;
+                    }
+
+                    const result = await Swal.fire({
+                        title: 'Restablecer a valores predeterminados',
+                        text: '¿Quiere restablecer los filtros, las segmentaciones y otros cambios de vista aplicados a este reporte?',
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonText: 'Restablecer',
+                        cancelButtonText: 'Cancelar',
+                        confirmButtonColor: '#0d6efd',
+                        cancelButtonColor: '#6c757d',
+                        reverseButtons: true,
+                    });
+
+                    if (result.isConfirmed) {
+                        await resetToDefault();
+                    }
                 });
-            }
-            if (resetConfirmBtn) {
-                resetConfirmBtn.addEventListener('click', resetToDefault);
             }
             
             // También soporte para la tecla ESC
@@ -1444,6 +1423,7 @@
     {% endif %}{# chatbot_enabled #}
 
     <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

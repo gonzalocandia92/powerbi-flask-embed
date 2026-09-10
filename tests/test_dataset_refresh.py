@@ -432,6 +432,8 @@ class TestPublicResetToDefaultSupport(_BaseTestCase):
         self.assertIn('Restablecer a valores predeterminados', html)
         self.assertIn('persistentFiltersEnabled: true', html)
         self.assertIn('const keepResetButtonVisible = true;', html)
+        self.assertIn('https://cdn.jsdelivr.net/npm/sweetalert2@11', html)
+        self.assertIn('Swal.fire({', html)
         self.assertIn('arePersistentFiltersApplied', html)
         self.assertIn('resetPersistentFilters', html)
 
@@ -470,6 +472,7 @@ class TestPrivateResetToDefaultSupport(_BaseTestCase):
         self.assertIn('persistentFiltersEnabled: true', html)
         self.assertIn('const keepResetButtonVisible = true;', html)
         self.assertIn('keepResetButtonVisible || Boolean(hasPersistentFilters)', html)
+        self.assertIn('Swal.fire({', html)
 
 
 if __name__ == '__main__':
