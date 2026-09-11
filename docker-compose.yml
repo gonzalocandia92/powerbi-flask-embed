@@ -9,6 +9,7 @@ services:
       - .env
     environment:
       MCP_INTERNAL_REQUIRE_MTLS: "${MCP_INTERNAL_REQUIRE_MTLS:-false}"
+      MCP_OAUTH_DCR_ENABLED: "${MCP_OAUTH_DCR_ENABLED:-false}"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:2052/healthz', timeout=5)"]
       interval: 15s
@@ -30,7 +31,7 @@ services:
       MCP_OAUTH_ISSUER: "${MCP_OAUTH_ISSUER:-http://localhost:2052}"
       MCP_PUBLIC_URL: "${MCP_PUBLIC_URL:-http://localhost:8000/mcp}"
       MCP_ALLOWED_HOSTS: "${MCP_ALLOWED_HOSTS:-}"
-      MCP_ALLOWED_ORIGINS: "${MCP_ALLOWED_ORIGINS:-https://claude.ai,https://claude.com}"
+      MCP_ALLOWED_ORIGINS: "${MCP_ALLOWED_ORIGINS:-https://claude.ai,https://claude.com,https://chatgpt.com}"
       MCP_BROKER_URL: "${MCP_BROKER_URL_DOCKER:-http://flask-powerbi:2052}"
       MCP_INTERNAL_JWT_SECRET: "${MCP_INTERNAL_JWT_SECRET:?Set MCP_INTERNAL_JWT_SECRET to a 32+ byte random value}"
       MCP_SERVICE_ID: "${MCP_SERVICE_ID:-mcp-aklara}"

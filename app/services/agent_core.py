@@ -389,7 +389,7 @@ async def _rewrite_query_for_reranker(
                 response = await client.messages.create(
                     model="claude-haiku-4-5-20251001",
                     max_tokens=100,
-                    temperature=0.0,
+                    extra_body={"temperature": 0.0},
                     system=system_prompt,
                     messages=[{"role": "user", "content": user_message}],
                 )

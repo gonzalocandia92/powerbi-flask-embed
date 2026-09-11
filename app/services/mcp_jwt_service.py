@@ -130,11 +130,14 @@ def jwks_document():
     return {'keys': [jwk]}
 
 
-def audit(event_type, *, oauth_session=None, grant=None, outcome='success', details=None):
+def audit(
+    event_type, *, oauth_session=None, grant=None, client_id=None,
+    outcome='success', details=None
+):
     entry = McpSecurityAuditLog(
         event_type=event_type,
         user_id=oauth_session.user_id if oauth_session else (grant.user_id if grant else None),
-        client_id=oauth_session.client_id if oauth_session else None,
+        client_id=oauth_session.client_id if oauth_session else client_id,
         session_public_id=oauth_session.public_id if oauth_session else None,
         grant_public_id=grant.public_id if grant else None,
         empresa_id=grant.empresa_id if grant else None,
