@@ -116,6 +116,7 @@ class PublicLinkForm(FlaskForm):
         validators=[DataRequired(), Length(max=120)]
     )
     allow_refresh = BooleanField('Permitir actualización de datos', default=False)
+    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
     submit = SubmitField("Crear Link")
 
 
@@ -155,6 +156,7 @@ class PublicUrlLinkForm(FlaskForm):
         validators=[DataRequired(), Length(max=120)]
     )
     allow_refresh = BooleanField('Permitir actualización de datos', default=False)
+    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
     submit = SubmitField("Crear Link Público")
 
 

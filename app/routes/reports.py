@@ -307,6 +307,7 @@ def view_report(report_id):
         config_name=report.name,
         is_public=False,
         allow_refresh=True,
+        show_reset_to_default=True,
         refresh_url=url_for('reports.refresh_report', report_id=report.id),
     )
 
@@ -383,7 +384,8 @@ def new_link(report_id):
             custom_slug=custom_slug,
             report_id_fk=report.id,
             is_active=True,
-            allow_refresh=form.allow_refresh.data
+            allow_refresh=form.allow_refresh.data,
+            allow_reset_to_default=form.allow_reset_to_default.data,
         )
         db.session.add(link)
         db.session.commit()
@@ -420,6 +422,7 @@ def edit_link(report_id, link_id):
         
         link.custom_slug = new_slug
         link.allow_refresh = form.allow_refresh.data
+        link.allow_reset_to_default = form.allow_reset_to_default.data
         db.session.commit()
         logging.debug(f"Public link edited: {link.custom_slug} (ID: {link.id})")
         flash(f"Link público actualizado: /p/{new_slug}", "success")
@@ -642,7 +645,8 @@ def from_url_link():
             custom_slug=link_name,
             report_id_fk=report.id,
             is_active=True,
-            allow_refresh=form.allow_refresh.data
+            allow_refresh=form.allow_refresh.data,
+            allow_reset_to_default=form.allow_reset_to_default.data,
         )
         db.session.add(link)
         db.session.commit()

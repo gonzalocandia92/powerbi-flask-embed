@@ -13,6 +13,9 @@
     
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+
+    <!-- SweetAlert2 -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/sweetalert2@11/dist/sweetalert2.min.css">
     
     <!-- Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -220,6 +223,32 @@
         }
         
         .refresh-btn:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .reset-btn {
+            background: #6c757d;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            padding: 8px 20px;
+            font-size: 0.9rem;
+            transition: all 0.3s ease;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            margin-left: 10px;
+        }
+
+        .reset-btn:hover {
+            background: #5c636a;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+        }
+
+        .reset-btn:disabled {
             opacity: 0.7;
             cursor: not-allowed;
             transform: none;
@@ -669,6 +698,12 @@
                                     <i class="fas fa-expand"></i>
                                     Pantalla completa
                                 </button>
+                                {% if show_reset_to_default %}
+                                <button id="resetDefaultsBtn" class="reset-btn" title="Restablecer filtros y segmentaciones">
+                                    <i class="fas fa-rotate-left"></i>
+                                    Restablecer
+                                </button>
+                                {% endif %}
                                 {% if allow_refresh %}
                                 <button id="refreshDatasetBtn" class="refresh-btn" title="Actualizar modelo de datos">
                                     <i class="fas fa-sync-alt"></i>
@@ -696,7 +731,7 @@
                             </div>
                         </div>
                     </div>
-                    
+
                     <!-- Report Container (wrapped in panViewport for fullscreen zoom/pan) -->
                     <div id="panViewport">
                         <div id="reportContainer" class="report-container"></div>
@@ -739,9 +774,12 @@
             const errorMessage = document.getElementById("errorMessage");
             const fullscreenBtn = document.getElementById("fullscreenBtn");
             const exitFullscreenBtn = document.getElementById("exitFullscreenBtn");
+            const resetBtn = document.getElementById("resetDefaultsBtn");
             const body = document.body;
+            const keepResetButtonVisible = {% if show_reset_to_default %}true{% else %}false{% endif %};
             let isFullscreen = false;
             let report; // Variable global para el reporte
+            let resetVisibilityPoller;
             
             // Hide error display initially
             errorDisplay.style.display = 'none';
@@ -769,10 +807,75 @@
                             visible: {% if is_public %}false{% else %}true{% endif %}
                         } 
                     },
+                    persistentFiltersEnabled: {% if show_reset_to_default %}true{% else %}false{% endif %},
                     background: models.BackgroundType.Default,
                     hideErrors: {% if is_public %}true{% else %}false{% endif %}
                 }
             };
+
+            function showResetFeedback(message, type) {
+                if (typeof Swal !== 'undefined' && typeof Swal.fire === 'function') {
+                    return Swal.fire({
+                        title: type === 'success' ? 'Listo' : 'No fue posible completar la acción',
+                        text: message,
+                        icon: type === 'success' ? 'success' : 'error',
+                        confirmButtonText: 'Entendido',
+                    });
+                }
+            }
+
+            function setResetButtonState(visible, enabled) {
+                if (!resetBtn) return;
+                resetBtn.style.display = visible ? 'inline-flex' : 'none';
+                resetBtn.disabled = !enabled;
+            }
+
+            async function updateResetButtonVisibility() {
+                if (!resetBtn || !report || typeof report.arePersistentFiltersApplied !== 'function') {
+                    setResetButtonState(keepResetButtonVisible, keepResetButtonVisible);
+                    return;
+                }
+
+                try {
+                    const hasPersistentFilters = await report.arePersistentFiltersApplied();
+                    setResetButtonState(
+                        keepResetButtonVisible || Boolean(hasPersistentFilters),
+                        keepResetButtonVisible || Boolean(hasPersistentFilters)
+                    );
+                } catch (error) {
+                    console.error('Persistent filters visibility error:', error);
+                    setResetButtonState(keepResetButtonVisible, keepResetButtonVisible);
+                }
+            }
+
+            async function resetToDefault() {
+                if (!report || typeof report.resetPersistentFilters !== 'function') {
+                    await showResetFeedback(
+                        'No fue posible restablecer los valores predeterminados en este reporte.',
+                        'danger'
+                    );
+                    setResetButtonState(keepResetButtonVisible, keepResetButtonVisible);
+                    return;
+                }
+
+                resetBtn.disabled = true;
+                resetBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Restableciendo...';
+
+                try {
+                    await report.resetPersistentFilters();
+                    await showResetFeedback('Se restablecieron los valores predeterminados del reporte.', 'success');
+                    await updateResetButtonVisibility();
+                } catch (error) {
+                    console.error('Reset persistent filters error:', error);
+                    await showResetFeedback(
+                        'No fue posible restablecer los valores predeterminados en este reporte.',
+                        'danger'
+                    );
+                } finally {
+                    resetBtn.innerHTML = '<i class="fas fa-rotate-left"></i> Restablecer';
+                    resetBtn.disabled = false;
+                }
+            }
 
             // Función para entrar en pantalla completa
             function enterFullscreen() {
@@ -830,6 +933,32 @@
             // Event listeners para los botones de pantalla completa
             fullscreenBtn.addEventListener('click', enterFullscreen);
             exitFullscreenBtn.addEventListener('click', exitFullscreen);
+            if (resetBtn) {
+                resetBtn.addEventListener('click', async function() {
+                    if (resetBtn.disabled) return;
+
+                    if (typeof Swal === 'undefined' || typeof Swal.fire !== 'function') {
+                        await resetToDefault();
+                        return;
+                    }
+
+                    const result = await Swal.fire({
+                        title: 'Restablecer a valores predeterminados',
+                        text: '¿Quiere restablecer los filtros, las segmentaciones y otros cambios de vista aplicados a este reporte?',
+                        icon: 'warning',
+                        showCancelButton: true,
+                        confirmButtonText: 'Restablecer',
+                        cancelButtonText: 'Cancelar',
+                        confirmButtonColor: '#0d6efd',
+                        cancelButtonColor: '#6c757d',
+                        reverseButtons: true,
+                    });
+
+                    if (result.isConfirmed) {
+                        await resetToDefault();
+                    }
+                });
+            }
             
             // También soporte para la tecla ESC
             document.addEventListener('keydown', function(e) {
@@ -986,6 +1115,12 @@
                 report.on("loaded", function() {
                     console.log("Report loaded successfully");
                     loadingOverlay.style.display = 'none';
+                    if (resetBtn) {
+                        updateResetButtonVisibility();
+                        if (!resetVisibilityPoller) {
+                            resetVisibilityPoller = window.setInterval(updateResetButtonVisibility, 5000);
+                        }
+                    }
                 });
                 
                 report.on("error", function(event) {
@@ -1288,6 +1423,7 @@
     {% endif %}{# chatbot_enabled #}
 
     <!-- Bootstrap JS -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 </body>
 </html>

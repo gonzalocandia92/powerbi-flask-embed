@@ -4,7 +4,7 @@
 <div class="container-fluid py-4">
   <h2>OAuth MCP</h2>
   <div class="row g-4">
-    <div class="col-lg-5"><div class="card"><div class="card-header"><strong>Cliente estático</strong></div><div class="card-body">
+    <div class="col-lg-5"><div class="card"><div class="card-header"><strong>Cliente estático (fallback)</strong></div><div class="card-body">
       <form method="post" action="{{ url_for('mcp_oauth_admin.save_client') }}">
         <label class="form-label">Client ID</label><input class="form-control mb-2" name="client_id" value="claude-mcp" required>
         <label class="form-label">Nombre</label><input class="form-control mb-2" name="name" value="Claude MCP" required>
@@ -24,8 +24,8 @@ https://claude.com/api/mcp/auth_callback</textarea>
       </form>
     </div></div></div>
     <div class="col-lg-7"><div class="card"><div class="card-header"><strong>Clientes registrados</strong></div><div class="card-body table-responsive">
-      <table class="table table-sm"><thead><tr><th>ID</th><th>Nombre</th><th>Tipo</th><th>Estado</th><th>Redirects</th><th></th></tr></thead><tbody>
-      {% for client in clients %}<tr><td><code>{{ client.client_id }}</code></td><td>{{ client.name }}</td><td><code>{{ client.token_endpoint_auth_method }}</code></td><td>{{ 'Activo' if client.is_active else 'Inactivo' }}</td><td>{{ client.redirect_uris|join(', ') }}</td><td class="text-end">{% if client.token_endpoint_auth_method != 'none' %}<form method="post" action="{{ url_for('mcp_oauth_admin.regenerate_client_secret', client_pk=client.id) }}" onsubmit="return confirm('¿Regenerar el client secret? El valor anterior dejará de funcionar.');"><button class="btn btn-sm btn-outline-warning" type="submit"><i class="bi bi-arrow-clockwise"></i> Regenerar secret</button></form>{% endif %}</td></tr>{% else %}<tr><td colspan="6">Sin clientes.</td></tr>{% endfor %}
+      <table class="table table-sm"><thead><tr><th>ID</th><th>Nombre</th><th>Origen</th><th>Tipo</th><th>Estado</th><th>Redirects</th><th></th></tr></thead><tbody>
+      {% for client in clients %}<tr><td><code>{{ client.client_id }}</code></td><td>{{ client.name }}</td><td><span class="badge text-bg-{{ 'info' if client.registration_method == 'dynamic' else 'secondary' }}">{{ 'Dinámico' if client.registration_method == 'dynamic' else 'Estático' }}</span></td><td><code>{{ client.token_endpoint_auth_method }}</code></td><td>{{ 'Activo' if client.is_active else 'Inactivo' }}</td><td>{{ client.redirect_uris|join(', ') }}</td><td class="text-end"><div class="d-flex gap-1 justify-content-end">{% if client.registration_method == 'static' and client.token_endpoint_auth_method != 'none' %}<form method="post" action="{{ url_for('mcp_oauth_admin.regenerate_client_secret', client_pk=client.id) }}" onsubmit="return confirm('¿Regenerar el client secret? El valor anterior dejará de funcionar.');"><button class="btn btn-sm btn-outline-warning" type="submit"><i class="bi bi-arrow-clockwise"></i> Secret</button></form>{% endif %}<form method="post" action="{{ url_for('mcp_oauth_admin.set_client_status', client_pk=client.id) }}"{% if client.is_active %} onsubmit="return confirm('¿Desactivar este cliente y revocar todas sus sesiones?');"{% endif %}><input type="hidden" name="is_active" value="{{ 'false' if client.is_active else 'true' }}"><button class="btn btn-sm btn-outline-{{ 'danger' if client.is_active else 'success' }}" type="submit">{{ 'Desactivar' if client.is_active else 'Activar' }}</button></form></div></td></tr>{% else %}<tr><td colspan="7">Sin clientes.</td></tr>{% endfor %}
       </tbody></table>
     </div></div></div>
   </div>

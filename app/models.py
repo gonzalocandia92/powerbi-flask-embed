@@ -343,6 +343,7 @@ class PublicLink(db.Model):
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
     allow_refresh = db.Column(db.Boolean, default=False, nullable=False)
+    allow_reset_to_default = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow)
 
     report = db.relationship('Report', back_populates='public_links')
@@ -880,19 +881,26 @@ class McpModelGrant(db.Model):
 
 
 class McpOAuthClient(db.Model, ClientMixin):
-    """Pre-registered OAuth client. Dynamic client registration is not supported."""
+    """Static or dynamically registered OAuth client for MCP connections."""
 
     __tablename__ = 'mcp_oauth_clients'
+    __table_args__ = (
+        db.CheckConstraint(
+            "registration_method IN ('static', 'dynamic')",
+            name='ck_mcp_oauth_clients_registration_method',
+        ),
+    )
 
     id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
     client_id = db.Column(db.String(120), unique=True, nullable=False, index=True)
-    client_secret_hash = db.Column(db.String(256), nullable=False)
+    client_secret_hash = db.Column(db.String(256), nullable=True)
     name = db.Column(db.String(200), nullable=False)
     redirect_uris = db.Column(db.JSON, nullable=False, default=list)
     allowed_scopes = db.Column(db.JSON, nullable=False, default=list)
     grant_types = db.Column(db.JSON, nullable=False, default=lambda: ['authorization_code', 'refresh_token'])
     response_types = db.Column(db.JSON, nullable=False, default=lambda: ['code'])
     token_endpoint_auth_method = db.Column(db.String(40), nullable=False, default='client_secret_basic')
+    registration_method = db.Column(db.String(16), nullable=False, default='static')
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
@@ -915,7 +923,9 @@ class McpOAuthClient(db.Model, ClientMixin):
         self.client_secret_hash = generate_password_hash(raw_secret)
 
     def check_client_secret(self, client_secret):
-        return bool(client_secret) and check_password_hash(self.client_secret_hash, client_secret)
+        return bool(client_secret and self.client_secret_hash) and check_password_hash(
+            self.client_secret_hash, client_secret
+        )
 
     def check_endpoint_auth_method(self, method, endpoint):
         return endpoint != 'token' or secrets.compare_digest(self.token_endpoint_auth_method, method)
