@@ -1,0 +1,86 @@
+{% extends "layout.html" %}
+{% block title %}Componentes del chat - Sudata PBI{% endblock %}
+{% block body %}
+<div class="container-fluid py-2" id="components-page">
+  {% set active_ai_section = 'components' %}
+  {% include "admin/ai_config/_navigation.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div><h2 class="fw-bold mb-1">Componentes del chat</h2><p class="text-muted mb-0">Configura disponibilidad y componentes con herencia reporte → empresa → global.</p></div>
+    <div class="d-flex gap-2"><a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.catalog_page') }}">Catalogo</a><button class="btn btn-primary" id="save-scope" type="button">Guardar alcance</button></div>
+  </div>
+  <div id="message"></div>
+  <div class="card mb-4"><div class="card-body"><div class="row g-3 align-items-end">
+    <div class="col-lg-3"><label class="form-label" for="scope-type">Alcance</label><select class="form-select" id="scope-type"><option value="global">Global</option><option value="empresa">Empresa</option><option value="report">Reporte</option></select></div>
+    <div class="col-lg-4 scope-target" id="company-wrap" hidden><label class="form-label" for="company-id">Empresa</label><select class="form-select" id="company-id">{% for item in companies %}<option value="{{ item.id }}">{{ item.nombre }}</option>{% endfor %}</select></div>
+    <div class="col-lg-4 scope-target" id="report-wrap" hidden><label class="form-label" for="report-id">Reporte</label><select class="form-select" id="report-id">{% for item in reports %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></div>
+    <div class="col-lg-5 text-muted small" id="scope-note">Los valores globales son el fallback del sistema.</div>
+  </div></div></div>
+
+  <div class="card mb-4"><div class="card-header d-flex justify-content-between align-items-center"><div><h5 class="mb-1">Modelo principal y selector del chat</h5><div class="text-muted small">Un override de empresa o reporte reemplaza la lista heredada completa.</div></div><label class="form-check"><input class="form-check-input" type="checkbox" id="inherit-grants"><span class="form-check-label">Heredar disponibilidad</span></label></div>
+    <div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Modelo</th><th>Estado</th><th>Permitido</th><th>Visible</th><th>Predeterminado</th></tr></thead><tbody>
+      {% for model in models %}<tr data-model="{{ model.model_key }}"><td><div class="fw-semibold">{{ model.display_name }}</div><code>{{ model.model_key }}</code></td><td><span class="badge {{ 'bg-success' if model.validation_status == 'passed' else 'bg-warning text-dark' }}">{{ model.validation_status }}</span></td><td><input class="form-check-input grant-allowed" type="checkbox"></td><td><input class="form-check-input grant-selectable" type="checkbox"></td><td><input class="form-check-input grant-default" type="radio" name="default-model"></td></tr>{% endfor %}
+    </tbody></table></div>
+  </div>
+
+  <div class="card"><div class="card-header"><h5 class="mb-1">Componentes internos</h5><div class="text-muted small">Heredar no crea un registro en este alcance.</div></div><div class="card-body"><div class="row g-3">
+    <div class="col-lg-4"><label class="form-label" for="role-query_rewriter">Reescritor de consultas</label><select class="form-select component-select" id="role-query_rewriter" data-role="query_rewriter"><option value="inherit">Heredar</option><option value="disabled">Deshabilitado</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
+    <div class="col-lg-4"><label class="form-label" for="role-skill_selector">Selector de skills</label><select class="form-select component-select" id="role-skill_selector" data-role="skill_selector"><option value="inherit">Heredar</option><option value="embeddings">Solo embeddings</option><option value="jev">Jev</option><option value="jev_with_llm_fallback">Jev con fallback al selector actual</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
+    <div class="col-lg-4"><label class="form-label" for="role-complexity_classifier">Clasificador de complejidad</label><select class="form-select component-select" id="role-complexity_classifier" data-role="complexity_classifier"><option value="inherit">Heredar</option><option value="disabled">Deshabilitado</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
+  </div></div></div>
+</div>
+{% endblock %}
+{% block scripts %}{{ super() }}<script>
+(() => {
+  const csrf = document.querySelector('meta[name="csrf-token"]').content;
+  const scopeType = document.getElementById('scope-type');
+  const inherit = document.getElementById('inherit-grants');
+  const message = document.getElementById('message');
+  const scopeId = () => scopeType.value === 'empresa' ? document.getElementById('company-id').value : (scopeType.value === 'report' ? document.getElementById('report-id').value : null);
+  const escapeHtml = value => String(value || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const showMessage = (text, kind='success') => { message.innerHTML = `<div class="alert alert-${kind}">${escapeHtml(text)}</div>`; };
+  function toggleTargets() {
+    document.getElementById('company-wrap').hidden = scopeType.value !== 'empresa';
+    document.getElementById('report-wrap').hidden = scopeType.value !== 'report';
+    document.getElementById('scope-note').textContent = scopeType.value === 'global' ? 'Los valores globales son el fallback del sistema.' : 'Sin override se utiliza la configuración heredada.';
+  }
+  function setGrantDisabled() { document.querySelectorAll('.grant-allowed,.grant-selectable,.grant-default').forEach(el => el.disabled = inherit.checked); }
+  async function loadScope() {
+    toggleTargets(); message.innerHTML = '';
+    const query = new URLSearchParams({scope_type: scopeType.value}); if (scopeId()) query.set('scope_id', scopeId());
+    const response = await fetch(`{{ url_for('model_catalog.effective_scope') }}?${query}`);
+    const data = await response.json(); if (!response.ok) return showMessage(data.error || 'No se pudo cargar.', 'danger');
+    const grants = data.direct_grants.length ? data.direct_grants : data.grants;
+    inherit.checked = scopeType.value !== 'global' && data.direct_grants.length === 0;
+    document.querySelectorAll('tr[data-model]').forEach(row => {
+      const grant = grants.find(item => item.model_key === row.dataset.model);
+      row.querySelector('.grant-allowed').checked = !!(grant && grant.allowed);
+      row.querySelector('.grant-selectable').checked = !!(grant && grant.client_selectable !== false);
+      row.querySelector('.grant-default').checked = !!(grant && grant.is_default);
+    });
+    setGrantDisabled();
+    document.querySelectorAll('.component-select').forEach(select => {
+      const item = data.components[select.dataset.role]; const direct = item.direct;
+      select.value = direct ? (direct.strategy === 'model' ? `model:${direct.model_key}` : direct.strategy) : 'inherit';
+      select.parentElement.querySelector('.component-effective').textContent = `Efectivo: ${item.strategy}${item.model_key ? ' · ' + item.model_key : ''} · origen ${item.source_scope}`;
+    });
+  }
+  async function saveScope() {
+    let grants = [];
+    if (!inherit.checked || scopeType.value === 'global') {
+      document.querySelectorAll('tr[data-model]').forEach(row => {
+        const allowed = row.querySelector('.grant-allowed').checked;
+        if (allowed) grants.push({model_key: row.dataset.model, allowed: true, client_selectable: row.querySelector('.grant-selectable').checked, is_default: row.querySelector('.grant-default').checked});
+      });
+    }
+    const roles = {};
+    document.querySelectorAll('.component-select').forEach(select => {
+      const [strategy, modelKey] = select.value.split(':'); roles[select.dataset.role] = {strategy}; if (modelKey) roles[select.dataset.role].model_key = modelKey;
+    });
+    const body = {scope_type: scopeType.value, grants, roles}; if (scopeId()) body.scope_id = scopeId();
+    const response = await fetch(`{{ url_for('model_catalog.replace_scope') }}`, {method:'PUT', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify(body)});
+    const data = await response.json(); if (!response.ok) return showMessage(data.error || 'No se pudo guardar.', 'danger');
+    showMessage('Configuración guardada.'); await loadScope();
+  }
+  scopeType.addEventListener('change', loadScope); document.getElementById('company-id').addEventListener('change', loadScope); document.getElementById('report-id').addEventListener('change', loadScope); inherit.addEventListener('change', setGrantDisabled); document.getElementById('save-scope').addEventListener('click', saveScope); loadScope();
+})();
+</script>{% endblock %}

@@ -15,8 +15,8 @@ from datetime import datetime, timezone
 from flask import Blueprint, current_app, jsonify, request
 
 from app import db
-from app.models import ChatMessage, ChatSession
-from app.services import chatbot_service
+from app.models import ChatMessage, ChatSession, PublicLink
+from app.services import ai_billing, chatbot_service, model_catalog
 from app.utils.chatbot_context import get_all_active_reports, get_workspace_info
 
 bp = Blueprint("chatbot", __name__)
@@ -42,6 +42,7 @@ async def chat():
         conversation_id_value = None
 
     reset_history = bool(data.get("reset_history", False))
+    model_key = (data.get("model_key") or "").strip() or None
 
     client_ip = request.headers.get("X-Forwarded-For") or request.remote_addr or "unknown"
     client_ip = client_ip.split(",")[0].strip()
@@ -54,24 +55,54 @@ async def chat():
             user_key=user_key,
             conversation_id=conversation_id_value,
             reset_history=reset_history,
+            model_key=model_key,
         )
     except chatbot_service.ChatbotNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
     except chatbot_service.ChatbotLimitExceededError as exc:
         return jsonify({"error": str(exc)}), 403
+    except chatbot_service.ChatbotModelNotAllowedError as exc:
+        return jsonify({"error": str(exc), "code": "model_not_allowed"}), 400
     except Exception as exc:
         logging.exception("[Chatbot] Failed to process /chat request")
         return jsonify({"error": f"Error al procesar la consulta: {str(exc)}"}), 500
 
-    return jsonify(
-        {
-            "answer": resultado["answer"],
-            "conversation_id": resultado["conversation_id"],
-            "report_id": resultado["report_id"],
-            "tool_rounds": resultado.get("tool_rounds", 0),
-            "dax_query": resultado.get("dax_query"),
-        }
+    payload = {
+        "answer": resultado["answer"],
+        "conversation_id": resultado["conversation_id"],
+        "report_id": resultado["report_id"],
+        "tool_rounds": resultado.get("tool_rounds", 0),
+        "dax_query": resultado.get("dax_query"),
+    }
+    for key in ("model_key", "provider", "actual_model"):
+        if resultado.get(key) is not None:
+            payload[key] = resultado[key]
+    return jsonify(payload)
+
+
+@bp.route("/api/chatbot/models", methods=["GET"])
+def chat_models():
+    """Return only evaluated models permitted for the report's effective scope."""
+    slug = (request.args.get("slug") or "").strip()
+    if not slug:
+        return jsonify({"error": "slug is required"}), 400
+    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
+    if link is None:
+        return jsonify({"error": "Slug not found or inactive"}), 404
+    report = link.report
+    billing = ai_billing.resolve_report_billing_context(report)
+    models = model_catalog.available_client_models(
+        report_id=report.id, empresa_id=billing.empresa_id, config=dict(current_app.config)
     )
+    selected_key = model_catalog.session_model_key(
+        request.args.get("conversation_id"), report_id=report.id
+    )
+    allowed_keys = {item["model_key"] for item in models}
+    if selected_key not in allowed_keys:
+        selected_key = next((item["model_key"] for item in models if item["is_default"]), None)
+        if selected_key is None and models:
+            selected_key = models[0]["model_key"]
+    return jsonify({"models": models, "selected_model_key": selected_key})
 
 
 @bp.route("/api/chatbot/context/<slug>", methods=["GET"])
@@ -217,6 +248,7 @@ def list_sessions():
                 "last_message_at": s.last_message_at.isoformat(),
                 "total_messages": s.total_messages,
                 "had_errors": s.had_errors,
+                "last_model_key": s.last_model_key,
             }
             for s in sessions
         ]
@@ -238,6 +270,7 @@ def get_session(session_id):
             "last_message_at": session.last_message_at.isoformat(),
             "total_messages": session.total_messages,
             "had_errors": session.had_errors,
+            "last_model_key": session.last_model_key,
             "messages": [
                 {
                     "id": m.id,
@@ -246,6 +279,13 @@ def get_session(session_id):
                     "created_at": m.created_at.isoformat(),
                     "latency_ms": m.latency_ms,
                     "model_used": m.model_used,
+                    "requested_model_key": m.requested_model_key,
+                    "model_key": m.model_key,
+                    "model_provider": m.model_provider,
+                    "physical_model": m.physical_model,
+                    "model_gateway": m.model_gateway,
+                    "service_tier": m.service_tier,
+                    "actual_model": m.actual_model,
                     "input_tokens": m.input_tokens,
                     "output_tokens": m.output_tokens,
                     "mcp_used": m.mcp_used,

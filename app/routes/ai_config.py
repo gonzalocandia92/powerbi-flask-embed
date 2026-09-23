@@ -3,7 +3,7 @@ import csv
 import json
 import re
 from collections import defaultdict
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from io import StringIO
 
 from flask import Blueprint, Response, current_app, flash, redirect, render_template, request, url_for
@@ -13,7 +13,9 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 
 from app import db
 from app.forms import AgentPromptConfigForm, AIModelPricingForm, AnalyticsSkillForm, BillingLimitForm
-from app.models import AgentPromptConfig, AIModelPricing, AnalyticsSkill, BillingLimit, Empresa, Report
+from app.models import AgentPromptConfig, AIModelPricing, AIUsageEvent, AnalyticsSkill, BillingLimit, Empresa, Report
+from app.services import ai_billing
+from app.services.llm.profiles import PROFILES, profile_catalog, profile_for
 from app.services.skill_vector_service import trigger_all_skill_reindex_update, trigger_skill_embedding_update
 from app.utils.decorators import retry_on_db_error
 
@@ -117,6 +119,11 @@ def _date_end(value):
 
 def _as_float(value):
     return float(value) if value is not None else 0.0
+
+
+def _optional_text(value):
+    text = str(value or '').strip()
+    return text or None
 
 
 def _active_limits_by_scope():
@@ -1295,6 +1302,16 @@ def index():
         )
         .all()
     )
+    pending_usage = (
+        AIUsageEvent.query
+        .filter(AIUsageEvent.billing_status == 'pending_reconciliation')
+        .order_by(AIUsageEvent.created_at.desc(), AIUsageEvent.id.desc())
+        .limit(20)
+        .all()
+    )
+    pending_usage_count = AIUsageEvent.query.filter(
+        AIUsageEvent.billing_status == 'pending_reconciliation'
+    ).count()
     skills = (
         AnalyticsSkill.query
         .options(
@@ -1318,6 +1335,8 @@ def index():
         company_prompts=company_prompts,
         report_prompts=report_prompts,
         pricings=pricings,
+        pending_usage=pending_usage,
+        pending_usage_count=pending_usage_count,
         skills=skills,
         skill_groups=_build_skill_groups(skills),
         skill_index_summary=_build_skill_index_summary(skills),
@@ -2070,6 +2089,42 @@ def company_limit(empresa_id):
     )
 
 
+def _pricing_profile_error(form, gateway, context_band, pricing_tier):
+    if form.event_type.data != 'generation':
+        return None
+    provider = form.provider.data.strip().lower()
+    model = form.model.data.strip()
+    known = any(p.supports(provider, model, candidate_gateway)
+                for p in PROFILES.values() for candidate_gateway in ('direct', 'openrouter'))
+    if known and not gateway:
+        return form.gateway, 'Selecciona el gateway para una tarifa de modelo con perfil.'
+    profile = profile_for(None, provider, model, gateway) if gateway else None
+    if known and profile is None:
+        return form.gateway, 'Esta combinación de modelo y gateway no tiene un perfil verificado.'
+    service_tier = _optional_text(form.service_tier.data)
+    if profile and service_tier not in ((None, 'flex') if profile.supports_flex else (None,)):
+        return form.service_tier, 'Service tier no permitido para este perfil.'
+    if profile and profile.key == 'deepseek-v4' and pricing_tier not in {'peak', 'off-peak'}:
+        return form.pricing_tier, 'DeepSeek directo requiere peak u off-peak.'
+    if profile and profile.key != 'deepseek-v4' and pricing_tier:
+        return form.pricing_tier, 'Este perfil no utiliza bandas peak/off-peak.'
+    if profile and profile.key == 'openai-gpt-5.6' and context_band not in {'short', 'long'}:
+        return form.context_band, 'GPT-5.6 requiere banda short o long.'
+    if profile and profile.key != 'openai-gpt-5.6' and context_band:
+        return form.context_band, 'Este perfil no utiliza bandas de contexto.'
+    if profile and not _optional_text(form.source_url.data):
+        return form.source_url, 'Indica la fuente de la tarifa para poder auditarla.'
+    if profile:
+        required = ('input_cost_per_million_usd', 'output_cost_per_million_usd',
+                    'cache_read_cost_per_million_usd')
+        if profile.key in {'claude-haiku-4.5', 'openai-gpt-5.6'}:
+            required += ('cache_write_cost_per_million_usd',)
+        for field in required:
+            if getattr(form, field).data is None:
+                return getattr(form, field), 'Esta tarifa es necesaria para el perfil.'
+    return None
+
+
 @bp.route('/pricing/new', methods=['GET', 'POST'])
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
@@ -2081,30 +2136,41 @@ def pricing_new():
         form.is_active.data = True
 
     if form.validate_on_submit():
-        duplicate = AIModelPricing.query.filter(
-            AIModelPricing.provider == form.provider.data.strip().lower(),
-            AIModelPricing.model == form.model.data.strip(),
-            AIModelPricing.event_type == form.event_type.data,
-            AIModelPricing.is_active.is_(True),
-        ).first()
+        service_tier = _optional_text(form.service_tier.data)
+        pricing_tier = _optional_text(form.pricing_tier.data)
+        gateway = form.gateway.data or None
+        context_band = form.context_band.data or None
+        start = _date_start(form.effective_from.data)
+        end = _date_end(form.effective_to.data)
+        duplicate = ai_billing.overlapping_pricing(
+            provider=form.provider.data.strip().lower(), model=form.model.data.strip(),
+            event_type=form.event_type.data, service_tier=service_tier,
+            pricing_tier=pricing_tier, gateway=gateway, context_band=context_band,
+            effective_from=start, effective_to=end,
+        ) if form.is_active.data else None
         if duplicate and form.is_active.data:
-            form.model.errors.append("Ya existe un pricing activo para esta combinacion.")
+            form.model.errors.append("La vigencia se superpone con otra tarifa activa.")
         elif form.effective_to.data and form.effective_to.data < form.effective_from.data:
             form.effective_to.errors.append("La fecha final no puede ser anterior a la inicial.")
+        elif error := _pricing_profile_error(form, gateway, context_band, pricing_tier):
+            error[0].errors.append(error[1])
         else:
             pricing = AIModelPricing(
                 provider=form.provider.data.strip().lower(),
                 model=form.model.data.strip(),
                 event_type=form.event_type.data,
+                service_tier=service_tier,
+                pricing_tier=pricing_tier,
+                gateway=gateway, context_band=context_band, source_url=_optional_text(form.source_url.data),
                 currency='USD',
-                input_cost_per_million_usd=_as_float(form.input_cost_per_million_usd.data),
-                output_cost_per_million_usd=_as_float(form.output_cost_per_million_usd.data),
-                cache_write_cost_per_million_usd=_as_float(form.cache_write_cost_per_million_usd.data),
-                cache_read_cost_per_million_usd=_as_float(form.cache_read_cost_per_million_usd.data),
-                effective_from=_date_start(form.effective_from.data),
-                effective_to=_date_end(form.effective_to.data),
+                input_cost_per_million_usd=form.input_cost_per_million_usd.data,
+                output_cost_per_million_usd=form.output_cost_per_million_usd.data,
+                cache_write_cost_per_million_usd=form.cache_write_cost_per_million_usd.data,
+                cache_read_cost_per_million_usd=form.cache_read_cost_per_million_usd.data,
+                effective_from=start, effective_to=end,
                 is_active=form.is_active.data,
             )
+            ai_billing._prepare_sqlite_id(pricing, AIModelPricing)
             db.session.add(pricing)
             db.session.commit()
             flash("Pricing creado.", "success")
@@ -2113,7 +2179,7 @@ def pricing_new():
     return render_template(
         'admin/ai_config/pricing_form.html',
         form=form,
-        title='Nuevo pricing',
+        title='Nuevo pricing', families=profile_catalog(),
     )
 
 
@@ -2124,41 +2190,69 @@ def pricing_edit(pricing_id):
     """Edit a model pricing record."""
     pricing = AIModelPricing.query.get_or_404(pricing_id)
     form = AIModelPricingForm(obj=pricing)
+    referenced = AIUsageEvent.query.filter_by(pricing_id=pricing.id).first() is not None
     if request.method == 'GET':
-        form.effective_from.data = pricing.effective_from.date()
+        form.effective_from.data = max(datetime.utcnow().date(), pricing.effective_from.date() + timedelta(days=1)) if referenced else pricing.effective_from.date()
         form.effective_to.data = pricing.effective_to.date() if pricing.effective_to else None
 
     if form.validate_on_submit():
-        duplicate = AIModelPricing.query.filter(
-            AIModelPricing.id != pricing.id,
-            AIModelPricing.provider == form.provider.data.strip().lower(),
-            AIModelPricing.model == form.model.data.strip(),
-            AIModelPricing.event_type == form.event_type.data,
-            AIModelPricing.is_active.is_(True),
-        ).first()
+        service_tier = _optional_text(form.service_tier.data)
+        pricing_tier = _optional_text(form.pricing_tier.data)
+        gateway = form.gateway.data or None
+        context_band = form.context_band.data or None
+        start = _date_start(form.effective_from.data)
+        end = _date_end(form.effective_to.data)
+        duplicate = ai_billing.overlapping_pricing(
+            provider=form.provider.data.strip().lower(), model=form.model.data.strip(),
+            event_type=form.event_type.data, service_tier=service_tier,
+            pricing_tier=pricing_tier, gateway=gateway, context_band=context_band,
+            effective_from=start, effective_to=end, exclude_id=pricing.id,
+        ) if form.is_active.data else None
         if duplicate and form.is_active.data:
-            form.model.errors.append("Ya existe otro pricing activo para esta combinacion.")
+            form.model.errors.append("La vigencia se superpone con otra tarifa activa.")
         elif form.effective_to.data and form.effective_to.data < form.effective_from.data:
             form.effective_to.errors.append("La fecha final no puede ser anterior a la inicial.")
+        elif referenced and start <= pricing.effective_from:
+            form.effective_from.errors.append('La nueva versión debe comenzar después de la anterior.')
+        elif referenced and (form.provider.data.strip().lower(), form.model.data.strip(), form.event_type.data,
+                             service_tier, pricing_tier, gateway, context_band) != (
+                             pricing.provider, pricing.model, pricing.event_type,
+                             pricing.service_tier, pricing.pricing_tier, pricing.gateway, pricing.context_band):
+            form.model.errors.append('Una nueva versión debe conservar las dimensiones de la tarifa.')
+        elif error := _pricing_profile_error(form, gateway, context_band, pricing_tier):
+            error[0].errors.append(error[1])
         else:
-            pricing.provider = form.provider.data.strip().lower()
-            pricing.model = form.model.data.strip()
-            pricing.event_type = form.event_type.data
-            pricing.input_cost_per_million_usd = _as_float(form.input_cost_per_million_usd.data)
-            pricing.output_cost_per_million_usd = _as_float(form.output_cost_per_million_usd.data)
-            pricing.cache_write_cost_per_million_usd = _as_float(form.cache_write_cost_per_million_usd.data)
-            pricing.cache_read_cost_per_million_usd = _as_float(form.cache_read_cost_per_million_usd.data)
-            pricing.effective_from = _date_start(form.effective_from.data)
-            pricing.effective_to = _date_end(form.effective_to.data)
-            pricing.is_active = form.is_active.data
+            target = AIModelPricing() if referenced else pricing
+            if referenced:
+                boundary = start - timedelta(microseconds=1)
+                if pricing.effective_to is None or pricing.effective_to > boundary:
+                    pricing.effective_to = boundary
+                ai_billing._prepare_sqlite_id(target, AIModelPricing)
+                db.session.add(target)
+            target.provider = form.provider.data.strip().lower()
+            target.model = form.model.data.strip()
+            target.event_type = form.event_type.data
+            target.service_tier = service_tier
+            target.pricing_tier = pricing_tier
+            target.gateway = gateway
+            target.context_band = context_band
+            target.source_url = _optional_text(form.source_url.data)
+            target.input_cost_per_million_usd = form.input_cost_per_million_usd.data
+            target.output_cost_per_million_usd = form.output_cost_per_million_usd.data
+            target.cache_write_cost_per_million_usd = form.cache_write_cost_per_million_usd.data
+            target.cache_read_cost_per_million_usd = form.cache_read_cost_per_million_usd.data
+            target.effective_from = start
+            target.effective_to = end
+            target.is_active = form.is_active.data
+            target.currency = 'USD'
             db.session.commit()
-            flash("Pricing actualizado.", "success")
+            flash("Nueva versión de pricing creada." if referenced else "Pricing actualizado.", "success")
             return redirect(url_for('ai_config.index', tab='pricing'))
 
     return render_template(
         'admin/ai_config/pricing_form.html',
         form=form,
-        title=f'Editar pricing: {pricing.model}',
+        title=f'Editar pricing: {pricing.model}', families=profile_catalog(), referenced=referenced,
     )
 
 
@@ -2168,14 +2262,17 @@ def pricing_edit(pricing_id):
 def pricing_toggle(pricing_id):
     """Activate or deactivate model pricing."""
     pricing = AIModelPricing.query.get_or_404(pricing_id)
+    if AIUsageEvent.query.filter_by(pricing_id=pricing.id).first() is not None:
+        flash('Una tarifa utilizada por eventos no puede desactivarse; cierre su vigencia mediante una nueva versión.', 'danger')
+        return redirect(url_for('ai_config.index', tab='pricing'))
     if not pricing.is_active:
-        duplicate = AIModelPricing.query.filter(
-            AIModelPricing.id != pricing.id,
-            AIModelPricing.provider == pricing.provider,
-            AIModelPricing.model == pricing.model,
-            AIModelPricing.event_type == pricing.event_type,
-            AIModelPricing.is_active.is_(True),
-        ).first()
+        duplicate = ai_billing.overlapping_pricing(
+            provider=pricing.provider, model=pricing.model, event_type=pricing.event_type,
+            service_tier=pricing.service_tier, pricing_tier=pricing.pricing_tier,
+            gateway=pricing.gateway, context_band=pricing.context_band,
+            effective_from=pricing.effective_from, effective_to=pricing.effective_to,
+            exclude_id=pricing.id,
+        )
         if duplicate:
             flash("Ya existe otro pricing activo para esta combinacion.", "danger")
             return redirect(url_for('ai_config.index', tab='pricing'))

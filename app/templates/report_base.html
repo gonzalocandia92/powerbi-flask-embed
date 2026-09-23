@@ -559,6 +559,13 @@
 
         /* Input */
         .klara-sidebar-input { padding: 12px; border-top: 1px solid var(--sudata-border); background: white; }
+        .klara-model-row { display: flex; align-items: center; gap: 8px; margin-bottom: 9px; }
+        .klara-model-row label { color: var(--sudata-muted); font-size: 11px; font-weight: 700; }
+        #klara-model-select {
+            flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid #d1d5db;
+            border-radius: 9px; background: white; color: var(--sudata-text); font-size: 12px;
+        }
+        #klara-model-select:disabled { opacity: .65; cursor: wait; }
         #klara-sidebar-form { display: flex; gap: 8px; align-items: flex-end; }
         #klara-sidebar-text {
             flex: 1; min-height: 42px; max-height: 110px; padding: 11px 13px;
@@ -1058,6 +1065,10 @@
                 <button class="klara-sidebar-suggestion" type="button">Mostrame las ventas por producto del último trimestre</button>
             </section>
             <footer class="klara-sidebar-input">
+                <div id="klara-model-row" class="klara-model-row" hidden>
+                    <label for="klara-model-select">Modelo</label>
+                    <select id="klara-model-select" aria-label="Modelo de KLARA"></select>
+                </div>
                 <form id="klara-sidebar-form">
                     <textarea id="klara-sidebar-text" placeholder="Preguntá sobre tus datos..." maxlength="500" rows="1"></textarea>
                     <button id="klara-sidebar-send" type="submit" title="Enviar mensaje">➜</button>
@@ -1089,9 +1100,36 @@
             var sendBtn  = document.getElementById("klara-sidebar-send");
             var messages = document.getElementById("klara-sidebar-messages");
             var counter  = document.getElementById("klara-sidebar-counter");
+            var modelRow = document.getElementById("klara-model-row");
+            var modelSelect = document.getElementById("klara-model-select");
             var suggestions = document.querySelectorAll(".klara-sidebar-suggestion");
             var isExpanded = false, isTyping = false, klaraSessionId = null;
             var lastMsgDate = null, thinkingEl = null, thinkingTimers = [];
+
+            async function loadModels() {
+                if (!KLARA_SLUG) return;
+                modelSelect.disabled = true;
+                try {
+                    var query = "/api/chatbot/models?slug=" + encodeURIComponent(KLARA_SLUG);
+                    if (klaraSessionId) query += "&conversation_id=" + encodeURIComponent(klaraSessionId);
+                    var resp = await fetch(query);
+                    var data = await resp.json();
+                    if (!resp.ok || !Array.isArray(data.models) || !data.models.length) return;
+                    modelSelect.textContent = "";
+                    data.models.forEach(function(model) {
+                        var option = document.createElement("option");
+                        option.value = model.model_key;
+                        option.textContent = model.display_name;
+                        if (model.model_key === data.selected_model_key) option.selected = true;
+                        modelSelect.appendChild(option);
+                    });
+                    modelRow.hidden = false;
+                } catch (error) {
+                    console.warn("No se pudo cargar el catálogo de modelos de KLARA", error);
+                } finally {
+                    modelSelect.disabled = false;
+                }
+            }
 
             function fmt2(n) {
                 return String(n).padStart(2, "0");
@@ -1247,7 +1285,8 @@
                         body: JSON.stringify({
                             message: pregunta,
                             slug: KLARA_SLUG,
-                            conversation_id: klaraSessionId
+                            conversation_id: klaraSessionId,
+                            model_key: modelSelect.value || null
                         })
                     });
                     var data = await resp.json();
@@ -1257,6 +1296,9 @@
                         return;
                     }
                     if (data.conversation_id) klaraSessionId = data.conversation_id;
+                    if (data.model_key && modelSelect.querySelector('option[value="' + CSS.escape(data.model_key) + '"]')) {
+                        modelSelect.value = data.model_key;
+                    }
                     addMessage("bot", data.answer || "Sin respuesta.", data.dax_query || null);
                 } catch (e) {
                     hideThinking();
@@ -1281,6 +1323,7 @@
             });
 
             addMessage("bot", "Hola, soy KLARA. Puedo ayudarte a consultar ventas, productos y métricas del tablero sin escribir código.");
+            loadModels();
         });
     })();
     </script>

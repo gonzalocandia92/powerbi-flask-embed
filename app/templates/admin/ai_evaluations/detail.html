@@ -1,0 +1,145 @@
+{% extends "layout.html" %}
+{% block title %}{{ run.name }} - Evaluaciones AI{% endblock %}
+{% block body %}
+<style>
+  .evaluation-markdown p { margin: 0 0 .4rem; }
+  .evaluation-markdown p:last-child { margin-bottom: 0; }
+  .evaluation-markdown h1, .evaluation-markdown h2, .evaluation-markdown h3,
+  .evaluation-markdown h4 { margin: .5rem 0 .25rem; font-size: 1em; font-weight: 700; }
+  .evaluation-markdown ul, .evaluation-markdown ol { margin: .25rem 0 .4rem; padding-left: 1.2rem; }
+  .evaluation-markdown li { margin-bottom: .125rem; }
+  .evaluation-markdown code { background: #e9ecef; border-radius: .25rem; padding: .05rem .3rem; font-size: .875em; }
+  .evaluation-markdown pre { background: #e9ecef; border-radius: .4rem; padding: .6rem; overflow-x: auto; margin: .4rem 0; }
+  .evaluation-markdown pre code { background: none; padding: 0; }
+  .evaluation-markdown blockquote { border-left: 3px solid #198754; margin: .4rem 0; padding-left: .6rem; color: #555; }
+  .evaluation-markdown table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; margin: .5rem 0; }
+  .evaluation-markdown th, .evaluation-markdown td { border: 1px solid #ced4da; padding: .3rem .5rem; text-align: left; white-space: nowrap; }
+  .evaluation-markdown thead tr { background: #e8f5ee; }
+</style>
+{% set active_statuses = ['queued', 'running', 'cancel_requested'] %}
+{% set cases = run.cases.all() %}
+<div class="container-fluid py-2" id="evaluation-detail" data-run-id="{{ run.id }}" data-status="{{ run.status }}">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+      <div class="d-flex align-items-center gap-2 mb-1">
+        <h2 class="fw-bold mb-0">{{ run.name }}</h2>
+        <span class="badge bg-secondary" id="run-status">{{ run.status }}</span>
+      </div>
+      <p class="text-muted mb-0">Evaluación #{{ run.id }} · {{ run.mode }} · caché {{ run.cache_mode }}</p>
+    </div>
+    <div class="d-flex flex-wrap gap-2">
+      <a class="btn btn-outline-secondary" href="{{ url_for('evaluations.runs_page') }}">Volver</a>
+      <a class="btn btn-outline-primary" href="{{ url_for('evaluations.export_run', run_id=run.id) }}"><i class="bi bi-download me-1"></i>Exportar CSV</a>
+      {% if run.status in active_statuses %}<button class="btn btn-outline-danger" id="cancel-run" type="button">Cancelar</button>{% endif %}
+    </div>
+  </div>
+
+  <div id="page-message"></div>
+  <div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Progreso</div><div class="fs-3 fw-bold"><span id="completed-cases">{{ run.completed_cases }}</span>/<span id="total-cases">{{ run.total_cases }}</span></div><div class="progress mt-2"><div class="progress-bar" id="progress-bar" style="width:{{ ((run.completed_cases or 0) * 100 / run.total_cases)|round if run.total_cases else 0 }}%"></div></div></div></div></div>
+    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Casos exitosos</div><div class="fs-3 fw-bold text-success">{{ cases|selectattr('status', 'equalto', 'success')|list|length }}</div></div></div></div>
+    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Revisados correctos</div><div class="fs-3 fw-bold text-primary">{{ cases|selectattr('review_status', 'equalto', 'correct')|list|length }}</div></div></div></div>
+    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Costo total</div><div class="fs-3 fw-bold">USD {{ '%.6f'|format(total_cost) }}</div></div></div></div>
+  </div>
+
+  {% if run.error_message %}<div class="alert alert-danger">{{ run.error_message }}</div>{% endif %}
+
+  <div class="card mb-4">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div><h5 class="mb-1">Promoción de modelos</h5><div class="text-muted small">Solo se puede promover un modelo cuando todos sus casos terminaron correctamente y fueron marcados como correctos.</div></div>
+    </div>
+    <div class="card-body d-flex flex-wrap gap-2">
+      {% for model_key in model_keys %}
+      {% set model_cases = cases|selectattr('model_key', 'equalto', model_key)|list %}
+      {% set successful = model_cases|selectattr('status', 'equalto', 'success')|list|length %}
+      {% set correct = model_cases|selectattr('review_status', 'equalto', 'correct')|list|length %}
+      <button class="btn btn-sm {{ 'btn-success' if successful == model_cases|length and correct == model_cases|length and model_cases|length else 'btn-outline-secondary' }} promote-model" type="button" data-model-key="{{ model_key }}" {% if run.status in active_statuses or successful != model_cases|length or correct != model_cases|length %}disabled{% endif %}>
+        Promover {{ model_key }} <span class="badge text-bg-light ms-1">{{ correct }}/{{ model_cases|length }}</span>
+      </button>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div><h5 class="mb-1">Resultados y revisión manual</h5><div class="text-muted small">Guarda una decisión y una nota por cada respuesta.</div></div>
+      <div class="d-flex gap-2">
+        <select class="form-select form-select-sm" id="filter-model"><option value="">Todos los modelos</option>{% for key in model_keys %}<option value="{{ key }}">{{ key }}</option>{% endfor %}</select>
+        <select class="form-select form-select-sm" id="filter-review"><option value="">Todas las revisiones</option><option value="unreviewed">Sin revisar</option><option value="correct">Correcta</option><option value="partial">Parcial</option><option value="incorrect">Incorrecta</option></select>
+      </div>
+    </div>
+    <div class="table-responsive">
+      <table class="table align-middle mb-0" id="cases-table">
+        <thead><tr><th>#</th><th style="min-width:260px">Pregunta y respuesta</th><th>Modelo</th><th>Ejecución</th><th style="min-width:280px">Revisión</th></tr></thead>
+        <tbody>
+          {% for case in cases %}
+          <tr data-case-id="{{ case.id }}" data-model="{{ case.model_key }}" data-review="{{ case.review_status }}">
+            <td>{{ case.sequence_index }}</td>
+            <td>
+              <div class="fw-semibold mb-1">{{ case.question }}</div>
+              {% if case.expected_answer %}<div class="small text-muted mb-2"><strong>Esperada:</strong> {{ case.expected_answer }}</div>{% endif %}
+              {% if case.answer %}<div class="border rounded bg-light p-2 evaluation-markdown" data-markdown-response>{{ case.answer }}</div>{% elif case.error_message %}<div class="text-danger small">{{ case.error_message }}</div>{% else %}<div class="text-muted small">Pendiente de ejecución</div>{% endif %}
+              {% if case.dax_query or case.tools_called_json or case.trace_id %}<details class="small mt-2"><summary>Detalles técnicos</summary>{% if case.dax_query %}<pre class="mt-2 mb-1">{{ case.dax_query }}</pre>{% endif %}{% if case.tools_called_json %}<div><strong>Tools:</strong> {{ case.tools_called_json|tojson }}</div>{% endif %}{% if case.trace_id %}<div><strong>Trace:</strong> {{ case.trace_id }}</div>{% endif %}</details>{% endif %}
+            </td>
+            <td><div class="fw-semibold">{{ case.model_key }}</div><small class="text-muted">{{ case.actual_model or case.physical_model or '--' }} · {{ case.cache_mode }}</small></td>
+            <td><span class="badge {{ 'bg-success' if case.status == 'success' else ('bg-danger' if case.status in ['error', 'interrupted'] else 'bg-secondary') }}">{{ case.status }}</span><div class="small text-muted mt-1">{{ case.latency_ms or 0 }} ms · USD {{ '%.6f'|format(case.pipeline_total_cost or 0) }}</div><div class="small text-muted">{{ case.input_tokens or 0 }} in / {{ case.output_tokens or 0 }} out</div></td>
+            <td>
+              <select class="form-select form-select-sm review-status mb-2" {% if case.status != 'success' %}disabled{% endif %}>
+                <option value="unreviewed" {% if case.review_status == 'unreviewed' %}selected{% endif %}>Sin revisar</option>
+                <option value="correct" {% if case.review_status == 'correct' %}selected{% endif %}>Correcta</option>
+                <option value="partial" {% if case.review_status == 'partial' %}selected{% endif %}>Parcial</option>
+                <option value="incorrect" {% if case.review_status == 'incorrect' %}selected{% endif %}>Incorrecta</option>
+              </select>
+              <textarea class="form-control form-control-sm review-notes mb-2" rows="2" placeholder="Notas de revisión" {% if case.status != 'success' %}disabled{% endif %}>{{ case.review_notes or '' }}</textarea>
+              <button class="btn btn-sm btn-outline-primary save-review" type="button" {% if case.status != 'success' %}disabled{% endif %}>Guardar revisión</button>
+            </td>
+          </tr>
+          {% else %}<tr><td colspan="5" class="text-center text-muted py-5">No hay casos en esta evaluación.</td></tr>{% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}{{ super() }}<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script><script>
+(() => {
+  document.querySelectorAll('[data-markdown-response]').forEach(element => {
+    element.innerHTML = marked.parse(element.textContent || '');
+  });
+  const page = document.getElementById('evaluation-detail');
+  const runId = page.dataset.runId;
+  const csrf = document.querySelector('meta[name="csrf-token"]').content;
+  const message = document.getElementById('page-message');
+  const active = new Set(['queued', 'running', 'cancel_requested']);
+  const showMessage = (text, kind='success') => { message.innerHTML = `<div class="alert alert-${kind}">${String(text).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}</div>`; };
+  async function poll() {
+    const response = await fetch(`{{ url_for('evaluations.get_run', run_id=run.id) }}`);
+    if (!response.ok) return;
+    const data = await response.json();
+    document.getElementById('run-status').textContent = data.status;
+    document.getElementById('completed-cases').textContent = data.completed_cases;
+    document.getElementById('total-cases').textContent = data.total_cases;
+    document.getElementById('progress-bar').style.width = `${data.progress_percent}%`;
+    if (active.has(data.status)) setTimeout(poll, 3000);
+    else if (active.has(page.dataset.status)) window.location.reload();
+  }
+  document.getElementById('cases-table').addEventListener('click', async event => {
+    const button = event.target.closest('.save-review'); if (!button) return;
+    const row = button.closest('tr'); button.disabled = true;
+    const response = await fetch(`/admin/ai-evaluations/${runId}/cases/${row.dataset.caseId}/review`, {method:'PATCH', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify({review_status:row.querySelector('.review-status').value, review_notes:row.querySelector('.review-notes').value})});
+    const data = await response.json(); button.disabled = false;
+    if (!response.ok) return showMessage(data.error || 'No se pudo guardar la revisión.', 'danger');
+    row.dataset.review = data.review_status; showMessage('Revisión guardada. Recarga la página para actualizar la promoción.'); applyFilters();
+  });
+  document.querySelectorAll('.promote-model').forEach(button => button.addEventListener('click', async () => {
+    const response = await fetch(`/admin/ai-evaluations/${runId}/models/${encodeURIComponent(button.dataset.modelKey)}/promote`, {method:'POST', headers:{'X-CSRFToken':csrf}}); const data = await response.json();
+    if (!response.ok) return showMessage(data.error || 'No se pudo promover el modelo.', 'danger');
+    button.disabled = true; showMessage(`Modelo ${data.model_key} validado y promovido.`);
+  }));
+  const cancel = document.getElementById('cancel-run'); if (cancel) cancel.addEventListener('click', async () => { cancel.disabled = true; const response = await fetch(`/admin/ai-evaluations/${runId}/cancel`, {method:'POST', headers:{'X-CSRFToken':csrf}}); const data = await response.json(); if (!response.ok) { cancel.disabled = false; return showMessage(data.error || 'No se pudo cancelar.', 'danger'); } window.location.reload(); });
+  const modelFilter = document.getElementById('filter-model'); const reviewFilter = document.getElementById('filter-review');
+  function applyFilters() { document.querySelectorAll('#cases-table tbody tr[data-case-id]').forEach(row => { row.hidden = !!((modelFilter.value && row.dataset.model !== modelFilter.value) || (reviewFilter.value && row.dataset.review !== reviewFilter.value)); }); }
+  modelFilter.addEventListener('change', applyFilters); reviewFilter.addEventListener('change', applyFilters);
+  if (active.has(page.dataset.status)) setTimeout(poll, 1500);
+})();
+</script>{% endblock %}

@@ -1,0 +1,65 @@
+<style>
+  .ai-tabs {
+    border-bottom: 1px solid #e5e9f0;
+  }
+
+  .ai-tabs .nav-link {
+    color: #687386;
+    border: 0;
+    border-bottom: 3px solid transparent;
+    border-radius: 0;
+    margin: 0 1.5rem 0 0;
+    padding: 0.8rem 0 !important;
+  }
+
+  .ai-tabs .nav-link:hover {
+    background: transparent;
+    color: #667eea;
+  }
+
+  .ai-tabs .nav-link.active {
+    background: transparent;
+    color: #667eea;
+    border-bottom-color: #667eea;
+    box-shadow: none;
+  }
+</style>
+
+{% set current_ai_section = active_ai_section|default(active_tab|default('', true), true) %}
+<ul class="nav ai-tabs mb-4">
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'limits' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='limits') }}">
+      <i class="bi bi-speedometer2 me-1"></i>Limites de consumo
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'pricing' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='pricing') }}">
+      <i class="bi bi-tags me-1"></i>Pricing de modelos
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'prompts' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='prompts') }}">
+      <i class="bi bi-chat-square-text me-1"></i>Prompts del agente
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'skills' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='skills') }}">
+      <i class="bi bi-diagram-3 me-1"></i>Skills analiticas
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'catalog' %}active{% endif %}" href="{{ url_for('model_catalog.catalog_page') }}">
+      <i class="bi bi-cpu me-1"></i>Catálogo de modelos
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'components' %}active{% endif %}" href="{{ url_for('model_catalog.components_page') }}">
+      <i class="bi bi-sliders me-1"></i>Componentes del chat
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'evaluations' %}active{% endif %}" href="{{ url_for('evaluations.runs_page') }}">
+      <i class="bi bi-clipboard-data me-1"></i>Evaluaciones
+    </a>
+  </li>
+</ul>

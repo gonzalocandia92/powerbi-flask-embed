@@ -20,6 +20,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink, Report
 from app.services import agent_prompts, ai_billing
+from app.services import model_catalog
 from app.services.chat_credentials import resolve_powerbi_env_for_report
 from app.services.agent_core import DEFAULT_MODEL
 from app.services.observability import (
@@ -46,7 +47,11 @@ class ChatbotLimitExceededError(ChatbotServiceError):
     """Raised when the configured AI spend limit has already been reached."""
 
 
-def _chat_message_to_anthropic_message(message: ChatMessage) -> Optional[Dict[str, Any]]:
+class ChatbotModelNotAllowedError(ChatbotServiceError):
+    """Raised when a client requests a model outside the effective allowlist."""
+
+
+def _chat_message_to_history_message(message: ChatMessage) -> Optional[Dict[str, Any]]:
     role = (message.role or "").strip().lower()
     content = message.content or ""
 
@@ -61,7 +66,7 @@ def _chat_message_to_anthropic_message(message: ChatMessage) -> Optional[Dict[st
     return {"role": "assistant", "content": content}
 
 
-def _load_anthropic_history(
+def _load_history(
     *,
     session_id: int,
     exclude_message_id: Optional[int] = None,
@@ -76,7 +81,7 @@ def _load_anthropic_history(
 
     history: List[Dict[str, Any]] = []
     for message in query.all():
-        entry = _chat_message_to_anthropic_message(message)
+        entry = _chat_message_to_history_message(message)
         if entry is not None:
             history.append(entry)
     return history
@@ -177,6 +182,7 @@ def _prepare_turn_sync(
     conversation_id: Optional[str],
     reset_history: bool,
     question: str,
+    requested_model_key: Optional[str] = None,
 ) -> Tuple[int, List[Dict[str, Any]]]:
     session = _ensure_session_for_turn(
         slug=slug,
@@ -192,12 +198,13 @@ def _prepare_turn_sync(
         session_id=session.id,
         role="user",
         content=question,
+        requested_model_key=requested_model_key,
     )
     _prepare_sqlite_id(user_message, ChatMessage)
     db.session.add(user_message)
     db.session.flush()
 
-    history = _load_anthropic_history(
+    history = _load_history(
         session_id=session.id,
         exclude_message_id=user_message.id,
     )
@@ -217,10 +224,11 @@ def _record_result_usage_events(
     had_error: bool,
 ) -> int:
     persisted_events = 0
+    cost_events = []
     for raw_event in result.get("ai_usage_events") or []:
         event_payload = dict(raw_event)
         metadata_json = event_payload.pop("metadata_json", None)
-        ai_billing.record_ai_usage_event(
+        recorded_event = ai_billing.record_ai_usage_event(
             session_id=session_id,
             message_id=message_id,
             workspace_id=billing_context.workspace_id,
@@ -231,12 +239,13 @@ def _record_result_usage_events(
             metadata_json=metadata_json,
             **event_payload,
         )
+        cost_events.append(recorded_event)
         persisted_events += 1
 
     input_tokens = result.get("input_tokens")
     output_tokens = result.get("output_tokens")
     if persisted_events == 0 and (input_tokens is not None or output_tokens is not None):
-        ai_billing.record_ai_usage_event(
+        recorded_event = ai_billing.record_ai_usage_event(
             session_id=session_id,
             message_id=message_id,
             workspace_id=billing_context.workspace_id,
@@ -244,7 +253,7 @@ def _record_result_usage_events(
             empresa_id=billing_context.empresa_id,
             billing_scope_type=billing_context.billing_scope_type,
             billing_scope_id=billing_context.billing_scope_id,
-            provider="anthropic",
+            provider=result.get("provider") or "anthropic",
             model=model,
             event_type="generation",
             source_type="chat",
@@ -259,8 +268,10 @@ def _record_result_usage_events(
                 "fallback_reason": "missing_ai_usage_events",
             },
         )
+        cost_events.append(recorded_event)
         persisted_events += 1
 
+    result["cost_breakdown"] = ai_billing.summarize_pipeline_costs(cost_events)
     return persisted_events
 
 
@@ -273,6 +284,7 @@ def _persist_success_sync(
     result: Dict[str, Any],
     latency_ms: int,
     anthropic_model: str,
+    requested_model_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     session = db.session.get(ChatSession, session_id)
     if session is None:
@@ -285,6 +297,13 @@ def _persist_success_sync(
         content=result.get("answer", ""),
         latency_ms=latency_ms,
         model_used=result.get("model") or anthropic_model,
+        requested_model_key=requested_model_key,
+        model_key=result.get("model_key"),
+        model_provider=result.get("provider"),
+        physical_model=result.get("model"),
+        model_gateway=result.get("gateway"),
+        service_tier=result.get("service_tier"),
+        actual_model=result.get("actual_model"),
         input_tokens=result.get("input_tokens"),
         output_tokens=result.get("output_tokens"),
         # NOTA: Se utiliza el campo heredado mcp_used para almacenar si el agente ejecutó herramientas (tools_called) en este turno, evitando migraciones de DB.
@@ -309,6 +328,7 @@ def _persist_success_sync(
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     session.had_errors = bool(session.had_errors or had_error)
+    session.last_model_key = result.get("model_key") or session.last_model_key
 
     db.session.commit()
 
@@ -331,6 +351,11 @@ def _persist_success_sync(
         "input_tokens": result.get("input_tokens"),
         "output_tokens": result.get("output_tokens"),
         "model": result.get("model") or anthropic_model,
+        "model_key": result.get("model_key"),
+        "provider": result.get("provider"),
+        "gateway": result.get("gateway"),
+        "service_tier": result.get("service_tier"),
+        "actual_model": result.get("actual_model"),
         "latency_ms": assistant_message.latency_ms,
         "mcp_used": bool(result.get("tools_called")),
         "tools_called": result.get("tools_called") or [],
@@ -341,6 +366,8 @@ def _persist_success_sync(
         "route_metadata_json": result.get("route_metadata_json"),
         "route_validation_warnings": result.get("route_validation_warnings") or [],
         "total_cost_usd": assistant_message.total_cost_usd or 0.0,
+        "cost_breakdown": result.get("cost_breakdown"),
+        "latency_by_component_ms": result.get("latency_by_component_ms"),
     }
 
 
@@ -353,6 +380,7 @@ def _persist_error_sync(
     error_message: str,
     billing_context: Optional[ai_billing.BillingContext] = None,
     result: Optional[Dict[str, Any]] = None,
+    requested_model_key: Optional[str] = None,
 ) -> None:
     db.session.rollback()
 
@@ -373,6 +401,13 @@ def _persist_error_sync(
         content=f"Error al procesar la consulta: {error_message}",
         latency_ms=result.get("latency_ms") if result else None,
         model_used=result.get("model") if result else None,
+        requested_model_key=requested_model_key,
+        model_key=result.get("model_key") if result else None,
+        model_provider=result.get("provider") if result else None,
+        physical_model=result.get("model") if result else None,
+        model_gateway=result.get("gateway") if result else None,
+        service_tier=result.get("service_tier") if result else None,
+        actual_model=result.get("actual_model") if result else None,
         input_tokens=result.get("input_tokens") if result else None,
         output_tokens=result.get("output_tokens") if result else None,
         mcp_used=bool(result.get("tools_called")) if result else None,
@@ -399,6 +434,8 @@ def _persist_error_sync(
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     session.had_errors = True
+    if result and result.get("model_key"):
+        session.last_model_key = result["model_key"]
 
     db.session.commit()
 
@@ -414,28 +451,28 @@ def _persist_error_sync(
             )
 
 
-def _validate_chat_pricing_sync(report: Report, settings: chat_mcp.RuntimeSettings) -> None:
-    ai_billing.resolve_pricing(
-        provider="anthropic",
-        model=settings.anthropic_model,
-        event_type="generation",
-    )
-    ai_billing.resolve_pricing(
-        provider="anthropic",
-        model="claude-haiku-4-5-20251001",
-        event_type="generation",
-    )
-    ai_billing.resolve_pricing(
-        provider="voyageai",
-        model="voyage-4",
-        event_type="embedding",
-    )
-    if settings.skill_router_settings.selector_enabled:
-        ai_billing.resolve_pricing(
-            provider="anthropic",
-            model=settings.skill_router_settings.selector_model,
-            event_type="generation",
-        )
+def _validate_chat_pricing_sync(report: Report, settings: chat_mcp.RuntimeSettings, model_roles=None) -> None:
+    from app.services.klara_execution import configured_model_roles
+    roles = configured_model_roles(settings, model_roles or settings.role_configuration)
+    role_names = ["main_agent"]
+    component_resolver = getattr(roles, "component", None)
+    if component_resolver is None:
+        role_names.append("query_rewriter")
+        if settings.skill_router_settings.selector_enabled:
+            role_names.append("skill_selector")
+    empresa_id = ai_billing.resolve_report_billing_context(report).empresa_id
+    for role in role_names:
+        model = roles.resolve(role, report_id=report.id, empresa_id=empresa_id)
+        ai_billing.validate_pricing_coverage(model)
+    if component_resolver is not None:
+        for role in ("query_rewriter", "skill_selector", "complexity_classifier"):
+            try:
+                component = component_resolver(role, report_id=report.id, empresa_id=empresa_id)
+            except Exception:
+                continue
+            if component.strategy == "model" and component.model is not None:
+                ai_billing.validate_pricing_coverage(component.model)
+    ai_billing.resolve_pricing(provider="voyageai", model="voyage-4", event_type="embedding")
     ai_billing.enforce_limit_for_report(report)
 
 
@@ -447,6 +484,8 @@ async def procesar_interaccion_completa(
     conversation_id: Optional[str] = None,
     reset_history: bool = False,
     config: Optional[Dict[str, Any]] = None,
+    source: str = "chat",
+    model_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute the full chatbot interaction.
@@ -461,7 +500,8 @@ async def procesar_interaccion_completa(
     if not pregunta:
         raise ValueError("La pregunta no puede estar vacia")
 
-    settings = chat_mcp.build_runtime_settings(config or dict(current_app.config))
+    runtime_config = config or dict(current_app.config)
+    settings = chat_mcp.build_runtime_settings(runtime_config)
     start = time.monotonic()
     session_id: Optional[int] = None
     report: Optional[Report] = None
@@ -477,8 +517,26 @@ async def procesar_interaccion_completa(
         try:
             report, dataset_id, powerbi_credentials = await asyncio.to_thread(_resolve_report_and_dataset_sync, slug)
             billing_context = ai_billing.resolve_report_billing_context(report)
+            previous_model_key = await asyncio.to_thread(
+                model_catalog.session_model_key, conversation_id, report_id=report.id
+            )
+            try:
+                model_selection = await asyncio.to_thread(
+                    model_catalog.resolve_client_selection,
+                    requested_model_key=model_key,
+                    session_model_key=previous_model_key,
+                    report_id=report.id,
+                    empresa_id=billing_context.empresa_id,
+                    config=runtime_config,
+                )
+            except model_catalog.ModelSelectionError as exc:
+                raise ChatbotModelNotAllowedError(str(exc)) from exc
+            model_roles = model_catalog.build_catalog_resolver(
+                settings, report_id=report.id, empresa_id=billing_context.empresa_id,
+                selection=model_selection, config=runtime_config,
+            )
             custom_instructions = await asyncio.to_thread(agent_prompts.resolve_agent_prompt_instructions, report)
-            await asyncio.to_thread(_validate_chat_pricing_sync, report, settings)
+            await asyncio.to_thread(_validate_chat_pricing_sync, report, settings, model_roles)
             session_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
                 billing_context=billing_context,
@@ -486,15 +544,22 @@ async def procesar_interaccion_completa(
                 conversation_id=conversation_id,
                 reset_history=reset_history,
                 question=pregunta,
+                requested_model_key=model_key,
             )
 
             trace_metadata = {
                 "feature": "publicchat",
                 "reportid": str(report.id),
+                "reportname": report.name,
+                "empresa": str(billing_context.empresa_id),
+                "source": source,
                 "datasethash": hash_identifier(dataset_id, prefix="dataset"),
                 "slughash": hash_identifier(slug, prefix="slug"),
                 "resethistory": str(bool(reset_history)).lower(),
                 "hashistory": str(bool(history)).lower(),
+                "requestedmodelkey": model_key,
+                "selectedmodelkey": model_selection.model.model_key if model_selection else None,
+                "modelselectionsource": model_selection.source if model_selection else "legacy_default",
             }
             if root_observation is not None:
                 root_observation.update(metadata=trace_metadata)
@@ -504,11 +569,14 @@ async def procesar_interaccion_completa(
                 session_id=str(session_id),
                 trace_name="public-chat-request",
                 metadata=trace_metadata,
-                tags=["public-chat", "powerbi", "anthropic"],
+                tags=[source, "powerbi"],
                 version=trace_version,
             ):
                 result = await chat_mcp.run_chat_turn(
                     user_message=pregunta,
+                    report_name=report.name,
+                    source=source,
+                    trace_context=trace_metadata,
                     dataset_id=dataset_id,
                     history=history,
                     settings=settings,
@@ -520,6 +588,8 @@ async def procesar_interaccion_completa(
                     schema_retrieval_prompt=report.schema_retrieval_prompt,
                     schema_table_context_limit=report.schema_table_context_limit,
                     schema_measure_context_limit=report.schema_measure_context_limit,
+                    requested_model_key=model_selection.model.model_key if model_selection else None,
+                    role_configuration=model_roles,
                 )
 
             latency_ms = int((time.monotonic() - start) * 1000)
@@ -531,6 +601,7 @@ async def procesar_interaccion_completa(
                 result=result,
                 latency_ms=latency_ms,
                 anthropic_model=settings.anthropic_model,
+                requested_model_key=model_key,
             )
 
             if root_observation is not None:
@@ -539,6 +610,7 @@ async def procesar_interaccion_completa(
                         "answer": observation_preview(persisted.get("answer", ""), max_length=1200),
                         "tool_rounds": persisted.get("tool_rounds", 0),
                         "report_id": persisted.get("report_id"),
+                        "cost_breakdown": persisted.get("cost_breakdown"),
                     }
                 )
             return persisted
@@ -546,6 +618,10 @@ async def procesar_interaccion_completa(
         except ChatbotNotFoundError:
             if root_observation is not None:
                 root_observation.update(output={"error": "slug_not_found"})
+            raise
+        except ChatbotModelNotAllowedError:
+            if root_observation is not None:
+                root_observation.update(output={"error": "model_not_allowed"})
             raise
         except ai_billing.BillingLimitExceeded as exc:
             if root_observation is not None:
@@ -563,6 +639,7 @@ async def procesar_interaccion_completa(
                     error_message=str(exc),
                     billing_context=billing_context,
                     result=result,
+                    requested_model_key=model_key,
                 )
             except Exception:
                 logging.exception("[ChatbotService] Failed to log error to DB")
@@ -578,6 +655,8 @@ async def procesar_pregunta(
     conversation_id: Optional[str] = None,
     reset_history: bool = False,
     config: Optional[Dict[str, Any]] = None,
+    source: str = "chat",
+    model_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Legacy compatibility wrapper.
@@ -604,4 +683,10 @@ async def procesar_pregunta(
         conversation_id=conversation_id,
         reset_history=reset_history,
         config=config,
+        source=source,
+        model_key=model_key,
     )
+
+# Transitional aliases for integrations importing the former helper names.
+_chat_message_to_anthropic_message = _chat_message_to_history_message
+_load_anthropic_history = _load_history

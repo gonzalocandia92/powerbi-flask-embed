@@ -1,0 +1,13 @@
+{% extends "layout.html" %}
+{% block title %}Evaluaciones AI - Sudata PBI{% endblock %}
+{% block body %}
+<div class="container-fluid py-2">
+  {% set active_ai_section = 'evaluations' %}
+  {% include "admin/ai_config/_navigation.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4"><div><h2 class="fw-bold mb-1">Evaluaciones de modelos</h2><p class="text-muted mb-0">Ejecuciones reproducibles con costos, latencia y revisión manual.</p></div><a class="btn btn-primary" href="{{ url_for('evaluations.new_page') }}"><i class="bi bi-plus-lg me-1"></i>Nueva evaluación</a></div>
+  <div class="card"><div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Evaluación</th><th>Reporte</th><th>Estado</th><th>Progreso</th><th>Creada</th><th class="text-end">Acción</th></tr></thead><tbody>
+    {% for run in runs %}<tr><td><div class="fw-semibold">{{ run.name }}</div><span class="text-muted small">#{{ run.id }} · {{ run.mode }} · {{ run.cache_mode }}</span></td><td>{{ run.report.name if run.report else 'Reporte eliminado' }}</td><td><span class="badge {{ 'bg-success' if run.status == 'completed' else ('bg-danger' if run.status == 'failed' else 'bg-info text-dark') }}">{{ run.status }}</span></td><td style="min-width:160px"><div class="progress" role="progressbar" aria-valuenow="{{ run.completed_cases }}" aria-valuemin="0" aria-valuemax="{{ run.total_cases or 1 }}"><div class="progress-bar" style="width:{{ ((run.completed_cases or 0) * 100 / run.total_cases)|round if run.total_cases else 0 }}%"></div></div><div class="small text-muted mt-1">{{ run.completed_cases }}/{{ run.total_cases }}</div></td><td>{{ run.created_at.strftime('%d/%m/%Y %H:%M') if run.created_at else '--' }}</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('evaluations.detail_page', run_id=run.id) }}">Ver resultados</a></td></tr>
+    {% else %}<tr><td colspan="6" class="text-center text-muted py-5">Todavía no hay evaluaciones.</td></tr>{% endfor %}
+  </tbody></table></div></div>
+</div>
+{% endblock %}

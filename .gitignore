@@ -9,6 +9,7 @@ __pycache__/
 
 # Virtual environment folder (aunque usas Docker, por las dudas)
 .venv/
+.venv-klara/
 .env/
 venv/
 

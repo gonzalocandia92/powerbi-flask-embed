@@ -370,6 +370,7 @@ async def whatsapp_webhook():
             text,
             slug=slug,
             user_key=f"whatsapp:{phone_number}",
+            source="whatsapp",
             conversation_id=str(contact.conversation_id) if contact.conversation_id else None,
         )
         await asyncio.to_thread(

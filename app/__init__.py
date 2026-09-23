@@ -193,7 +193,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin
+    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -216,6 +216,8 @@ def create_app():
     app.register_blueprint(mcp_oauth.bp)
     app.register_blueprint(mcp_internal.bp)
     app.register_blueprint(mcp_oauth_admin.bp)
+    app.register_blueprint(model_catalog.bp)
+    app.register_blueprint(evaluations.bp)
 
     # Non-browser APIs authenticate independently and must not be subjected to
     # cookie-session CSRF validation.
@@ -229,7 +231,7 @@ def create_app():
     backoffice_blueprints = {
         'main', 'tenants', 'clients', 'workspaces', 'reports', 'usuarios_pbi',
         'analytics', 'empresas', 'futuras_empresas', 'api_docs', 'monitor',
-        'ai_config', 'users', 'mcp_config', 'mcp_oauth_admin',
+        'ai_config', 'model_catalog', 'evaluations', 'users', 'mcp_config', 'mcp_oauth_admin',
     }
 
     @app.before_request
@@ -249,6 +251,7 @@ def create_app():
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
             from app.services.refresh_monitor import poll_all_reports
+            from app.services.evaluation_worker import poll_evaluation_queue
 
             interval_hours = int(os.getenv('REFRESH_POLL_INTERVAL_HOURS', 12))
             scheduler = BackgroundScheduler(daemon=True)
@@ -259,6 +262,16 @@ def create_app():
                 hours=interval_hours,
                 id='refresh_monitor_poll',
                 replace_existing=True,
+            )
+            scheduler.add_job(
+                func=poll_evaluation_queue,
+                args=[app],
+                trigger='interval',
+                seconds=max(1, int(os.getenv('AI_EVALUATION_POLL_SECONDS', '3'))),
+                id='ai_evaluation_worker',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
             )
             scheduler.start()
             atexit.register(lambda: scheduler.shutdown(wait=False))

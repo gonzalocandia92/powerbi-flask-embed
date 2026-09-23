@@ -505,6 +505,7 @@ class ChatSession(db.Model):
     last_message_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     total_messages = db.Column(db.Integer, default=0, nullable=False)
     had_errors = db.Column(db.Boolean, default=False, nullable=False)
+    last_model_key = db.Column(db.String(120), nullable=True)
 
     workspace = db.relationship('Workspace')
     report = db.relationship('Report')
@@ -531,6 +532,13 @@ class ChatMessage(db.Model):
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     latency_ms = db.Column(db.Integer, nullable=True)
     model_used = db.Column(db.String(100), nullable=True)
+    requested_model_key = db.Column(db.String(120), nullable=True)
+    model_key = db.Column(db.String(120), nullable=True)
+    model_provider = db.Column(db.String(50), nullable=True)
+    physical_model = db.Column(db.String(200), nullable=True)
+    model_gateway = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    actual_model = db.Column(db.String(200), nullable=True)
     input_tokens = db.Column(db.Integer, nullable=True)
     output_tokens = db.Column(db.Integer, nullable=True)
     total_cost_usd = db.Column(db.Float, nullable=True, default=0)
@@ -623,11 +631,16 @@ class AIModelPricing(db.Model):
     provider = db.Column(db.String(50), nullable=False, index=True)
     model = db.Column(db.String(120), nullable=False, index=True)
     event_type = db.Column(db.String(30), nullable=False, index=True)
+    service_tier = db.Column(db.String(50), nullable=True, index=True)
+    pricing_tier = db.Column(db.String(50), nullable=True, index=True)
+    gateway = db.Column(db.String(50), nullable=True, index=True)
+    context_band = db.Column(db.String(20), nullable=True, index=True)
+    source_url = db.Column(db.String(500), nullable=True)
     currency = db.Column(db.String(10), nullable=False, default='USD')
-    input_cost_per_million_usd = db.Column(db.Float, nullable=True)
-    output_cost_per_million_usd = db.Column(db.Float, nullable=True)
-    cache_write_cost_per_million_usd = db.Column(db.Float, nullable=True)
-    cache_read_cost_per_million_usd = db.Column(db.Float, nullable=True)
+    input_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
+    output_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
+    cache_write_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
+    cache_read_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     effective_from = db.Column(db.DateTime, default=_utcnow, nullable=False, index=True)
     effective_to = db.Column(db.DateTime, nullable=True)
@@ -635,6 +648,90 @@ class AIModelPricing(db.Model):
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     usage_events = db.relationship('AIUsageEvent', back_populates='pricing', lazy='dynamic')
+
+
+class AIModelConfig(db.Model):
+    """Provider-neutral model catalog. Secrets always come from environment/config."""
+
+    __tablename__ = 'ai_model_configs'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    model_key = db.Column(db.String(120), nullable=False, unique=True, index=True)
+    display_name = db.Column(db.String(160), nullable=False)
+    provider = db.Column(db.String(50), nullable=False, index=True)
+    physical_model = db.Column(db.String(200), nullable=False)
+    gateway = db.Column(db.String(50), nullable=False, default='direct')
+    enabled = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    client_selectable = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    validation_status = db.Column(db.String(30), nullable=False, default='pending', index=True)
+    validated_at = db.Column(db.DateTime, nullable=True)
+    supports_tools = db.Column(db.Boolean, nullable=False, default=True)
+    supports_reasoning = db.Column(db.Boolean, nullable=False, default=False)
+    supports_cache_key = db.Column(db.Boolean, nullable=False, default=False)
+    supports_flex = db.Column(db.Boolean, nullable=False, default=False)
+    context_window = db.Column(db.Integer, nullable=False, default=200000)
+    max_output_tokens = db.Column(db.Integer, nullable=False, default=4096)
+    default_reasoning_effort = db.Column(db.String(30), nullable=True)
+    default_service_tier = db.Column(db.String(50), nullable=True)
+    pricing_tier = db.Column(db.String(50), nullable=True)
+    provider_options_json = db.Column(db.JSON, nullable=True)
+    family_key = db.Column(db.String(80), nullable=True, index=True)
+    family_options_json = db.Column(db.JSON, nullable=True)
+    thinking_mode = db.Column(db.String(10), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    role_assignments = db.relationship('AIModelRoleAssignment', back_populates='model', cascade='all, delete-orphan')
+    grants = db.relationship('AIModelGrant', back_populates='model', cascade='all, delete-orphan')
+
+
+class AIModelRoleAssignment(db.Model):
+    """Model assignment for a KLARA role with report > empresa > global precedence."""
+
+    __tablename__ = 'ai_model_role_assignments'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    model_id = db.Column(db.BigInteger, db.ForeignKey('ai_model_configs.id', ondelete='CASCADE'), nullable=True, index=True)
+    role = db.Column(db.String(50), nullable=False, index=True)
+    strategy = db.Column(db.String(30), nullable=False, default='model')
+    scope_type = db.Column(db.String(20), nullable=False, index=True)
+    scope_id = db.Column(db.String(120), nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    max_output_tokens = db.Column(db.Integer, nullable=True)
+    reasoning_effort = db.Column(db.String(30), nullable=True)
+    thinking_mode = db.Column(db.String(10), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    provider_options_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    model = db.relationship('AIModelConfig', back_populates='role_assignments')
+
+    __table_args__ = (
+        db.Index('ix_ai_model_role_scope', 'role', 'scope_type', 'scope_id', 'is_active'),
+    )
+
+
+class AIModelGrant(db.Model):
+    """Allowlist/default policy for models at global, empresa or report scope."""
+
+    __tablename__ = 'ai_model_grants'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    model_id = db.Column(db.BigInteger, db.ForeignKey('ai_model_configs.id', ondelete='CASCADE'), nullable=False, index=True)
+    scope_type = db.Column(db.String(20), nullable=False, index=True)
+    scope_id = db.Column(db.String(120), nullable=True, index=True)
+    allowed = db.Column(db.Boolean, nullable=False, default=True)
+    is_default = db.Column(db.Boolean, nullable=False, default=False)
+    client_selectable = db.Column(db.Boolean, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    model = db.relationship('AIModelConfig', back_populates='grants')
+
+    __table_args__ = (
+        db.Index('ix_ai_model_grant_scope', 'scope_type', 'scope_id', 'allowed'),
+    )
 
 
 class AIUsageEvent(db.Model):
@@ -658,6 +755,15 @@ class AIUsageEvent(db.Model):
     trigger_type = db.Column(db.String(30), nullable=False)
     provider = db.Column(db.String(50), nullable=False, index=True)
     model = db.Column(db.String(120), nullable=False, index=True)
+    model_key = db.Column(db.String(120), nullable=True, index=True)
+    gateway = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    pricing_tier = db.Column(db.String(50), nullable=True)
+    context_band = db.Column(db.String(20), nullable=True)
+    billing_status = db.Column(db.String(30), nullable=False, default='verified', index=True)
+    reserved_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    effective_thinking_mode = db.Column(db.String(10), nullable=True)
+    actual_model = db.Column(db.String(200), nullable=True)
     event_type = db.Column(db.String(30), nullable=False, index=True)
     operation_name = db.Column(db.String(120), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='success')
@@ -669,11 +775,11 @@ class AIUsageEvent(db.Model):
     cache_write_tokens = db.Column(db.Integer, nullable=True)
     cache_read_tokens = db.Column(db.Integer, nullable=True)
 
-    input_cost_usd = db.Column(db.Float, nullable=True)
-    output_cost_usd = db.Column(db.Float, nullable=True)
-    cache_write_cost_usd = db.Column(db.Float, nullable=True)
-    cache_read_cost_usd = db.Column(db.Float, nullable=True)
-    total_cost_usd = db.Column(db.Float, nullable=True)
+    input_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    output_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    cache_write_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    cache_read_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    total_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
     currency = db.Column(db.String(10), nullable=False, default='USD')
 
     pricing_id = db.Column(db.BigInteger, db.ForeignKey('ai_model_pricing.id', ondelete='SET NULL'), nullable=True, index=True)
@@ -693,6 +799,96 @@ class AIUsageEvent(db.Model):
         db.Index('ix_ai_usage_events_report_created', 'report_id_fk', 'created_at'),
         db.Index('ix_ai_usage_events_workspace_created', 'workspace_id_fk', 'created_at'),
         db.Index('ix_ai_usage_events_provider_model', 'provider', 'model'),
+    )
+
+
+class ModelEvaluationRun(db.Model):
+    """A reproducible evaluation of one or more model/decision configurations."""
+
+    __tablename__ = 'model_evaluation_runs'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='SET NULL'), nullable=True, index=True)
+    requested_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    mode = db.Column(db.String(30), nullable=False, default='independent')
+    cache_mode = db.Column(db.String(30), nullable=False, default='cold')
+    status = db.Column(db.String(30), nullable=False, default='pending', index=True)
+    configuration_json = db.Column(db.JSON, nullable=True)
+    summary_json = db.Column(db.JSON, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    total_cases = db.Column(db.Integer, nullable=False, default=0)
+    completed_cases = db.Column(db.Integer, nullable=False, default=0)
+    worker_id = db.Column(db.String(120), nullable=True, index=True)
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    cancel_requested_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    report = db.relationship('Report')
+    requested_by = db.relationship('User', foreign_keys=[requested_by_user_id])
+    cases = db.relationship(
+        'ModelEvaluationCase', back_populates='run', lazy='dynamic',
+        cascade='all, delete-orphan', order_by='ModelEvaluationCase.sequence_index'
+    )
+
+
+class ModelEvaluationCase(db.Model):
+    """One model/question execution and its complete observable outcome."""
+
+    __tablename__ = 'model_evaluation_cases'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    run_id = db.Column(db.BigInteger, db.ForeignKey('model_evaluation_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    sequence_index = db.Column(db.Integer, nullable=False)
+    question = db.Column(db.Text, nullable=False)
+    expected_answer = db.Column(db.Text, nullable=True)
+    answer = db.Column(db.Text, nullable=True)
+    model_key = db.Column(db.String(120), nullable=False, index=True)
+    cache_mode = db.Column(db.String(30), nullable=False, default='cold')
+    provider = db.Column(db.String(50), nullable=True)
+    physical_model = db.Column(db.String(200), nullable=True)
+    actual_model = db.Column(db.String(200), nullable=True)
+    gateway = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    status = db.Column(db.String(30), nullable=False, default='pending', index=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    latency_ms = db.Column(db.Integer, nullable=True)
+    input_tokens = db.Column(db.Integer, nullable=True)
+    output_tokens = db.Column(db.Integer, nullable=True)
+    cache_read_tokens = db.Column(db.Integer, nullable=True)
+    cache_write_tokens = db.Column(db.Integer, nullable=True)
+    reasoning_tokens = db.Column(db.Integer, nullable=True)
+    main_model_cost = db.Column(db.Float, nullable=True)
+    decision_layer_cost = db.Column(db.Float, nullable=True)
+    pipeline_total_cost = db.Column(db.Float, nullable=True)
+    selected_skills_json = db.Column(db.JSON, nullable=True)
+    candidate_skills_json = db.Column(db.JSON, nullable=True)
+    complexity_assessment_json = db.Column(db.JSON, nullable=True)
+    execution_policy_json = db.Column(db.JSON, nullable=True)
+    tools_called_json = db.Column(db.JSON, nullable=True)
+    dax_query = db.Column(db.Text, nullable=True)
+    tool_rounds = db.Column(db.Integer, nullable=True)
+    failure_reason = db.Column(db.String(120), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    trace_id = db.Column(db.String(120), nullable=True)
+    metrics_json = db.Column(db.JSON, nullable=True)
+    review_status = db.Column(db.String(30), nullable=False, default='unreviewed', index=True)
+    review_notes = db.Column(db.Text, nullable=True)
+    reviewed_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    run = db.relationship('ModelEvaluationRun', back_populates='cases')
+    reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_user_id])
+
+    __table_args__ = (
+        db.Index('ix_model_evaluation_case_run_model', 'run_id', 'model_key'),
+        db.UniqueConstraint('run_id', 'sequence_index', name='uq_model_evaluation_case_run_sequence'),
     )
 
 
@@ -856,6 +1052,7 @@ class McpModelGrant(db.Model):
             'user_id', 'config_id', 'empresa_id', name='uq_mcp_grant_user_config_empresa'
         ),
     )
+
 
     id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
     public_id = db.Column(db.String(36), unique=True, nullable=False, default=_uuid4, index=True)
