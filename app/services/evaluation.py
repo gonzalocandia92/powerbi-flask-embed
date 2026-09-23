@@ -1,4 +1,4 @@
-"""Direct, persistent evaluations over KlaraExecutionService (never over HTTP)."""
+"""Direct, persistent evaluations over the internal AnalyticsExecutor API."""
 from __future__ import annotations
 
 import inspect
@@ -10,6 +10,7 @@ from typing import Any, Callable
 from app import db
 from app.models import AIModelConfig, ModelEvaluationCase, ModelEvaluationRun
 from app.services import ai_billing
+from app.services.analytics import AnalyticsExecutor, AnalyticsRequest
 from app.services.llm import CachePolicy, CacheScope
 
 
@@ -188,12 +189,41 @@ class SQLAlchemyEvaluationRepository:
 
 
 class ModelEvaluationRunner:
-    def __init__(self, *, context_factory: Callable, service_factory: Callable,
-                 repository=None, report=None):
+    def __init__(self, *, analytics_executor_factory: Callable[..., AnalyticsExecutor] | None = None,
+                 report_id: int | None = None, context_factory: Callable | None = None,
+                 service_factory: Callable | None = None, repository=None, report=None):
+        if analytics_executor_factory is None and (context_factory is None or service_factory is None):
+            raise ValueError("analytics_executor_factory or legacy context/service factories are required")
+        self.analytics_executor_factory = analytics_executor_factory
+        self.report_id = report_id if report_id is not None else getattr(report, "id", None)
         self.context_factory = context_factory
         self.service_factory = service_factory
         self.repository = repository or SQLAlchemyEvaluationRepository()
         self.report = report
+
+    async def _execute_case(self, *, question, history, model_key, cache_policy, run_id, experiment):
+        if self.analytics_executor_factory is not None:
+            executor = await _maybe_await(self.analytics_executor_factory(model_key, experiment))
+            result = await executor.execute(AnalyticsRequest(
+                report_id=self.report_id,
+                question=question,
+                history=history,
+                source="evaluation",
+                execution_id=f"evaluation:{run_id}:{model_key}",
+                model_key=model_key,
+                cache_policy=cache_policy,
+                trace_context={
+                    "evaluation_run_id": run_id,
+                    "evaluation_model_key": model_key,
+                },
+            ))
+            return result.to_dict()
+        context = await _maybe_await(self.context_factory(
+            question, history, model_key, cache_policy, str(run_id), experiment,
+        ))
+        service = await _maybe_await(self.service_factory(model_key, experiment))
+        turn = await service.execute(context)
+        return turn.to_dict()
 
     async def run(self, spec: EvaluationSpec) -> ModelEvaluationRun:
         run = self.repository.create_run(spec)
@@ -215,14 +245,11 @@ class ModelEvaluationRunner:
                         )
                         started = time.monotonic()
                         try:
-                            context = await _maybe_await(self.context_factory(
-                                item.question, list(history), model_key,
-                                CachePolicy(scope=CacheScope(kind="evaluation", key=scope_key)),
-                                str(run.id), spec.configuration,
-                            ))
-                            service = await _maybe_await(self.service_factory(model_key, spec.configuration))
-                            turn = await service.execute(context)
-                            result = turn.to_dict()
+                            result = await self._execute_case(
+                                question=item.question, history=list(history), model_key=model_key,
+                                cache_policy=CachePolicy(scope=CacheScope(kind="evaluation", key=scope_key)),
+                                run_id=run.id, experiment=spec.configuration,
+                            )
                             latency_ms = round((time.monotonic() - started) * 1000)
                             self.repository.complete_case(case, result, latency_ms=latency_ms, report=self.report)
                             if spec.mode == "conversation":
@@ -293,14 +320,11 @@ class ModelEvaluationRunner:
                         )
                         started = time.monotonic()
                         try:
-                            context = await _maybe_await(self.context_factory(
-                                case.question, list(history), model_key,
-                                CachePolicy(scope=CacheScope(kind="evaluation", key=scope_key)),
-                                str(run.id), config,
-                            ))
-                            service = await _maybe_await(self.service_factory(model_key, config))
-                            turn = await service.execute(context)
-                            result = turn.to_dict()
+                            result = await self._execute_case(
+                                question=case.question, history=list(history), model_key=model_key,
+                                cache_policy=CachePolicy(scope=CacheScope(kind="evaluation", key=scope_key)),
+                                run_id=run.id, experiment=config,
+                            )
                             latency_ms = round((time.monotonic() - started) * 1000)
                             self.repository.complete_case(case, result, latency_ms=latency_ms, report=self.report)
                             if run.mode == "conversation":
@@ -354,64 +378,43 @@ def enqueue_evaluation(spec: EvaluationSpec, *, requested_by_user_id: int | None
 
 def build_report_evaluation_runner(report, *, config: dict[str, Any], runtime=None,
                                    component_overrides: dict[str, Any] | None = None) -> ModelEvaluationRunner:
-    """Compose a production runner from a report without traversing the /chat route."""
-    from app.services import agent_prompts
+    """Compose an evaluation consumer over the same analytics API used by Chat."""
     from app.services.agent_core import build_runtime_settings
-    from app.services.chat_credentials import resolve_powerbi_env_for_report
-    from app.services.klara_execution import ExecutionContext, KlaraExecutionService
+    from app.services.analytics import KlaraAnalyticsEngine
     from app.services.decisions import EmbeddingSkillSelector, JevSkillSelector, JevWithLLMFallbackSelector, LLMSkillSelector
+    from app.services.klara_execution import KlaraExecutionService
     from app.services.llm import LiteLLMRuntime
-    from app.services.model_catalog import evaluation_model_resolver
-    from app.utils.powerbi import get_current_dataset_id
+    from app.services.model_catalog import build_execution_resolver
 
-    settings = build_runtime_settings(config)
-    dataset_id = get_current_dataset_id(report)
-    credentials = resolve_powerbi_env_for_report(report)
-    instructions = agent_prompts.resolve_agent_prompt_instructions(report)
-    billing_context = ai_billing.resolve_report_billing_context(report)
-    ai_billing.enforce_limit_for_report(report)
     shared_runtime = runtime or LiteLLMRuntime(cost_resolver=ai_billing.generation_cost_details)
     component_overrides = component_overrides or {}
+    engines = {}
     resolvers = {}
 
     def resolver(model_key):
         if model_key not in resolvers:
-            resolvers[model_key] = evaluation_model_resolver(
-                settings, model_key, report_id=report.id,
-                empresa_id=billing_context.empresa_id, config=config,
+            settings = build_runtime_settings(config)
+            billing_context = ai_billing.resolve_report_billing_context(report)
+            resolvers[model_key] = build_execution_resolver(
+                settings, report_id=report.id, empresa_id=billing_context.empresa_id,
+                model_key=model_key, config=config,
             )
         return resolvers[model_key]
-
-    def context_factory(question, history, model_key, cache_policy, run_id, experiment):
-        roles = resolver(model_key)
-        main = roles.resolve("main_agent", report_id=report.id, empresa_id=billing_context.empresa_id)
-        # Evaluation must fail before spending if auditable pricing is incomplete.
-        ai_billing.validate_pricing_coverage(main)
-        skill_strategy = experiment.get("skill_selector_strategy", "current")
-        if skill_strategy not in {"current", "embeddings", "jev", "jev_with_llm_fallback"} and "skill_selector" not in component_overrides:
-            raise ValueError(f"Unsupported skill selector strategy: {skill_strategy}")
-        return ExecutionContext(
-            user_message=question, dataset_id=dataset_id, settings=settings, history=history,
-            source="evaluation", report_id=report.id, report_name=report.name,
-            empresa_id=billing_context.empresa_id, conversation_id=f"evaluation:{run_id}:{model_key}",
-            powerbi_credentials=credentials, custom_instructions=instructions,
-            schema_retrieval_prompt=report.schema_retrieval_prompt,
-            schema_table_context_limit=report.schema_table_context_limit,
-            schema_measure_context_limit=report.schema_measure_context_limit,
-            requested_model_key=model_key, role_configuration=roles, cache_policy=cache_policy,
-            billing_context=billing_context,
-            trace_context={"evaluation_run_id": run_id, "evaluation_model_key": model_key},
-        )
 
     class PassthroughRewriter:
         async def rewrite(self, query, context):
             return query
 
-    def service_factory(model_key, experiment):
+    def analytics_executor_factory(model_key, experiment):
         rewriter_strategy = experiment.get("query_rewriter_strategy", "current")
         skill_strategy = experiment.get("skill_selector_strategy", "current")
         if rewriter_strategy not in {"current", "disabled"} and "query_rewriter" not in component_overrides:
             raise ValueError(f"Unsupported query rewriter strategy: {rewriter_strategy}")
+        if skill_strategy not in {"current", "embeddings", "jev", "jev_with_llm_fallback"} and "skill_selector" not in component_overrides:
+            raise ValueError(f"Unsupported skill selector strategy: {skill_strategy}")
+        cache_key = (model_key, rewriter_strategy, skill_strategy)
+        if cache_key in engines:
+            return engines[cache_key]
         query_rewriter = component_overrides.get("query_rewriter")
         if rewriter_strategy == "disabled":
             query_rewriter = PassthroughRewriter()
@@ -421,21 +424,29 @@ def build_report_evaluation_runner(report, *, config: dict[str, Any], runtime=No
         elif skill_strategy in {"jev", "jev_with_llm_fallback"}:
             jev_selector = JevSkillSelector()
             if skill_strategy == "jev_with_llm_fallback":
+                billing_context = ai_billing.resolve_report_billing_context(report)
                 fallback_model = resolver(model_key).fallback.resolve(
                     "skill_selector", report_id=report.id, empresa_id=billing_context.empresa_id,
                 )
+                ai_billing.validate_pricing_coverage(fallback_model)
                 skill_selector = JevWithLLMFallbackSelector(
                     jev_selector, LLMSkillSelector(shared_runtime, fallback_model),
                 )
             else:
                 skill_selector = jev_selector
-        return KlaraExecutionService(
-            runtime=shared_runtime, model_roles=resolver(model_key), query_rewriter=query_rewriter,
+        execution_service = KlaraExecutionService(
+            runtime=shared_runtime, query_rewriter=query_rewriter,
             skill_selector=skill_selector,
             complexity_classifier=component_overrides.get("complexity_classifier"),
             policy_resolver=component_overrides.get("policy_resolver"),
         )
+        engines[cache_key] = KlaraAnalyticsEngine(
+            config=config, runtime=shared_runtime, execution_service=execution_service,
+        )
+        return engines[cache_key]
 
     return ModelEvaluationRunner(
-        context_factory=context_factory, service_factory=service_factory, report=report
+        analytics_executor_factory=analytics_executor_factory,
+        report_id=report.id,
+        report=report,
     )

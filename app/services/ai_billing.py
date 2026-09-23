@@ -136,6 +136,33 @@ def validate_pricing_coverage(model) -> None:
             _validate_price_columns(pricing, profile)
 
 
+def validate_execution_pricing(report: Report, settings, model_roles=None) -> None:
+    """Validate every potentially billable execution component before tokens are spent."""
+    from app.services.klara_execution import configured_model_roles
+
+    roles = configured_model_roles(settings, model_roles or settings.role_configuration)
+    billing_context = resolve_report_billing_context(report)
+    scope = {"report_id": report.id, "empresa_id": billing_context.empresa_id}
+    role_names = ["main_agent"]
+    component_resolver = getattr(roles, "component", None)
+    if component_resolver is None:
+        role_names.append("query_rewriter")
+        if settings.skill_router_settings.selector_enabled:
+            role_names.append("skill_selector")
+    for role in role_names:
+        validate_pricing_coverage(roles.resolve(role, **scope))
+    if component_resolver is not None:
+        for role in ("query_rewriter", "skill_selector", "complexity_classifier"):
+            try:
+                component = component_resolver(role, **scope)
+            except Exception:
+                continue
+            if component.strategy == "model" and component.model is not None:
+                validate_pricing_coverage(component.model)
+    resolve_pricing(provider="voyageai", model="voyage-4", event_type="embedding")
+    enforce_limit_for_report(report)
+
+
 def _validate_price_columns(pricing, profile, usage=None) -> None:
     required = ['input_cost_per_million_usd', 'output_cost_per_million_usd']
     if profile is not None:

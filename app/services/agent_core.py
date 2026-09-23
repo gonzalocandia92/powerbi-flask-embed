@@ -1979,7 +1979,7 @@ async def run_chat_turn(
     execution_service=None,
     trace_context=None,
 ) -> Dict[str, Any]:
-    """Compatibility wrapper delegating composition to the workflow boundary."""
+    """Legacy/transitional facade; new consumers should use AnalyticsExecutor."""
     from .klara_execution import ExecutionContext, KlaraExecutionService
     from .ai_billing import generation_cost_details
     service = execution_service or KlaraExecutionService(runtime=LiteLLMRuntime(cost_resolver=generation_cost_details))

@@ -284,9 +284,28 @@ def build_catalog_resolver(settings, *, report_id=None, empresa_id=None, selecti
     )
 
 
-def evaluation_model_resolver(settings, model_key: str, *, report_id=None, empresa_id=None, config=None):
-    selected = get_model_config(model_key, require_enabled=True, config=config)
+def build_execution_resolver(settings, *, report_id=None, empresa_id=None, model_key=None, config=None):
+    """Build effective execution roles with an optional trusted main-model override.
+
+    Unlike ``resolve_client_selection``, this helper intentionally does not apply
+    the Chat client allowlist. Consumers are responsible for authorizing any
+    externally supplied model key before creating an analytics request.
+    """
+    selection = None
+    if model_key is not None:
+        selected = get_model_config(model_key, require_enabled=True, config=config)
+        selection = ClientModelSelection(selected, model_key, model_key, "execution_override")
     return build_catalog_resolver(
+        settings,
+        report_id=report_id,
+        empresa_id=empresa_id,
+        selection=selection,
+        config=config,
+    )
+
+
+def evaluation_model_resolver(settings, model_key: str, *, report_id=None, empresa_id=None, config=None):
+    return build_execution_resolver(
         settings, report_id=report_id, empresa_id=empresa_id,
-        selection=ClientModelSelection(selected, model_key, model_key, "evaluation"), config=config,
+        model_key=model_key, config=config,
     )

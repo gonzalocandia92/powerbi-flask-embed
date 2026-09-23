@@ -19,10 +19,15 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink, Report
-from app.services import agent_prompts, ai_billing
-from app.services import model_catalog
-from app.services.chat_credentials import resolve_powerbi_env_for_report
+from app.services import ai_billing, model_catalog
 from app.services.agent_core import DEFAULT_MODEL
+from app.services.analytics import (
+    AnalyticsBillingLimitExceededError,
+    AnalyticsModelError,
+    AnalyticsReportNotFoundError,
+    AnalyticsRequest,
+    build_analytics_engine,
+)
 from app.services.observability import (
     hash_identifier,
     observation_preview,
@@ -30,8 +35,6 @@ from app.services.observability import (
     start_observation,
     trace_user_id,
 )
-from app.services import chat_mcp
-from app.utils.chatbot_context import get_report_and_dataset_by_slug
 from app.utils.decorators import retry_on_db_error
 
 
@@ -146,32 +149,12 @@ def _ensure_session_for_turn(
 
 
 @retry_on_db_error(max_retries=3, delay=1)
-def _resolve_report_and_dataset_sync(slug: str) -> Tuple[Report, str, Dict[str, str]]:
-    try:
-        resolved = get_report_and_dataset_by_slug(slug)
-    except Exception as exc:
-        logging.exception("[ChatbotService] Failed to resolve dataset for slug %s", slug)
-        resolved = None
-        resolution_error = exc
-    else:
-        resolution_error = None
-
-    if resolved:
-        report, dataset_id = resolved
-    else:
-        link = (
-            PublicLink.query
-            .filter_by(custom_slug=slug, is_active=True)
-            .first()
-        )
-        if not link:
-            raise ChatbotNotFoundError(f"Slug not found or inactive: {slug}") from resolution_error
-
-        report = link.report
-        dataset_id = os.getenv("CHATBOT_DATASET_ID") or report.report_id
-
-    powerbi_credentials = resolve_powerbi_env_for_report(report)
-    return report, dataset_id, powerbi_credentials
+def _resolve_report_sync(slug: str) -> Report:
+    """Resolve the Chat-specific public slug without preparing analytics context."""
+    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
+    if not link:
+        raise ChatbotNotFoundError(f"Slug not found or inactive: {slug}")
+    return link.report
 
 
 @retry_on_db_error(max_retries=3, delay=1)
@@ -451,31 +434,6 @@ def _persist_error_sync(
             )
 
 
-def _validate_chat_pricing_sync(report: Report, settings: chat_mcp.RuntimeSettings, model_roles=None) -> None:
-    from app.services.klara_execution import configured_model_roles
-    roles = configured_model_roles(settings, model_roles or settings.role_configuration)
-    role_names = ["main_agent"]
-    component_resolver = getattr(roles, "component", None)
-    if component_resolver is None:
-        role_names.append("query_rewriter")
-        if settings.skill_router_settings.selector_enabled:
-            role_names.append("skill_selector")
-    empresa_id = ai_billing.resolve_report_billing_context(report).empresa_id
-    for role in role_names:
-        model = roles.resolve(role, report_id=report.id, empresa_id=empresa_id)
-        ai_billing.validate_pricing_coverage(model)
-    if component_resolver is not None:
-        for role in ("query_rewriter", "skill_selector", "complexity_classifier"):
-            try:
-                component = component_resolver(role, report_id=report.id, empresa_id=empresa_id)
-            except Exception:
-                continue
-            if component.strategy == "model" and component.model is not None:
-                ai_billing.validate_pricing_coverage(component.model)
-    ai_billing.resolve_pricing(provider="voyageai", model="voyage-4", event_type="embedding")
-    ai_billing.enforce_limit_for_report(report)
-
-
 async def procesar_interaccion_completa(
     pregunta: str,
     *,
@@ -501,7 +459,6 @@ async def procesar_interaccion_completa(
         raise ValueError("La pregunta no puede estar vacia")
 
     runtime_config = config or dict(current_app.config)
-    settings = chat_mcp.build_runtime_settings(runtime_config)
     start = time.monotonic()
     session_id: Optional[int] = None
     report: Optional[Report] = None
@@ -515,7 +472,7 @@ async def procesar_interaccion_completa(
         input={"message": pregunta},
     ) as root_observation:
         try:
-            report, dataset_id, powerbi_credentials = await asyncio.to_thread(_resolve_report_and_dataset_sync, slug)
+            report = await asyncio.to_thread(_resolve_report_sync, slug)
             billing_context = ai_billing.resolve_report_billing_context(report)
             previous_model_key = await asyncio.to_thread(
                 model_catalog.session_model_key, conversation_id, report_id=report.id
@@ -531,12 +488,6 @@ async def procesar_interaccion_completa(
                 )
             except model_catalog.ModelSelectionError as exc:
                 raise ChatbotModelNotAllowedError(str(exc)) from exc
-            model_roles = model_catalog.build_catalog_resolver(
-                settings, report_id=report.id, empresa_id=billing_context.empresa_id,
-                selection=model_selection, config=runtime_config,
-            )
-            custom_instructions = await asyncio.to_thread(agent_prompts.resolve_agent_prompt_instructions, report)
-            await asyncio.to_thread(_validate_chat_pricing_sync, report, settings, model_roles)
             session_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
                 billing_context=billing_context,
@@ -553,7 +504,6 @@ async def procesar_interaccion_completa(
                 "reportname": report.name,
                 "empresa": str(billing_context.empresa_id),
                 "source": source,
-                "datasethash": hash_identifier(dataset_id, prefix="dataset"),
                 "slughash": hash_identifier(slug, prefix="slug"),
                 "resethistory": str(bool(reset_history)).lower(),
                 "hashistory": str(bool(history)).lower(),
@@ -572,25 +522,16 @@ async def procesar_interaccion_completa(
                 tags=[source, "powerbi"],
                 version=trace_version,
             ):
-                result = await chat_mcp.run_chat_turn(
-                    user_message=pregunta,
-                    report_name=report.name,
-                    source=source,
-                    trace_context=trace_metadata,
-                    dataset_id=dataset_id,
-                    history=history,
-                    settings=settings,
-                    conversation_id=str(session_id),
+                analytics_result = await build_analytics_engine(runtime_config).execute(AnalyticsRequest(
                     report_id=report.id,
-                    empresa_id=billing_context.empresa_id,
-                    powerbi_credentials=powerbi_credentials,
-                    custom_instructions=custom_instructions,
-                    schema_retrieval_prompt=report.schema_retrieval_prompt,
-                    schema_table_context_limit=report.schema_table_context_limit,
-                    schema_measure_context_limit=report.schema_measure_context_limit,
-                    requested_model_key=model_selection.model.model_key if model_selection else None,
-                    role_configuration=model_roles,
-                )
+                    question=pregunta,
+                    history=history,
+                    source=source,
+                    execution_id=str(session_id),
+                    model_key=model_selection.model.model_key if model_selection else None,
+                    trace_context=trace_metadata,
+                ))
+                result = analytics_result.to_dict()
 
             latency_ms = int((time.monotonic() - start) * 1000)
             persisted = await asyncio.to_thread(
@@ -600,7 +541,7 @@ async def procesar_interaccion_completa(
                 report_id=report.id,
                 result=result,
                 latency_ms=latency_ms,
-                anthropic_model=settings.anthropic_model,
+                anthropic_model=DEFAULT_MODEL,
                 requested_model_key=model_key,
             )
 
@@ -619,11 +560,19 @@ async def procesar_interaccion_completa(
             if root_observation is not None:
                 root_observation.update(output={"error": "slug_not_found"})
             raise
+        except AnalyticsReportNotFoundError as exc:
+            if root_observation is not None:
+                root_observation.update(output={"error": "report_not_found"})
+            raise ChatbotNotFoundError(str(exc)) from exc
         except ChatbotModelNotAllowedError:
             if root_observation is not None:
                 root_observation.update(output={"error": "model_not_allowed"})
             raise
-        except ai_billing.BillingLimitExceeded as exc:
+        except AnalyticsModelError as exc:
+            if root_observation is not None:
+                root_observation.update(output={"error": "model_not_allowed"})
+            raise ChatbotModelNotAllowedError(str(exc)) from exc
+        except (ai_billing.BillingLimitExceeded, AnalyticsBillingLimitExceededError) as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": "billing_limit_exceeded"})
             raise ChatbotLimitExceededError(str(exc)) from exc
