@@ -49,6 +49,7 @@ def _model_json(model, *, include_readiness=True):
             'max_output_tokens': model.max_output_tokens,
         },
         'default_reasoning_effort': model.default_reasoning_effort,
+        'default_verbosity': model.default_verbosity,
         'default_service_tier': model.default_service_tier,
         'pricing_tier': model.pricing_tier,
         'provider_options': model.provider_options_json or {},
@@ -144,7 +145,7 @@ def _apply_model(model, data, *, creating=False):
             if value < 1:
                 raise ValueError(f'{field} must be positive')
             setattr(model, field, value)
-    for field in ('default_reasoning_effort', 'default_service_tier', 'pricing_tier'):
+    for field in ('default_reasoning_effort', 'default_verbosity', 'default_service_tier', 'pricing_tier'):
         if field in data:
             setattr(model, field, data[field] or None)
     if 'family_key' in data:
@@ -163,7 +164,9 @@ def _apply_model(model, data, *, creating=False):
         profile.validate(SimpleNamespace(
             provider=model.provider, physical_model=model.physical_model, gateway=model.gateway,
             thinking_mode=model.thinking_mode, reasoning_effort=model.default_reasoning_effort,
+            default_verbosity=model.default_verbosity,
             family_options=model.family_options_json or {}, max_output_tokens=model.max_output_tokens,
+            capabilities=SimpleNamespace(context_window=model.context_window),
             provider_options=model.provider_options_json or {}, service_tier=model.default_service_tier,
         ))
         model.supports_reasoning = profile.supports_thinking
@@ -403,7 +406,10 @@ def replace_scope():
                 profile = PROFILES.get(model.family_key)
                 if profile is None:
                     raise ValueError(f'Unknown family_key for {role}')
-                profile.validate(catalog_service.to_model_config(model, assignment=assignment))
+                configured = catalog_service.to_model_config(model, assignment=assignment)
+                profile.validate(configured)
+                if role == 'query_rewriter':
+                    profile.validate_off_override(configured)
             db.session.add(assignment)
         db.session.commit()
         return jsonify(_scope_payload(scope_type, normalized_id))
@@ -431,6 +437,7 @@ def _form_payload(form, *, include_key=True):
         'supports_flex': form.supports_flex.data,
         'context_window': form.context_window.data, 'max_output_tokens': form.max_output_tokens.data,
         'default_reasoning_effort': form.default_reasoning_effort.data,
+        'default_verbosity': form.default_verbosity.data,
         'default_service_tier': form.default_service_tier.data, 'pricing_tier': form.pricing_tier.data,
         'provider_options': options,
     }
@@ -458,6 +465,9 @@ def catalog_new():
     ]
     form.default_reasoning_effort.choices = [('', 'Seleccionar nivel')] + [
         (level, level) for level in sorted({level for item in profile_catalog() for level in item['levels']})
+    ]
+    form.default_verbosity.choices = [('', 'Default del proveedor')] + [
+        (level, level) for level in sorted({level for item in profile_catalog() for level in item['verbosity_levels']})
     ]
     if form.validate_on_submit():
         payload = _form_payload(form)
@@ -489,6 +499,9 @@ def catalog_edit(model_key):
     ]
     form.default_reasoning_effort.choices = [('', 'Seleccionar nivel')] + [
         (level, level) for level in sorted({level for item in profile_catalog() for level in item['levels']})
+    ]
+    form.default_verbosity.choices = [('', 'Default del proveedor')] + [
+        (level, level) for level in sorted({level for item in profile_catalog() for level in item['verbosity_levels']})
     ]
     if request.method == 'GET':
         form.provider_options_json.data = json.dumps(model.provider_options_json or {}, ensure_ascii=False, indent=2)

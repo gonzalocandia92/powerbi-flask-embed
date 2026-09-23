@@ -29,6 +29,7 @@ class ModelConfig:
     family_key: str | None = None
     family_options: dict[str, Any] = field(default_factory=dict)
     thinking_mode: str | None = None
+    default_verbosity: str | None = None
 
     @property
     def transport_model(self) -> str:
@@ -40,6 +41,7 @@ class ModelConfig:
                 "physical_model": self.physical_model, "gateway": self.gateway,
                 "service_tier": self.service_tier, "pricing_tier": self.pricing_tier,
                 "family_key": self.family_key, "requested_thinking_mode": self.thinking_mode,
+                "configured_verbosity": self.default_verbosity,
                 "max_output_tokens": self.max_output_tokens}
 
 

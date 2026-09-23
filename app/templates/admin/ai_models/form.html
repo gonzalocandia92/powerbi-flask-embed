@@ -9,6 +9,7 @@
     {{ field(form.family_key) }}{{ field(form.display_name) }}{{ field(form.provider) }}{{ field(form.gateway) }}{{ field(form.physical_model, 'col-12') }}
     {{ field(form.context_window) }}{{ field(form.max_output_tokens) }}{{ field(form.thinking_mode) }}
     <div class="col-md-6 family-thinking-level">{{ form.default_reasoning_effort.label(class='form-label') }}{{ form.default_reasoning_effort(class='form-control') }}</div>
+    <div class="col-md-6 family-verbosity">{{ form.default_verbosity.label(class='form-label') }}{{ form.default_verbosity(class='form-control') }}</div>
     <div class="col-md-6 family-thinking-budget">{{ form.budget_tokens.label(class='form-label') }}{{ form.budget_tokens(class='form-control') }}</div>
     {{ field(form.default_service_tier) }}{{ field(form.pricing_tier) }}
     <div class="col-12">{{ form.provider_options_json.label(class='form-label') }}{{ form.provider_options_json(class='form-control font-monospace', rows=5) }}{% for error in form.provider_options_json.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}</div>
@@ -25,6 +26,7 @@
   const provider = document.getElementById('provider');
   const thinking = document.getElementById('thinking_mode');
   const effort = document.getElementById('default_reasoning_effort');
+  const verbosity = document.getElementById('default_verbosity');
   const budget = document.getElementById('budget_tokens');
   const gateway = document.getElementById('gateway');
   const reportCache = document.getElementById('cache_by_report');
@@ -32,16 +34,23 @@
   function update() {
     const profile = profiles.find(item => item.key === family.value);
     const selectedEffort = effort.value;
+    const selectedVerbosity = verbosity.value;
     effort.replaceChildren();
     const emptyEffort = document.createElement('option'); emptyEffort.value = ''; emptyEffort.textContent = 'Seleccionar nivel'; effort.append(emptyEffort);
-    for (const level of profile?.levels || []) { const option = document.createElement('option'); option.value = level; option.textContent = level; effort.append(option); }
-    if ((profile?.levels || []).includes(selectedEffort)) effort.value = selectedEffort;
+    const modelLevels = profile?.model_levels?.[model.value] || profile?.levels || [];
+    for (const level of modelLevels) { const option = document.createElement('option'); option.value = level; option.textContent = level; effort.append(option); }
+    if (modelLevels.includes(selectedEffort)) effort.value = selectedEffort;
+    verbosity.replaceChildren();
+    const emptyVerbosity = document.createElement('option'); emptyVerbosity.value = ''; emptyVerbosity.textContent = 'Default del proveedor'; verbosity.append(emptyVerbosity);
+    for (const level of profile?.verbosity_levels || []) { const option = document.createElement('option'); option.value = level; option.textContent = level; verbosity.append(option); }
+    if ((profile?.verbosity_levels || []).includes(selectedVerbosity)) verbosity.value = selectedVerbosity;
+    document.querySelector('.family-verbosity').hidden = !(profile?.verbosity_levels || []).length;
     options.replaceChildren();
     for (const name of profile?.models || []) { const option = document.createElement('option'); option.value = name; options.append(option); }
     if (profile) provider.value = profile.provider;
     const enabled = !!profile?.supports_thinking;
     thinking.closest('.col-md-6').hidden = !enabled;
-    document.querySelector('.family-thinking-level').hidden = !enabled || !profile.levels.length || thinking.value !== 'on';
+    document.querySelector('.family-thinking-level').hidden = !enabled || !modelLevels.length || thinking.value !== 'on';
     document.querySelector('.family-thinking-budget').hidden = family.value !== 'claude-haiku-4.5' || thinking.value !== 'on';
     if (!enabled) { thinking.value = 'off'; effort.value = ''; budget.value = ''; }
     if (thinking.value !== 'on') { effort.value = ''; budget.value = ''; }
@@ -56,6 +65,7 @@
   }
   family.addEventListener('change', () => { model.value = ''; update(); });
   thinking.addEventListener('change', update);
+  model.addEventListener('change', update);
   gateway.addEventListener('change', update);
   update();
 })();

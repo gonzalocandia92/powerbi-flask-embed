@@ -92,6 +92,7 @@ def to_model_config(
         family_key=record.family_key,
         family_options=dict(record.family_options_json or {}),
         thinking_mode=(assignment.thinking_mode if assignment and assignment.thinking_mode is not None else record.thinking_mode),
+        default_verbosity=record.default_verbosity,
     )
 
 

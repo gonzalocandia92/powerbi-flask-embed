@@ -2108,17 +2108,15 @@ def _pricing_profile_error(form, gateway, context_band, pricing_tier):
         return form.pricing_tier, 'DeepSeek directo requiere peak u off-peak.'
     if profile and profile.key != 'deepseek-v4' and pricing_tier:
         return form.pricing_tier, 'Este perfil no utiliza bandas peak/off-peak.'
-    if profile and profile.key == 'openai-gpt-5.6' and context_band not in {'short', 'long'}:
-        return form.context_band, 'GPT-5.6 requiere banda short o long.'
-    if profile and profile.key != 'openai-gpt-5.6' and context_band:
+    if profile and profile.context_pricing_threshold is not None and context_band not in {'short', 'long'}:
+        return form.context_band, 'Este perfil requiere banda short o long.'
+    if profile and profile.context_pricing_threshold is None and context_band:
         return form.context_band, 'Este perfil no utiliza bandas de contexto.'
     if profile and not _optional_text(form.source_url.data):
         return form.source_url, 'Indica la fuente de la tarifa para poder auditarla.'
     if profile:
         required = ('input_cost_per_million_usd', 'output_cost_per_million_usd',
-                    'cache_read_cost_per_million_usd')
-        if profile.key in {'claude-haiku-4.5', 'openai-gpt-5.6'}:
-            required += ('cache_write_cost_per_million_usd',)
+                    *profile.required_cache_price_columns)
         for field in required:
             if getattr(form, field).data is None:
                 return getattr(form, field), 'Esta tarifa es necesaria para el perfil.'

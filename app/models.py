@@ -627,7 +627,7 @@ class AIModelPricing(db.Model):
 
     __tablename__ = 'ai_model_pricing'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     provider = db.Column(db.String(50), nullable=False, index=True)
     model = db.Column(db.String(120), nullable=False, index=True)
     event_type = db.Column(db.String(30), nullable=False, index=True)
@@ -672,6 +672,7 @@ class AIModelConfig(db.Model):
     context_window = db.Column(db.Integer, nullable=False, default=200000)
     max_output_tokens = db.Column(db.Integer, nullable=False, default=4096)
     default_reasoning_effort = db.Column(db.String(30), nullable=True)
+    default_verbosity = db.Column(db.String(10), nullable=True)
     default_service_tier = db.Column(db.String(50), nullable=True)
     pricing_tier = db.Column(db.String(50), nullable=True)
     provider_options_json = db.Column(db.JSON, nullable=True)

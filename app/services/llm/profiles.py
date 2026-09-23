@@ -12,7 +12,7 @@ from typing import Any
 
 CONTROLLED_OPTIONS = {"thinking", "reasoning", "reasoning_effort", "service_tier",
                       "output_config", "max_tokens", "model", "api_key", "tools", "tool_choice",
-                      "prompt_cache_key", "prompt_cache_options", "user_id"}
+                      "prompt_cache_key", "prompt_cache_options", "user_id", "verbosity", "text"}
 
 
 @dataclass(frozen=True)
@@ -39,6 +39,10 @@ class ModelFamilyProfile:
     supports_flex = False
     supports_report_cache_scope = False
     family_fields: tuple[str, ...] = ()
+    api_surface = "chat_completions"
+    verbosity_levels: tuple[str, ...] = ()
+    context_pricing_threshold: int | None = None
+    required_cache_price_columns: tuple[str, ...] = ()
 
     def supports(self, provider: str, physical_model: str, gateway: str) -> bool:
         return provider == self.provider and physical_model in self.models and gateway == "direct"
@@ -51,10 +55,13 @@ class ModelFamilyProfile:
             raise ValueError("thinking_mode must explicitly be on or off")
         if mode == "on" and not self.supports_thinking:
             raise ValueError(f"{self.key} does not support thinking")
-        if mode == "on" and self.levels and model.reasoning_effort not in self.levels:
-            raise ValueError(f"reasoning_effort must be one of {', '.join(self.levels)}")
+        levels = self.reasoning_levels(model.physical_model)
+        if mode == "on" and levels and model.reasoning_effort not in levels:
+            raise ValueError(f"reasoning_effort must be one of {', '.join(levels)}")
         if mode == "off" and model.reasoning_effort:
             raise ValueError("reasoning_effort requires thinking_mode=on")
+        if getattr(model, "default_verbosity", None) is not None and model.default_verbosity not in self.verbosity_levels:
+            raise ValueError(f"verbosity must be one of {', '.join(self.verbosity_levels)}")
         if model.service_tier == "flex" and not self.supports_flex:
             raise ValueError(f"{self.key} does not support flex")
         if model.service_tier not in (None, "flex"):
@@ -85,13 +92,18 @@ class ModelFamilyProfile:
         if request.thinking_mode_override == "off":
             # Validate the controls that will actually be sent. A role may keep
             # its normal on/budget configuration while this call requires off.
-            off_model = replace(request.model, thinking_mode="off", reasoning_effort=None,
-                                family_options={key: value for key, value in request.model.family_options.items()
-                                                if key != "budget_tokens"})
-            self.validate(off_model)
+            self.validate_off_override(request.model)
             return ThinkingDecision(mode, "off", override_reason=request.thinking_override_reason or "request_override")
         self.validate(request.model)
         return ThinkingDecision(mode, mode, request.model.reasoning_effort)
+
+    def validate_off_override(self, model) -> None:
+        self.validate(replace(model, thinking_mode="off", reasoning_effort=None,
+                              family_options={key: value for key, value in model.family_options.items()
+                                              if key != "budget_tokens"}))
+
+    def reasoning_levels(self, physical_model: str) -> tuple[str, ...]:
+        return self.levels
 
     def apply_cache(self, payload: dict[str, Any], request) -> None:
         if not (self.supports_report_cache_scope and request.model.family_options.get("cache_by_report")
@@ -114,7 +126,9 @@ class ModelFamilyProfile:
         return physical_model
 
     def context_band(self, usage) -> str | None:
-        return None
+        if self.context_pricing_threshold is None:
+            return None
+        return "long" if usage.input_total_tokens > self.context_pricing_threshold else "short"
 
     def normalize_usage(self, raw_usage: dict[str, Any], normalized):
         """Family hook for provider usage fields after the common LiteLLM shape."""
@@ -126,6 +140,7 @@ class ClaudeHaiku45Profile(ModelFamilyProfile):
     models = ("claude-haiku-4-5-20251001", "claude-haiku-4-5")
     supports_thinking = True
     family_fields = ('budget_tokens',)
+    required_cache_price_columns = ('cache_read_cost_per_million_usd', 'cache_write_cost_per_million_usd')
 
     def billing_model(self, physical_model: str) -> str:
         return 'claude-haiku-4-5-20251001' if physical_model == 'claude-haiku-4-5' else physical_model
@@ -163,6 +178,7 @@ class GPT41Profile(ModelFamilyProfile):
     models = ("gpt-4.1-mini", "gpt-4.1", "gpt-4.1-nano", "openai/gpt-4.1")
     supports_report_cache_scope = True
     family_fields = ("cache_by_report",)
+    required_cache_price_columns = ('cache_read_cost_per_million_usd',)
 
     def set_cache_group(self, payload: dict[str, Any], key: str) -> None:
         extra = dict(payload.get("extra_body") or {})
@@ -182,6 +198,9 @@ class GPT56Profile(ModelFamilyProfile):
     supports_thinking = supports_flex = True
     supports_report_cache_scope = True
     family_fields = ("cache_by_report",)
+    verbosity_levels = ("low", "medium", "high")
+    context_pricing_threshold = 272_000
+    required_cache_price_columns = ('cache_read_cost_per_million_usd', 'cache_write_cost_per_million_usd')
 
     def set_cache_group(self, payload: dict[str, Any], key: str) -> None:
         extra = dict(payload.get("extra_body") or {})
@@ -202,10 +221,58 @@ class GPT56Profile(ModelFamilyProfile):
         # LiteLLM 1.101.0 rejects temperature for this GPT family even when
         # reasoning_effort is none; the rewriter still needs to complete.
         payload.pop("temperature", None)
+        if request.model.default_verbosity is not None:
+            payload["verbosity"] = request.model.default_verbosity
         return decision
 
-    def context_band(self, usage) -> str:
-        return "long" if usage.input_total_tokens > 272_000 else "short"
+
+class GPT6Profile(ModelFamilyProfile):
+    key, label, provider = "openai-gpt-6", "GPT-6", "openai"
+    models = ("gpt-6-astra", "gpt-6-sol", "gpt-6-luna")
+    levels = ("low", "medium", "high", "xhigh", "max")
+    supports_thinking = supports_flex = supports_report_cache_scope = True
+    family_fields = ("cache_by_report",)
+    api_surface = "responses"
+    verbosity_levels = ("low", "medium", "high")
+    context_pricing_threshold = 272_000
+    required_cache_price_columns = ('cache_read_cost_per_million_usd', 'cache_write_cost_per_million_usd')
+    max_context_window = 1_050_000
+    max_model_output_tokens = 128_000
+
+    def reasoning_levels(self, physical_model: str) -> tuple[str, ...]:
+        return self.levels if physical_model == "gpt-6-astra" else ("none",) + self.levels
+
+    def validate(self, model) -> None:
+        super().validate(model)
+        def check_runtime_options(value):
+            if isinstance(value, dict):
+                if set(value) & {"previous_response_id", "instructions", "input", "store"}:
+                    raise ValueError("Responses continuation and input are owned by the runtime")
+                for child in value.values():
+                    check_runtime_options(child)
+            elif isinstance(value, (list, tuple)):
+                for child in value:
+                    check_runtime_options(child)
+        check_runtime_options(model.provider_options)
+        if model.physical_model == "gpt-6-astra" and model.thinking_mode == "off":
+            raise ValueError("GPT-6 Astra does not support reasoning none")
+        if model.max_output_tokens > self.max_model_output_tokens:
+            raise ValueError("max_output_tokens exceeds GPT-6 model limit")
+        if model.capabilities.context_window > self.max_context_window:
+            raise ValueError("context_window exceeds GPT-6 model limit")
+
+    def apply(self, payload: dict[str, Any], request) -> ThinkingDecision:
+        decision = super().apply(payload, request)
+        effort = decision.level if decision.effective == "on" else "none"
+        payload["reasoning"] = {"effort": effort}
+        if request.model.default_verbosity is not None:
+            payload["text"] = {"verbosity": request.model.default_verbosity}
+        return decision
+
+    def set_cache_group(self, payload: dict[str, Any], key: str) -> None:
+        extra = dict(payload.get("extra_body") or {})
+        extra["prompt_cache_key"] = key
+        payload["extra_body"] = extra
 
 
 class DeepSeekV4Profile(ModelFamilyProfile):
@@ -215,6 +282,7 @@ class DeepSeekV4Profile(ModelFamilyProfile):
     supports_thinking = True
     supports_report_cache_scope = True
     family_fields = ("cache_by_report",)
+    required_cache_price_columns = ('cache_read_cost_per_million_usd',)
 
     def set_cache_group(self, payload: dict[str, Any], key: str) -> None:
         extra = dict(payload.get("extra_body") or {})
@@ -245,7 +313,7 @@ class DeepSeekV4Profile(ModelFamilyProfile):
 
 
 PROFILES = {item.key: item for item in (
-    ClaudeHaiku45Profile(), GPT41Profile(), GPT56Profile(), DeepSeekV4Profile(),
+    ClaudeHaiku45Profile(), GPT41Profile(), GPT56Profile(), GPT6Profile(), DeepSeekV4Profile(),
 )}
 
 
@@ -258,6 +326,11 @@ def profile_for(key: str | None, provider: str, model: str, gateway: str):
 def profile_catalog() -> list[dict[str, Any]]:
     return [{"key": p.key, "label": p.label, "provider": p.provider,
              "models": list(p.models), "levels": list(p.levels),
+             "model_levels": {model: list(p.reasoning_levels(model)) for model in p.models},
+             "verbosity_levels": list(p.verbosity_levels),
+             "api_surface": p.api_surface,
+             "max_context_window": getattr(p, "max_context_window", None),
+             "max_model_output_tokens": getattr(p, "max_model_output_tokens", None),
              "family_fields": list(p.family_fields),
              "supports_thinking": p.supports_thinking, "supports_flex": p.supports_flex,
              "supports_report_cache_scope": p.supports_report_cache_scope}

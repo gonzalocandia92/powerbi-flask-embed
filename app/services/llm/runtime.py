@@ -51,15 +51,17 @@ def _dict(value: Any) -> dict:
 
 def normalize_usage(raw: Any) -> LLMUsage:
     usage = _dict(raw)
-    details = _dict(usage.get("prompt_tokens_details"))
-    output_details = _dict(usage.get("completion_tokens_details"))
+    responses_shape = "input_tokens" in usage or "output_tokens" in usage
+    details = _dict(usage.get("input_tokens_details" if responses_shape else "prompt_tokens_details"))
+    output_details = _dict(usage.get("output_tokens_details" if responses_shape else "completion_tokens_details"))
     read = int(details.get("cached_tokens") or usage.get("prompt_cache_hit_tokens") or usage.get("cache_read_input_tokens") or 0)
-    write = int(details.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens") or 0)
-    total_input = int(usage.get("prompt_tokens") or 0)
-    output = int(usage.get("completion_tokens") or 0)
+    write = int(details.get("cache_write_tokens") or details.get("cache_creation_tokens") or usage.get("cache_creation_input_tokens") or 0)
+    total_input = int(usage.get("input_tokens" if responses_shape else "prompt_tokens") or 0)
+    output = int(usage.get("output_tokens" if responses_shape else "completion_tokens") or 0)
     reasoning = int(output_details.get("reasoning_tokens") or 0)
-    reliable = ("prompt_tokens" in usage and "completion_tokens" in usage
-                and total_input >= read + write and output >= reasoning)
+    reliable = (("input_tokens" in usage and "output_tokens" in usage) if responses_shape else
+                ("prompt_tokens" in usage and "completion_tokens" in usage)) and (
+                total_input >= read + write and output >= reasoning)
     return LLMUsage(
         input_total_tokens=total_input, input_uncached_tokens=max(0, total_input - read - write),
         cache_read_tokens=read, cache_write_tokens=write, output_tokens=output,
@@ -79,8 +81,9 @@ def instruction_blocks(request: LLMRequest) -> list[dict]:
 
 
 class LiteLLMRuntime:
-    def __init__(self, completion=None, token_counter=None, cost_resolver=None):
+    def __init__(self, completion=None, token_counter=None, cost_resolver=None, responses=None):
         self._completion = completion
+        self._responses = responses
         self._token_counter = token_counter
         self._cost_resolver = cost_resolver
         self._owner = f"litellm:{id(self)}"
@@ -102,6 +105,9 @@ class LiteLLMRuntime:
         return [payload]
 
     def _serialize_with_decision(self, request: LLMRequest) -> tuple[dict, dict]:
+        profile = PROFILES.get(request.model.family_key) if request.model.family_key else None
+        if profile is not None and profile.api_surface == "responses":
+            return self._serialize_responses(request, profile)
         import httpx
         messages = [{"role": "system", "content": instruction_blocks(request)}] if request.instructions else []
         for message in request.messages:
@@ -172,6 +178,60 @@ class LiteLLMRuntime:
             payload["prompt_cache_key"] = request.cache.scope.key
         return payload, decision
 
+    def _serialize_responses(self, request: LLMRequest, profile) -> tuple[dict, dict]:
+        import httpx
+        if request.thinking_mode_override not in (None, "off"):
+            raise LLMError("invalid_thinking_override", "Only an explicit off thinking override is supported")
+        profile.validate(request.model)
+        previous_id = None
+        start = 0
+        for index, message in enumerate(request.messages):
+            state = message.provider_state
+            if state is None:
+                continue
+            if state.owner != self._owner or state.model != request.model.transport_model:
+                raise LLMError("invalid_continuation", "Provider state belongs to a different runtime/model")
+            if not isinstance(state.payload, dict) or not isinstance(state.payload.get("response_id"), str):
+                raise LLMError("invalid_continuation", "Invalid Responses continuation")
+            previous_id, start = state.payload["response_id"], index + 1
+        input_items = []
+        for message in request.messages[start:]:
+            if message.tool_results:
+                input_items.extend({"type": "function_call_output", "call_id": item.call_id,
+                                    "output": item.content} for item in message.tool_results)
+            elif message.tool_calls:
+                raise LLMError("invalid_continuation", "Tool calls require Responses provider state")
+            else:
+                input_items.append({"role": message.role, "content": message.text})
+        if previous_id and not any(item.get("type") == "function_call_output" for item in input_items):
+            raise LLMError("invalid_continuation", "Responses continuation requires tool output")
+        payload = dict(request.model.provider_options)
+        payload.update(model=request.model.transport_model,
+                       input=input_items, max_output_tokens=request.model.max_output_tokens,
+                       api_key=request.model.api_key, num_retries=2,
+                       timeout=httpx.Timeout(600.0, connect=5.0))
+        if request.instructions:
+            payload["instructions"] = "\n\n".join(str(section["text"]) for section in request.instructions)
+        if previous_id:
+            payload["previous_response_id"] = previous_id
+        if request.tools:
+            payload["tools"] = [{"type": "function", "name": tool.name,
+                                 "description": tool.description, "parameters": tool.parameters}
+                                for tool in request.tools]
+        if request.tool_choice:
+            payload["tool_choice"] = {"type": "function", "name": request.tool_choice}
+        if request.model.service_tier:
+            payload["service_tier"] = request.model.service_tier
+        decision = profile.apply(payload, request).metadata()
+        if request.cache.enabled:
+            payload["extra_body"] = {**dict(payload.get("extra_body") or {}),
+                                     "prompt_cache_options": {"mode": "implicit", "ttl": "30m"}}
+        else:
+            payload["extra_body"] = {**dict(payload.get("extra_body") or {}),
+                                     "prompt_cache_options": {"mode": "explicit", "ttl": "30m"}}
+        profile.apply_cache(payload, request)
+        return payload, decision
+
     def serialize(self, request: LLMRequest) -> dict:
         return self._serialize_with_decision(request)[0]
 
@@ -184,41 +244,82 @@ class LiteLLMRuntime:
                                input={"instructions": request.instructions,
                                       "messages": [m.public_dict() for m in request.messages]}) as span:
             try:
-                completion = self._completion
-                if completion is None:
-                    from litellm import acompletion
-                    completion = acompletion
                 payload, decision = self._serialize_with_decision(request)
+                profile = PROFILES.get(request.model.family_key) if request.model.family_key else None
+                if profile is not None and profile.verbosity_levels:
+                    decision["effective_verbosity"] = request.model.default_verbosity or "provider_default"
+                if profile is not None and profile.api_surface == "responses":
+                    completion = self._responses
+                    if completion is None:
+                        from litellm import aresponses
+                        completion = aresponses
+                else:
+                    completion = self._completion
+                    if completion is None:
+                        from litellm import acompletion
+                        completion = acompletion
                 raw = await completion(**payload)
                 data = _dict(raw)
-                profile = PROFILES.get(request.model.family_key) if request.model.family_key else None
                 usage = normalize_usage(data.get("usage"))
                 if profile is not None:
                     usage = profile.normalize_usage(_dict(data.get("usage")), usage)
-                choice = _dict(data["choices"][0])
-                message = _dict(choice["message"])
                 calls = []
-                for item in message.get("tool_calls") or []:
-                    call = _dict(item)
-                    function = _dict(call.get("function"))
-                    raw_arguments = function.get("arguments") or {}
-                    if isinstance(raw_arguments, dict):
-                        arguments = raw_arguments
-                    else:
-                        try:
-                            arguments = json.loads(raw_arguments)
-                        except (ValueError, TypeError):
-                            arguments = {}
-                    calls.append(ToolCall(call["id"], function["name"], arguments if isinstance(arguments, dict) else {}))
+                if profile is not None and profile.api_surface == "responses":
+                    if data.get("status") != "completed":
+                        raise LLMError("incomplete_response", "Responses request did not complete")
+                    texts = []
+                    for item in data.get("output") or []:
+                        item = _dict(item)
+                        if item.get("type") == "function_call":
+                            raw_arguments = item.get("arguments") or "{}"
+                            try:
+                                arguments = raw_arguments if isinstance(raw_arguments, dict) else json.loads(raw_arguments)
+                            except (ValueError, TypeError):
+                                arguments = {}
+                            calls.append(ToolCall(item["call_id"], item["name"],
+                                                  arguments if isinstance(arguments, dict) else {}))
+                        elif item.get("type") == "message":
+                            for content in item.get("content") or []:
+                                content = _dict(content)
+                                if content.get("type") == "output_text":
+                                    texts.append(content.get("text") or "")
+                    answer_text = "\n".join(texts) or data.get("output_text") or ""
+                    finish_reason = data.get("status")
+                    provider_created_at = data.get("created_at")
+                    response_id = data.get("id")
+                    state = (ProviderState(self._owner, request.model.transport_model,
+                                           {"response_id": response_id})
+                             if calls and isinstance(response_id, str) else None)
+                    if calls and state is None:
+                        raise LLMError("invalid_continuation", "Responses tool call has no response id")
+                else:
+                    choice = _dict(data["choices"][0])
+                    message = _dict(choice["message"])
+                    for item in message.get("tool_calls") or []:
+                        call = _dict(item)
+                        function = _dict(call.get("function"))
+                        raw_arguments = function.get("arguments") or {}
+                        if isinstance(raw_arguments, dict):
+                            arguments = raw_arguments
+                        else:
+                            try:
+                                arguments = json.loads(raw_arguments)
+                            except (ValueError, TypeError):
+                                arguments = {}
+                        calls.append(ToolCall(call["id"], function["name"], arguments if isinstance(arguments, dict) else {}))
+                    answer_text = message.get("content") or ""
+                    finish_reason = choice.get("finish_reason")
+                    provider_created_at = data.get("created")
+                    state = ProviderState(self._owner, request.model.transport_model, copy.deepcopy(message))
                 response = LLMResponse(
-                    text=message.get("content") or "", tool_calls=calls,
-                    usage=usage, finish_reason=choice.get("finish_reason"),
+                    text=answer_text, tool_calls=calls,
+                    usage=usage, finish_reason=finish_reason,
                     provider=request.model.provider, model=data.get("model") or request.model.physical_model,
-                    provider_state=ProviderState(self._owner, request.model.transport_model, copy.deepcopy(message)),
+                    provider_state=state,
                     actual_service_tier=data.get("service_tier"),
-                    provider_created_at=data.get("created"), thinking_decision={
+                    provider_created_at=provider_created_at, thinking_decision={
                         **decision, "request_started_at": request_started_at,
-                        "provider_created_at": data.get("created"),
+                        "provider_created_at": provider_created_at,
                         "actual_service_tier": data.get("service_tier"),
                     },
                 )

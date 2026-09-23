@@ -358,6 +358,7 @@ class AIModelConfigForm(FlaskForm):
     context_window = IntegerField("Ventana de contexto", validators=[DataRequired(), NumberRange(min=1)])
     max_output_tokens = IntegerField("Maximo de salida", validators=[DataRequired(), NumberRange(min=1)])
     default_reasoning_effort = SelectField("Nivel de thinking", choices=[('', 'Seleccionar nivel')], validators=[Optional()])
+    default_verbosity = SelectField("Verbosity", choices=[('', 'Default del proveedor')], validators=[Optional()])
     thinking_mode = SelectField("Thinking", choices=[('', 'Seleccionar'), ('off', 'Desactivado'), ('on', 'Activado')], validators=[Optional()])
     budget_tokens = IntegerField("Presupuesto de thinking (tokens)", validators=[Optional(), NumberRange(min=1024)])
     default_service_tier = SelectField("Service tier", choices=[('', 'Estándar'), ('flex', 'Flex')], validators=[Optional()])
