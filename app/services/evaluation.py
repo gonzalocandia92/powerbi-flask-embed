@@ -94,7 +94,8 @@ class SQLAlchemyEvaluationRepository:
             event = dict(raw)
             metadata = dict(event.pop("metadata_json", None) or {})
             metadata.update({"evaluation_run_id": case.run_id, "evaluation_case_id": case.id})
-            event["source_type"] = "evaluation"
+            # The engine labels the main event with its consumer and retains
+            # technical source types for retrieval/selector events.
             event["trigger_type"] = "evaluation"
             persisted_events.append(ai_billing.record_ai_usage_event(
                 report=report, metadata_json=metadata, **event

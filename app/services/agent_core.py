@@ -534,6 +534,7 @@ async def _fetch_schema_context_legacy(
                         output_tokens=0,
                         total_tokens=estimated_input_tokens,
                         metadata_json={
+                            "component": "schema_retrieval",
                             "input_type": "query",
                             "estimated_usage": True,
                             "error_type": "voyage_provider_error",
@@ -556,7 +557,7 @@ async def _fetch_schema_context_legacy(
                     input_tokens=int(total_tokens or 0),
                     output_tokens=0,
                     total_tokens=int(total_tokens or 0),
-                    metadata_json={"input_type": "query"},
+                    metadata_json={"component": "schema_retrieval", "input_type": "query"},
                 )
                 if embedding_observation is not None:
                     update_payload = {
@@ -728,6 +729,7 @@ async def _fetch_schema_context(
             output_tokens=0,
             total_tokens=input_tokens,
             metadata_json={
+                "component": "schema_retrieval",
                 "input_type": "query",
                 "estimated_usage": estimated,
                 **(
@@ -1369,6 +1371,7 @@ class AgentOrchestrator:
         report_id: Optional[int],
         empresa_id: Optional[int],
         user_message: str,
+        source: str,
         debug_enabled: bool,
         custom_instructions: Optional[List[Any]] = None,
         schema_retrieval_prompt: Optional[str] = None,
@@ -1383,6 +1386,7 @@ class AgentOrchestrator:
             "report_id": report_id,
             "empresa_id": empresa_id,
             "user_message": user_message,
+            "execution_source": source,
             "debug_enabled": debug_enabled,
             "custom_instructions": custom_instructions or [],
             "schema_retrieval_prompt": str(schema_retrieval_prompt or "").strip(),
@@ -1419,6 +1423,7 @@ class AgentOrchestrator:
         conversation_id: Optional[str] = None,
         report_id: Optional[int] = None,
         empresa_id: Optional[int] = None,
+        source: str = "chat",
         custom_instructions: Optional[List[Any]] = None,
         schema_retrieval_prompt: Optional[str] = None,
         schema_table_context_limit: Optional[int] = None,
@@ -1460,6 +1465,7 @@ class AgentOrchestrator:
             report_id=report_id,
             empresa_id=empresa_id,
             user_message=user_message,
+            source=source,
             debug_enabled=settings_debug_enabled,
             custom_instructions=custom_instructions,
             schema_retrieval_prompt=schema_retrieval_prompt,
@@ -1494,6 +1500,7 @@ class AgentOrchestrator:
                     output_tokens=0,
                     total_tokens=0,
                     metadata_json={
+                        "component": "skill_router",
                         **route_decision.to_metadata(),
                         "router_mode": router_settings.mode,
                     },
@@ -1649,7 +1656,7 @@ class AgentOrchestrator:
                 provider=self.model.provider,
                 model=self.model.physical_model,
                 event_type="generation",
-                source_type="chat",
+                source_type=source,
                 trigger_type="user_request",
                 operation_name=operation_name,
                 status="error",
@@ -1755,7 +1762,7 @@ class AgentOrchestrator:
                 provider=self.model.provider,
                 model=self.model.physical_model,
                 event_type="generation",
-                source_type="chat",
+                source_type=source,
                 trigger_type="user_request",
                 operation_name="chat-response",
                 status="success",

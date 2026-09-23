@@ -845,6 +845,7 @@ def _append_rerank_usage_event(
                 "output_tokens": 0,
                 "total_tokens": total_tokens,
                 "metadata_json": {
+                    "component": "skill_router",
                     "router_mode": router_mode,
                     "candidate_count": candidate_count,
                     "document_count": int(getattr(usage, "document_count", 0) or candidate_count),
@@ -1110,7 +1111,7 @@ async def resolve_skill_route(
                             "input_tokens": total_tokens,
                             "output_tokens": 0,
                             "total_tokens": total_tokens,
-                            "metadata_json": {"input_type": "query", "router_mode": router_settings.mode},
+                            "metadata_json": {"component": "skill_router", "input_type": "query", "router_mode": router_settings.mode},
                         }
                     )
                 if embedding_observation is not None:
@@ -1137,6 +1138,7 @@ async def resolve_skill_route(
                         "output_tokens": 0,
                         "total_tokens": estimated_tokens,
                         "metadata_json": {
+                            "component": "skill_router",
                             "input_type": "query",
                             "router_mode": router_settings.mode,
                             "estimated_usage": True,

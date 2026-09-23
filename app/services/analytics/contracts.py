@@ -74,6 +74,28 @@ class AnalyticsResult:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class PreparedAnalyticsExecution:
+    """Opaque, preflighted execution; consumers must not inspect its internals."""
+
+    request: AnalyticsRequest = field(repr=False)
+    context: Any = field(repr=False)
+    owner: object = field(repr=False, compare=False)
+
+
 class AnalyticsExecutor(Protocol):
+    async def prepare(self, request: AnalyticsRequest) -> PreparedAnalyticsExecution:
+        ...
+
+    async def execute_prepared(
+        self,
+        prepared: PreparedAnalyticsExecution,
+        *,
+        history: list[dict[str, Any]] | None = None,
+        execution_id: str | None = None,
+        trace_context: dict[str, Any] | None = None,
+    ) -> AnalyticsResult:
+        ...
+
     async def execute(self, request: AnalyticsRequest) -> AnalyticsResult:
         ...

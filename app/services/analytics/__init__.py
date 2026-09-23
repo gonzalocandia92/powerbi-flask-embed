@@ -9,6 +9,7 @@ from .contracts import (
     AnalyticsReportNotFoundError,
     AnalyticsRequest,
     AnalyticsResult,
+    PreparedAnalyticsExecution,
 )
 from .engine import KlaraAnalyticsEngine, build_analytics_engine
 
@@ -21,6 +22,7 @@ __all__ = [
     "AnalyticsReportNotFoundError",
     "AnalyticsRequest",
     "AnalyticsResult",
+    "PreparedAnalyticsExecution",
     "KlaraAnalyticsEngine",
     "build_analytics_engine",
 ]

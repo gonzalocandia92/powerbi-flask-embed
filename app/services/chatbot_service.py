@@ -23,6 +23,7 @@ from app.services import ai_billing, model_catalog
 from app.services.agent_core import DEFAULT_MODEL
 from app.services.analytics import (
     AnalyticsBillingLimitExceededError,
+    AnalyticsExecutor,
     AnalyticsModelError,
     AnalyticsReportNotFoundError,
     AnalyticsRequest,
@@ -247,6 +248,8 @@ def _record_result_usage_events(
             output_tokens=output_tokens,
             total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
             metadata_json={
+                "component": "main_agent",
+                "execution_source": "chat",
                 "estimated_usage": True,
                 "fallback_reason": "missing_ai_usage_events",
             },
@@ -464,7 +467,25 @@ async def procesar_interaccion_completa(
     report: Optional[Report] = None
     billing_context: Optional[ai_billing.BillingContext] = None
     result: Optional[Dict[str, Any]] = None
+    user_turn_persisted = False
     trace_version = os.getenv("RELEASE_VERSION") or os.getenv("GIT_SHA")
+
+    async def persist_execution_error(exc: Exception) -> None:
+        if not user_turn_persisted:
+            return
+        try:
+            await asyncio.to_thread(
+                _persist_error_sync,
+                session_id=session_id,
+                slug=slug,
+                question=pregunta,
+                error_message=str(exc),
+                billing_context=billing_context,
+                result=result,
+                requested_model_key=model_key,
+            )
+        except Exception:
+            logging.exception("[ChatbotService] Failed to log error to DB")
 
     with start_observation(
         name="public-chat-request",
@@ -473,7 +494,7 @@ async def procesar_interaccion_completa(
     ) as root_observation:
         try:
             report = await asyncio.to_thread(_resolve_report_sync, slug)
-            billing_context = ai_billing.resolve_report_billing_context(report)
+            billing_context = await asyncio.to_thread(ai_billing.resolve_report_billing_context, report)
             previous_model_key = await asyncio.to_thread(
                 model_catalog.session_model_key, conversation_id, report_id=report.id
             )
@@ -488,6 +509,13 @@ async def procesar_interaccion_completa(
                 )
             except model_catalog.ModelSelectionError as exc:
                 raise ChatbotModelNotAllowedError(str(exc)) from exc
+            analytics: AnalyticsExecutor = build_analytics_engine(runtime_config)
+            prepared = await analytics.prepare(AnalyticsRequest(
+                report_id=report.id,
+                question=pregunta,
+                source=source,
+                model_key=model_selection.model.model_key if model_selection else None,
+            ))
             session_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
                 billing_context=billing_context,
@@ -497,6 +525,7 @@ async def procesar_interaccion_completa(
                 question=pregunta,
                 requested_model_key=model_key,
             )
+            user_turn_persisted = True
 
             trace_metadata = {
                 "feature": "publicchat",
@@ -522,15 +551,12 @@ async def procesar_interaccion_completa(
                 tags=[source, "powerbi"],
                 version=trace_version,
             ):
-                analytics_result = await build_analytics_engine(runtime_config).execute(AnalyticsRequest(
-                    report_id=report.id,
-                    question=pregunta,
+                analytics_result = await analytics.execute_prepared(
+                    prepared,
                     history=history,
-                    source=source,
                     execution_id=str(session_id),
-                    model_key=model_selection.model.model_key if model_selection else None,
                     trace_context=trace_metadata,
-                ))
+                )
                 result = analytics_result.to_dict()
 
             latency_ms = int((time.monotonic() - start) * 1000)
@@ -571,27 +597,17 @@ async def procesar_interaccion_completa(
         except AnalyticsModelError as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": "model_not_allowed"})
+            await persist_execution_error(exc)
             raise ChatbotModelNotAllowedError(str(exc)) from exc
         except (ai_billing.BillingLimitExceeded, AnalyticsBillingLimitExceededError) as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": "billing_limit_exceeded"})
+            await persist_execution_error(exc)
             raise ChatbotLimitExceededError(str(exc)) from exc
         except Exception as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": observation_preview(str(exc), max_length=500)})
-            try:
-                await asyncio.to_thread(
-                    _persist_error_sync,
-                    session_id=session_id,
-                    slug=slug,
-                    question=pregunta,
-                    error_message=str(exc),
-                    billing_context=billing_context,
-                    result=result,
-                    requested_model_key=model_key,
-                )
-            except Exception:
-                logging.exception("[ChatbotService] Failed to log error to DB")
+            await persist_execution_error(exc)
             raise ChatbotServiceError(f"Error al procesar la consulta: {str(exc)}") from exc
 
 

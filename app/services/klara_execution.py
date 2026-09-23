@@ -249,6 +249,7 @@ class KlaraExecutionService:
             agent.metrics = metrics
             result = await agent.generate_response(
                 user_message=context.user_message, dataset_id=context.dataset_id, history=context.history,
+                source=context.source,
                 schema_text=context.schema_text, conversation_id=context.conversation_id,
                 report_id=context.report_id, empresa_id=context.empresa_id,
                 powerbi_credentials=context.powerbi_credentials, custom_instructions=context.custom_instructions,
@@ -262,6 +263,7 @@ class KlaraExecutionService:
             result["ai_usage_events"].extend(context.decision_usage_events)
             for event in result.get("ai_usage_events", []):
                 event["metadata_json"] = {**(event.get("metadata_json") or {}), "source": context.source,
+                    "execution_source": context.source,
                     "reportname": context.report_name, "execution_policy": asdict(policy), "latency_by_component_ms": dict(metrics)}
             if span is not None:
                 result["trace_id"] = getattr(span, "trace_id", None)
