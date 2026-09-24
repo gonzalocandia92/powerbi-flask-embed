@@ -62,4 +62,9 @@
       <i class="bi bi-clipboard-data me-1"></i>Evaluaciones
     </a>
   </li>
+  <li class="nav-item">
+    <a class="nav-link {% if current_ai_section == 'reporting' %}active{% endif %}" href="{{ url_for('ai_reporting.page') }}">
+      <i class="bi bi-file-earmark-text me-1"></i>Informes KLARA
+    </a>
+  </li>
 </ul>

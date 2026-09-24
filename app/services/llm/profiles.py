@@ -240,7 +240,8 @@ class GPT6Profile(ModelFamilyProfile):
     max_model_output_tokens = 128_000
 
     def reasoning_levels(self, physical_model: str) -> tuple[str, ...]:
-        return self.levels if physical_model == "gpt-6-astra" else ("none",) + self.levels
+        # Off is represented by thinking_mode="off"; "none" is wire-only.
+        return self.levels
 
     def validate(self, model) -> None:
         super().validate(model)

@@ -305,6 +305,43 @@ def build_execution_resolver(settings, *, report_id=None, empresa_id=None, model
     )
 
 
+class MainServiceTierResolver:
+    """Per-execution main-agent tier without changing auxiliary role assignments."""
+
+    def __init__(self, roles, main):
+        self._roles = roles
+        self._main = main
+
+    def resolve(self, role, *, report_id=None, empresa_id=None):
+        if role == "main_agent":
+            return self._main
+        return self._roles.resolve(role, report_id=report_id, empresa_id=empresa_id)
+
+    def __getattr__(self, name):
+        return getattr(self._roles, name)
+
+
+def with_main_service_tier(roles, tier: str, *, report_id=None, empresa_id=None):
+    """Validate a trusted tier override against the effective main model/profile."""
+    from dataclasses import replace
+
+    main = roles.resolve("main_agent", report_id=report_id, empresa_id=empresa_id)
+    profile = PROFILES.get(main.family_key)
+    if profile is None:
+        raise ModelSelectionError("Service tier override requires a known model profile")
+    if not main.api_key:
+        raise ModelSelectionError("The selected model has no configured credential")
+    normalized_tier = None if tier in {"standard", "default"} else tier
+    if normalized_tier == "flex" and not main.capabilities.supports_flex:
+        raise ModelSelectionError("The selected model does not support flex")
+    effective = replace(main, service_tier=normalized_tier)
+    try:
+        profile.validate(effective)
+    except ValueError as exc:
+        raise ModelSelectionError(str(exc)) from exc
+    return MainServiceTierResolver(roles, effective)
+
+
 def evaluation_model_resolver(settings, model_key: str, *, report_id=None, empresa_id=None, config=None):
     return build_execution_resolver(
         settings, report_id=report_id, empresa_id=empresa_id,

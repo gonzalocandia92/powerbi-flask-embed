@@ -184,6 +184,10 @@ class KlaraExecutionService:
                     raise ValueError("Invalid execution policy")
                 if policy.main_model_key != main.model_key:
                     raise ValueError("Automatic model routing is not enabled in V1")
+                if context.service_tier is not None:
+                    # Request-scoped tier wins over the configured/default policy.
+                    tier = None if context.service_tier in {"standard", "default"} else context.service_tier
+                    policy = replace(policy, service_tier=tier)
                 if policy_span is not None:
                     policy_span.update(output=asdict(policy))
             main = replace(main, reasoning_effort=policy.reasoning_effort, service_tier=policy.service_tier)

@@ -35,6 +35,7 @@ class AnalyticsRequest:
     source: str = "internal"
     execution_id: str | None = None
     model_key: str | None = None
+    service_tier: str | None = None
     cache_policy: CachePolicy | None = None
     trace_context: dict[str, Any] = field(default_factory=dict)
     # Advanced override for consumers that have explicitly resolved all roles.

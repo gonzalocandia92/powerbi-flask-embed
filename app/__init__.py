@@ -193,7 +193,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations
+    from app.routes import ai_config, ai_reporting, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -218,6 +218,10 @@ def create_app():
     app.register_blueprint(mcp_oauth_admin.bp)
     app.register_blueprint(model_catalog.bp)
     app.register_blueprint(evaluations.bp)
+    app.register_blueprint(ai_reporting.bp)
+
+    from app.services.reporting.cli import register_reporting_command
+    register_reporting_command(app)
 
     # Non-browser APIs authenticate independently and must not be subjected to
     # cookie-session CSRF validation.
@@ -231,7 +235,7 @@ def create_app():
     backoffice_blueprints = {
         'main', 'tenants', 'clients', 'workspaces', 'reports', 'usuarios_pbi',
         'analytics', 'empresas', 'futuras_empresas', 'api_docs', 'monitor',
-        'ai_config', 'model_catalog', 'evaluations', 'users', 'mcp_config', 'mcp_oauth_admin',
+        'ai_config', 'model_catalog', 'evaluations', 'ai_reporting', 'users', 'mcp_config', 'mcp_oauth_admin',
     }
 
     @app.before_request

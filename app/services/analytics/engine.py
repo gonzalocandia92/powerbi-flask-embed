@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 from dataclasses import replace
 from typing import Any
+import requests
+from sqlalchemy.exc import SQLAlchemyError
 
 from app import db
 from app.models import Report
@@ -12,6 +14,7 @@ from app.services.agent_core import build_runtime_settings
 from app.services.chat_credentials import resolve_powerbi_env_for_report
 from app.services.klara_execution import ExecutionContext, KlaraExecutionService
 from app.services.llm import LiteLLMRuntime
+from app.services.llm.contracts import ModelConfig
 from app.utils.powerbi import get_current_dataset_id
 
 from .contracts import (
@@ -52,6 +55,10 @@ class KlaraAnalyticsEngine:
             raise AnalyticsConfigurationError("history must be a list")
         if not isinstance(request.trace_context, dict):
             raise AnalyticsConfigurationError("trace_context must be a dictionary")
+        if request.service_tier is not None and (
+            not isinstance(request.service_tier, str) or not request.service_tier.strip()
+        ):
+            raise AnalyticsConfigurationError("service_tier must be a non-empty string")
 
     @staticmethod
     def _map_result(request: AnalyticsRequest, payload: dict[str, Any]) -> AnalyticsResult:
@@ -89,7 +96,10 @@ class KlaraAnalyticsEngine:
         if report is None:
             raise AnalyticsReportNotFoundError(f"Report not found: {request.report_id}")
 
-        dataset_id = get_current_dataset_id(report)
+        try:
+            dataset_id = get_current_dataset_id(report)
+        except (requests.RequestException, RuntimeError, KeyError) as exc:
+            raise AnalyticsConfigurationError("Power BI dataset could not be resolved") from exc
         try:
             credentials = resolve_powerbi_env_for_report(report)
         except RuntimeError as exc:
@@ -98,7 +108,10 @@ class KlaraAnalyticsEngine:
             settings = build_runtime_settings(self.config)
         except (TypeError, ValueError) as exc:
             raise AnalyticsConfigurationError(str(exc)) from exc
-        billing_context = ai_billing.resolve_report_billing_context(report)
+        try:
+            billing_context = ai_billing.resolve_report_billing_context(report)
+        except ai_billing.BillingConfigurationError as exc:
+            raise AnalyticsConfigurationError(str(exc)) from exc
         instructions = agent_prompts.resolve_agent_prompt_instructions(report)
 
         try:
@@ -111,6 +124,11 @@ class KlaraAnalyticsEngine:
                     model_key=request.model_key,
                     config=self.config,
                 )
+            if request.service_tier is not None:
+                model_roles = model_catalog.with_main_service_tier(
+                    model_roles, request.service_tier,
+                    report_id=report.id, empresa_id=billing_context.empresa_id,
+                )
         except model_catalog.ModelSelectionError as exc:
             raise AnalyticsModelError(str(exc)) from exc
 
@@ -119,6 +137,8 @@ class KlaraAnalyticsEngine:
         except ai_billing.BillingLimitExceeded as exc:
             raise AnalyticsBillingLimitExceededError(str(exc)) from exc
         except ai_billing.BillingConfigurationError as exc:
+            raise AnalyticsConfigurationError(str(exc)) from exc
+        except ValueError as exc:
             raise AnalyticsConfigurationError(str(exc)) from exc
 
         if request.model_key is not None:
@@ -130,6 +150,8 @@ class KlaraAnalyticsEngine:
                 raise AnalyticsModelError(str(exc)) from exc
             if main.model_key != request.model_key:
                 raise AnalyticsModelError("The requested model does not match the effective main model")
+            if isinstance(main, ModelConfig) and main.family_key and not main.api_key:
+                raise AnalyticsModelError("The requested model has no configured credential")
 
         context = ExecutionContext(
             user_message=request.question.strip(),
@@ -149,6 +171,7 @@ class KlaraAnalyticsEngine:
             requested_model_key=request.model_key,
             role_configuration=model_roles,
             cache_policy=request.cache_policy,
+            service_tier=request.service_tier,
             billing_context=billing_context,
             trace_context=dict(request.trace_context),
         )
@@ -164,7 +187,10 @@ class KlaraAnalyticsEngine:
 
     async def prepare(self, request: AnalyticsRequest) -> PreparedAnalyticsExecution:
         self._validate_request(request)
-        return await asyncio.to_thread(self._prepare_sync, request)
+        try:
+            return await asyncio.to_thread(self._prepare_sync, request)
+        except SQLAlchemyError as exc:
+            raise AnalyticsConfigurationError("Analytical context database is unavailable") from exc
 
     async def execute_prepared(
         self,

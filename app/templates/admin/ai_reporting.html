@@ -1,0 +1,173 @@
+{% extends "layout.html" %}
+{% block title %}Informes KLARA - Sudata PBI{% endblock %}
+{% block body %}
+<div class="container-fluid py-2" id="reporting-page">
+  {% set active_ai_section = 'reporting' %}
+  {% include "admin/ai_config/_navigation.html" %}
+  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
+    <div>
+      <h2 class="fw-bold mb-1">Informes KLARA</h2>
+      <p class="text-muted mb-0">Generá un informe manual a partir de preguntas analíticas independientes.</p>
+    </div>
+  </div>
+  {% if luna_warning %}<div class="alert alert-warning" role="alert">{{ luna_warning }} Elegí un modelo y tier disponibles para continuar.</div>{% endif %}
+  <div id="reporting-message" class="alert d-none" role="alert"></div>
+  <div class="row g-4">
+    <div class="col-xl-8">
+      <div class="card mb-4">
+        <div class="card-header"><h5 class="mb-0">Definición del informe</h5></div>
+        <div class="card-body row g-3">
+          <div class="col-md-6"><label class="form-label" for="reporting-name">Nombre</label><input class="form-control" id="reporting-name" maxlength="200" required></div>
+          <div class="col-md-6"><label class="form-label" for="reporting-report">Report</label><select class="form-select" id="reporting-report" required>{% for report in reports %}<option value="{{ report.id }}">{{ report.name }}</option>{% endfor %}</select></div>
+          <div class="col-md-7"><label class="form-label" for="reporting-model">Modelo de análisis</label><select class="form-select" id="reporting-model" required><option value="">Elegí un modelo</option>{% for model in models %}<option value="{{ model.model_key }}" {% if model.model_key == default_model_key %}selected{% endif %}>{{ model.display_name }} · {{ model.provider }} · {{ model.physical_model }}</option>{% endfor %}</select></div>
+          <div class="col-md-5"><label class="form-label" for="reporting-tier">Service tier</label><select class="form-select" id="reporting-tier" required></select></div>
+        </div>
+      </div>
+      <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between align-items-center gap-2"><h5 class="mb-0">Preguntas</h5><button class="btn btn-sm btn-outline-primary" id="reporting-add" type="button"><i class="bi bi-plus-lg me-1"></i>Agregar pregunta</button></div>
+        <div class="card-body"><div id="reporting-questions"></div><p class="text-muted small mb-0">Cada pregunta se ejecuta por separado, en el orden mostrado. Máximo {{ max_questions }} preguntas.</p></div>
+      </div>
+    </div>
+    <div class="col-xl-4">
+      <div class="card"><div class="card-header"><h5 class="mb-0">Generación</h5></div><div class="card-body">
+        <p class="mb-2"><span id="reporting-count">1</span> pregunta(s) · ejecución secuencial</p>
+        <div class="alert alert-warning small">La generación consume tokens reales. Mantené esta pestaña abierta hasta recibir el resultado; esta versión no guarda el informe.</div>
+        <button class="btn btn-primary w-100" id="reporting-generate" type="button" {% if not models or not reports %}disabled{% endif %}><span id="reporting-spinner" class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span>Generar informe</button>
+      </div></div>
+    </div>
+  </div>
+  <section id="reporting-result" class="mt-4 d-none" aria-live="polite">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><h3 class="mb-0" id="reporting-result-title"></h3><div class="d-flex gap-2"><button class="btn btn-outline-primary btn-sm" id="reporting-copy" type="button">Copiar Markdown</button><button class="btn btn-outline-primary btn-sm" id="reporting-download" type="button">Descargar .md</button></div></div>
+    <div id="reporting-sections"></div>
+    <details class="mt-3"><summary class="mb-2">Ver Markdown</summary><textarea class="form-control font-monospace" id="reporting-markdown" rows="12" readonly></textarea></details>
+  </section>
+</div>
+{% endblock %}
+{% block scripts %}{{ super() }}<script>
+(() => {
+  const models = {{ models|tojson }};
+  const defaultModelKey = {{ default_model_key|tojson }};
+  const maxQuestions = {{ max_questions }};
+  const endpoint = {{ url_for('ai_reporting.generate')|tojson }};
+  const csrf = document.querySelector('meta[name="csrf-token"]').content;
+  const byId = id => document.getElementById(id);
+  const questions = byId('reporting-questions');
+  const model = byId('reporting-model');
+  const tier = byId('reporting-tier');
+  const message = byId('reporting-message');
+  const result = byId('reporting-result');
+  let markdown = '';
+
+  function showMessage(text, kind='danger') {
+    message.className = `alert alert-${kind}`;
+    message.textContent = text;
+  }
+  function clearMessage() { message.className = 'alert d-none'; message.textContent = ''; }
+  function updateRows() {
+    [...questions.children].forEach((row, index) => row.querySelector('.reporting-index').textContent = index + 1);
+    byId('reporting-count').textContent = questions.children.length;
+    byId('reporting-add').disabled = questions.children.length >= maxQuestions;
+  }
+  function addQuestion(title='', text='') {
+    if (questions.children.length >= maxQuestions) return;
+    const row = document.createElement('div');
+    row.className = 'row g-2 align-items-start mb-3 reporting-row';
+    row.innerHTML = '<div class="col-auto pt-2 text-muted reporting-index"></div><div class="col-md-4"><input class="form-control reporting-title" maxlength="100" placeholder="Título (opcional)"></div><div class="col"><textarea class="form-control reporting-question" maxlength="1000" rows="2" placeholder="Pregunta analítica" required></textarea></div><div class="col-auto"><button class="btn btn-outline-danger reporting-remove" type="button" aria-label="Eliminar pregunta"><i class="bi bi-trash"></i></button></div>';
+    row.querySelector('.reporting-title').value = title;
+    row.querySelector('.reporting-question').value = text;
+    questions.append(row);
+    updateRows();
+  }
+  function updateTier() {
+    const selected = models.find(item => item.model_key === model.value);
+    const previous = tier.value;
+    tier.replaceChildren();
+    for (const value of selected?.tiers || []) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = {configured:'Configuración del catálogo', standard:'Standard', flex:'Flex'}[value] || value;
+      tier.append(option);
+    }
+    if (selected?.model_key === defaultModelKey && selected.tiers.includes('flex')) tier.value = 'flex';
+    else if (selected?.tiers.includes(previous)) tier.value = previous;
+    else if (selected?.tiers.includes('configured')) tier.value = 'configured';
+  }
+  function renderResult(data) {
+    markdown = data.markdown;
+    byId('reporting-result-title').textContent = data.name;
+    byId('reporting-markdown').value = markdown;
+    const container = byId('reporting-sections');
+    container.replaceChildren();
+    for (const section of data.sections) {
+      const card = document.createElement('article');
+      card.className = 'card mb-3';
+      const body = document.createElement('div');
+      body.className = 'card-body';
+      const heading = document.createElement('h4');
+      heading.className = 'h5 mb-3';
+      heading.textContent = section.title;
+      const answer = document.createElement('div');
+      answer.className = section.had_error ? 'text-warning' : '';
+      answer.style.whiteSpace = 'pre-wrap';
+      answer.textContent = section.had_error ? 'No se pudo generar esta sección.' : section.answer;
+      body.append(heading, answer);
+      card.append(body);
+      container.append(card);
+    }
+    result.classList.remove('d-none');
+    result.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+  byId('reporting-add').addEventListener('click', () => addQuestion());
+  questions.addEventListener('click', event => {
+    if (event.target.closest('.reporting-remove')) {
+      event.target.closest('.reporting-row').remove();
+      updateRows();
+    }
+  });
+  model.addEventListener('change', updateTier);
+  byId('reporting-report').addEventListener('change', event => {
+    const name = byId('reporting-name');
+    if (!name.dataset.edited) name.value = `Informe semanal — ${event.target.selectedOptions[0]?.textContent || ''}`;
+  });
+  byId('reporting-name').addEventListener('input', event => { event.target.dataset.edited = 'true'; });
+  byId('reporting-generate').addEventListener('click', async () => {
+    clearMessage();
+    result.classList.add('d-none');
+    const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim()}));
+    if (!rows.length || rows.some(row => !row.question)) return showMessage('Ingresá al menos una pregunta y completá todas las filas.');
+    if (!model.value || !tier.value) return showMessage('Elegí un modelo y tier disponibles.');
+    const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows};
+    if (!payload.name) return showMessage('Ingresá un nombre para el informe.');
+    const button = byId('reporting-generate');
+    button.disabled = true;
+    byId('reporting-spinner').classList.remove('d-none');
+    try {
+      const response = await fetch(endpoint, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify(payload)});
+      const data = await response.json();
+      if (!response.ok) return showMessage(data.error || 'No se pudo generar el informe.');
+      renderResult(data);
+      if (data.sections.some(section => section.had_error)) showMessage('El informe se generó con algunas secciones fallidas.', 'warning');
+    } catch (_) {
+      showMessage('Se perdió la conexión. La generación pudo continuar y consumir tokens, pero el informe no se guarda en esta versión.');
+    } finally {
+      button.disabled = false;
+      byId('reporting-spinner').classList.add('d-none');
+    }
+  });
+  byId('reporting-copy').addEventListener('click', async () => {
+    try { await navigator.clipboard.writeText(markdown); showMessage('Markdown copiado.', 'success'); }
+    catch (_) { showMessage('No se pudo copiar. Podés seleccionar el texto en “Ver Markdown”.'); }
+  });
+  byId('reporting-download').addEventListener('click', () => {
+    const url = URL.createObjectURL(new Blob([markdown], {type:'text/markdown;charset=utf-8'}));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'informe-klara.md';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
+  if (byId('reporting-report').selectedOptions.length) byId('reporting-name').value = `Informe semanal — ${byId('reporting-report').selectedOptions[0].textContent}`;
+  addQuestion();
+  updateTier();
+})();
+</script>{% endblock %}
