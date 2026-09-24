@@ -389,7 +389,7 @@
             --sudata-text: #111827;
             --sudata-muted: #6b7280;
             --klara-sidebar-w: 420px;
-            --klara-sidebar-expanded-w: 760px;
+            --klara-sidebar-effective-w: var(--klara-sidebar-w);
         }
 
         .klara-sidebar-widget, .klara-sidebar-widget * { box-sizing: border-box; }
@@ -425,14 +425,33 @@
         /* Panel lateral — usa transform para garantizar que siempre se oculta completamente */
         .klara-sidebar-panel {
             position: fixed; top: 0; right: 0; z-index: 999999;
-            width: var(--klara-sidebar-w); height: 100vh;
+            width: var(--klara-sidebar-effective-w); height: 100vh;
             background: white; box-shadow: -18px 0 44px rgba(17,24,39,.18);
             display: flex; flex-direction: column;
             transform: translateX(100%); /* oculto fuera de la pantalla */
             transition: transform 0.3s ease, width 0.3s ease;
         }
         .klara-sidebar-panel.open { transform: translateX(0); }
-        .klara-sidebar-panel.expanded { width: min(var(--klara-sidebar-expanded-w), 100vw); }
+        .klara-sidebar-resize-handle {
+            position: absolute; top: 0; bottom: 0; left: 0; z-index: 1;
+            width: 12px; cursor: ew-resize; touch-action: none;
+        }
+        .klara-sidebar-resize-handle::after {
+            content: ""; position: absolute; top: 50%; left: 3px;
+            width: 4px; height: 48px; transform: translateY(-50%);
+            border-radius: 4px; background: #94a3b8; opacity: .65;
+        }
+        .klara-sidebar-resize-handle:hover::after,
+        .klara-sidebar-resize-handle:focus-visible::after { background: var(--sudata-green); opacity: 1; }
+        .klara-sidebar-resize-handle:focus-visible { outline: 2px solid var(--sudata-green); outline-offset: -2px; }
+        body.klara-sidebar-resizing { cursor: ew-resize; user-select: none; }
+        body.klara-sidebar-resizing .klara-sidebar-panel,
+        body.klara-sidebar-resizing:not(.fullscreen-mode),
+        body.klara-sidebar-resizing #panViewport,
+        body.klara-sidebar-resizing .main-container,
+        body.klara-sidebar-resizing .report-container,
+        body.klara-sidebar-resizing .header-section,
+        body.klara-sidebar-resizing .footer { transition: none; }
 
         /* Header */
         .klara-sidebar-header {
@@ -450,6 +469,7 @@
             background: rgba(255,255,255,.18); color: white; cursor: pointer; font-size: 18px;
         }
         .klara-controls button:hover { background: rgba(255,255,255,.28); }
+        .klara-controls button:disabled { opacity: .45; cursor: default; }
 
         /* Contexto */
         .klara-context {
@@ -592,10 +612,7 @@
             transition: padding-right 0.3s ease;
         }
         body.klara-sidebar-open:not(.fullscreen-mode) {
-            padding-right: var(--klara-sidebar-w);
-        }
-        body.klara-sidebar-expanded:not(.fullscreen-mode) {
-            padding-right: min(var(--klara-sidebar-expanded-w), 100vw);
+            padding-right: var(--klara-sidebar-effective-w);
         }
 
         /* Modo fullscreen: se acorta el panViewport por la derecha */
@@ -603,17 +620,11 @@
             transition: right 0.3s ease, bottom 0.3s ease;
         }
         body.klara-sidebar-open.fullscreen-mode #panViewport {
-            right: var(--klara-sidebar-w) !important;
-        }
-        body.klara-sidebar-expanded.fullscreen-mode #panViewport {
-            right: min(var(--klara-sidebar-expanded-w), 100vw) !important;
+            right: var(--klara-sidebar-effective-w) !important;
         }
         /* También ajustar hSliderBar en fullscreen con sidebar */
         body.klara-sidebar-open.fullscreen-mode #hSliderBar {
-            right: calc(22px + var(--klara-sidebar-w));
-        }
-        body.klara-sidebar-expanded.fullscreen-mode #hSliderBar {
-            right: calc(22px + min(var(--klara-sidebar-expanded-w), 100vw));
+            right: calc(22px + var(--klara-sidebar-effective-w));
         }
 
         /* Animaciones */
@@ -624,8 +635,9 @@
         }
 
         @media (max-width: 768px) {
+            :root { --klara-sidebar-effective-w: 100vw; }
             .klara-minimal-button { right: 14px; bottom: 14px; }
-            .klara-sidebar-panel, .klara-sidebar-panel.expanded { width: 100%; }
+            .klara-sidebar-resize-handle, #klara-sidebar-expand { display: none; }
         }
     </style>
 </head>
@@ -1041,6 +1053,9 @@
             <span class="klara-minimal-letter">K</span>
         </button>
         <aside id="klara-sidebar-panel" class="klara-sidebar-panel">
+            <div id="klara-sidebar-resize-handle" class="klara-sidebar-resize-handle"
+                 role="separator" aria-label="Ajustar ancho del chat" aria-orientation="vertical"
+                 aria-valuemin="420" aria-valuenow="420" tabindex="0"></div>
             <header class="klara-sidebar-header">
                 <div class="klara-title">
                     <div class="klara-avatar big">K</div>
@@ -1095,6 +1110,7 @@
             var button   = document.getElementById("klara-sidebar-button");
             var closeBtn = document.getElementById("klara-sidebar-close");
             var expandBtn = document.getElementById("klara-sidebar-expand");
+            var resizeHandle = document.getElementById("klara-sidebar-resize-handle");
             var form     = document.getElementById("klara-sidebar-form");
             var input    = document.getElementById("klara-sidebar-text");
             var sendBtn  = document.getElementById("klara-sidebar-send");
@@ -1103,7 +1119,10 @@
             var modelRow = document.getElementById("klara-model-row");
             var modelSelect = document.getElementById("klara-model-select");
             var suggestions = document.querySelectorAll(".klara-sidebar-suggestion");
-            var isExpanded = false, isTyping = false, klaraSessionId = null;
+            var sidebarWidth = 420, dragPointerId = null, dragFrame = null, reportFrame = null;
+            var reportResizeTimer = null, buttonShowTimer = null;
+            var pendingDragWidth = 420;
+            var isTyping = false, klaraSessionId = null;
             var lastMsgDate = null, thinkingEl = null, thinkingTimers = [];
 
             async function loadModels() {
@@ -1163,12 +1182,53 @@
             }
 
             function resizeReport() {
-                setTimeout(function() {
+                clearTimeout(reportResizeTimer);
+                reportResizeTimer = setTimeout(function() {
+                    reportResizeTimer = null;
                     if (window._klaraReportResize) window._klaraReportResize();
                 }, 320); // después de la transición CSS de 300ms
             }
 
+            function resizeReportLive() {
+                if (reportFrame !== null) return;
+                reportFrame = requestAnimationFrame(function() {
+                    reportFrame = null;
+                    if (window._klaraReportResize) window._klaraReportResize();
+                });
+            }
+
+            function maxSidebarWidth() {
+                return Math.max(420, Math.round(window.innerWidth / 2));
+            }
+
+            function setSidebarWidth(width) {
+                sidebarWidth = Math.max(420, Math.min(Math.round(width), maxSidebarWidth()));
+                document.documentElement.style.setProperty("--klara-sidebar-w", sidebarWidth + "px");
+                var atMax = sidebarWidth >= maxSidebarWidth();
+                expandBtn.disabled = maxSidebarWidth() === 420;
+                expandBtn.textContent = atMax && !expandBtn.disabled ? "↘" : "⛶";
+                expandBtn.title = atMax && !expandBtn.disabled ? "Volver al ancho mínimo" : "Expandir chat";
+                expandBtn.setAttribute("aria-label", expandBtn.title);
+                resizeHandle.setAttribute("aria-valuemax", maxSidebarWidth());
+                resizeHandle.setAttribute("aria-valuenow", sidebarWidth);
+                resizeHandle.setAttribute("aria-valuetext", sidebarWidth + " píxeles");
+            }
+
+            function stopDragging(e) {
+                if (e && e.pointerId !== dragPointerId) return;
+                if (dragPointerId === null) return;
+                var pointerId = dragPointerId;
+                dragPointerId = null;
+                if (dragFrame !== null) cancelAnimationFrame(dragFrame);
+                dragFrame = null;
+                document.body.classList.remove("klara-sidebar-resizing");
+                if (resizeHandle.hasPointerCapture(pointerId)) resizeHandle.releasePointerCapture(pointerId);
+            }
+
             function openSidebar() {
+                clearTimeout(buttonShowTimer);
+                buttonShowTimer = null;
+                setSidebarWidth(420);
                 panel.classList.add("open");
                 document.body.classList.add("klara-sidebar-open");
                 button.classList.add("hidden");
@@ -1177,24 +1237,68 @@
             }
 
             function closeSidebar() {
-                /* Siempre quita expanded + open: el panel desaparece completamente */
-                panel.classList.remove("open", "expanded");
-                document.body.classList.remove("klara-sidebar-open", "klara-sidebar-expanded");
-                isExpanded = false;
-                expandBtn.textContent = "⛶";
-                expandBtn.title = "Expandir chat";
-                setTimeout(function () { button.classList.remove("hidden"); }, 300);
+                stopDragging();
+                panel.classList.remove("open");
+                document.body.classList.remove("klara-sidebar-open");
+                setSidebarWidth(420);
+                buttonShowTimer = setTimeout(function () {
+                    buttonShowTimer = null;
+                    button.classList.remove("hidden");
+                }, 300);
                 resizeReport();
             }
 
             function toggleExpand() {
-                isExpanded = !isExpanded;
-                panel.classList.toggle("expanded", isExpanded);
-                document.body.classList.toggle("klara-sidebar-expanded", isExpanded);
-                expandBtn.textContent = isExpanded ? "↘" : "⛶";
-                expandBtn.title = isExpanded ? "Volver a modo parcial" : "Expandir chat";
+                setSidebarWidth(sidebarWidth >= maxSidebarWidth() ? 420 : maxSidebarWidth());
                 resizeReport();
             }
+
+            resizeHandle.addEventListener("pointerdown", function(e) {
+                if (window.innerWidth <= 768 || !panel.classList.contains("open") ||
+                    dragPointerId !== null || e.button !== 0 || !e.isPrimary) return;
+                e.preventDefault();
+                dragPointerId = e.pointerId;
+                pendingDragWidth = sidebarWidth;
+                document.body.classList.add("klara-sidebar-resizing");
+                resizeHandle.setPointerCapture(e.pointerId);
+            });
+            resizeHandle.addEventListener("pointermove", function(e) {
+                if (e.pointerId !== dragPointerId) return;
+                pendingDragWidth = window.innerWidth - e.clientX;
+                if (dragFrame !== null) return;
+                dragFrame = requestAnimationFrame(function() {
+                    dragFrame = null;
+                    setSidebarWidth(pendingDragWidth);
+                    resizeReportLive();
+                });
+            });
+            resizeHandle.addEventListener("pointerup", function(e) {
+                if (e.pointerId !== dragPointerId) return;
+                setSidebarWidth(window.innerWidth - e.clientX);
+                stopDragging(e);
+                resizeReportLive();
+            });
+            resizeHandle.addEventListener("pointercancel", stopDragging);
+            resizeHandle.addEventListener("lostpointercapture", stopDragging);
+            resizeHandle.addEventListener("keydown", function(e) {
+                if (window.innerWidth <= 768) return;
+                var width = sidebarWidth;
+                if (e.key === "ArrowLeft") width += e.shiftKey ? 50 : 20;
+                else if (e.key === "ArrowRight") width -= e.shiftKey ? 50 : 20;
+                else if (e.key === "Home") width = 420;
+                else if (e.key === "End") width = maxSidebarWidth();
+                else return;
+                e.preventDefault();
+                setSidebarWidth(width);
+                resizeReportLive();
+            });
+            window.addEventListener("resize", function() {
+                if (window.innerWidth <= 768) stopDragging();
+                else setSidebarWidth(sidebarWidth);
+                resizeReportLive();
+                resizeReport();
+            });
+            setSidebarWidth(420);
 
             function sanitize(text) {
                 var d = document.createElement("div");
