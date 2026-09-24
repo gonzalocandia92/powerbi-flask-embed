@@ -81,6 +81,7 @@ class KlaraAnalyticsEngine:
             had_error=bool(payload.get("had_error")),
             error_message=payload.get("error_message"),
             failure_reason=payload.get("failure_reason"),
+            recovered_errors=list(payload.get("recovered_errors") or []),
             route_metadata_json=payload.get("route_metadata_json"),
             route_validation_warnings=list(payload.get("route_validation_warnings") or []),
             latency_by_component_ms=dict(payload.get("latency_by_component_ms") or {}),

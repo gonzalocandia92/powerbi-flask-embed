@@ -130,7 +130,10 @@ class SQLAlchemyEvaluationRepository:
         case.failure_reason = result.get("failure_reason")
         case.error_message = result.get("error_message")
         case.trace_id = result.get("trace_id")
-        case.metrics_json = result.get("latency_by_component_ms") or {}
+        metrics = dict(result.get("latency_by_component_ms") or {})
+        if result.get("recovered_errors"):
+            metrics["recovered_error_count"] = len(result["recovered_errors"])
+        case.metrics_json = metrics
         case.completed_at = _utcnow()
         run = db.session.get(ModelEvaluationRun, case.run_id)
         if run is not None:

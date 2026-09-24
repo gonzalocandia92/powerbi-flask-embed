@@ -43,6 +43,8 @@ class ReportSection:
     answer: str
     had_error: bool = False
     error_message: str | None = None
+    failure_reason: str | None = None
+    recovered_errors: list[dict[str, Any]] = field(default_factory=list)
     dax_query: str | None = None
     tools_called: list[dict[str, Any]] = field(default_factory=list)
     model_key: str | None = None

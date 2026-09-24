@@ -23,6 +23,21 @@ from app.utils.decorators import admin_required
 
 bp = Blueprint("ai_reporting", __name__, url_prefix="/admin/ai-reporting")
 MAX_QUESTIONS = 20
+PUBLIC_FAILURE_REASONS = frozenset({
+    "dax_generation_failed", "dax_query_empty", "dax_execution_exception",
+    "tool_round_limit", "unsupported_tool", "semantic_model_unavailable",
+    "agent_execution_exception",
+})
+
+
+def _public_failure_reason(reason: str | None) -> str | None:
+    if reason is None:
+        return None
+    if reason in PUBLIC_FAILURE_REASONS:
+        return reason
+    if reason.endswith("_prompt_too_long"):
+        return "provider_prompt_too_long"
+    return "execution_failed"
 
 
 def _model_tiers(record: AIModelConfig, config: dict) -> list[str]:
@@ -150,7 +165,7 @@ def generate():
         return jsonify({"error": str(exc)}), 400
 
     async def record_usage(section):
-        record_section_usage(definition.report_id, section)
+        await asyncio.to_thread(record_section_usage, definition.report_id, section)
 
     try:
         draft = asyncio.run(ReportGenerator(
@@ -174,5 +189,8 @@ def generate():
             "key": section.key, "title": section.title,
             "answer": "" if section.had_error else section.answer,
             "had_error": section.had_error,
+            "failure_reason": (_public_failure_reason(section.failure_reason) or "execution_failed")
+                              if section.had_error else None,
+            "recovered_error_count": len(section.recovered_errors),
         } for section in draft.sections],
     })

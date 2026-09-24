@@ -61,6 +61,7 @@ class AnalyticsResult:
     had_error: bool = False
     error_message: str | None = None
     failure_reason: str | None = None
+    recovered_errors: list[dict[str, Any]] = field(default_factory=list)
     route_metadata_json: dict[str, Any] | None = None
     route_validation_warnings: list[str] = field(default_factory=list)
     latency_by_component_ms: dict[str, Any] = field(default_factory=dict)

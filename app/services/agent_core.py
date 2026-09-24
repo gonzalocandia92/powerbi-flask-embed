@@ -1587,11 +1587,13 @@ class AgentOrchestrator:
         tool_rounds = 0
         tools_called: List[Dict[str, Any]] = []
         dax_query_used: Optional[str] = None
+        last_dax_attempt: Optional[str] = None
         dax_error_attempts = 0
         actual_model_used = self.model.physical_model
         had_error = False
         error_message: Optional[str] = None
         failure_reason: Optional[str] = None
+        recovered_errors: List[Dict[str, Any]] = []
         usage_totals = cast(Dict[str, int], context["usage_totals"])
         ai_usage_events = cast(List[Dict[str, Any]], context["ai_usage_events"])
         messages = cast(Any, turn_history)
@@ -1604,6 +1606,9 @@ class AgentOrchestrator:
                 error_message = message
             if failure_reason is None:
                 failure_reason = reason
+
+        def record_recoverable_error(reason: str, message: str) -> None:
+            recovered_errors.append({"reason": reason, "message": message})
 
         def build_turn_result(answer: str) -> Dict[str, Any]:
             return {
@@ -1623,13 +1628,16 @@ class AgentOrchestrator:
                 "latency_by_component_ms": dict(self.metrics),
                 "mcp_used": bool(tools_called),
                 "tools_called": tools_called,
-                "dax_query": dax_query_used,
+                # Prefer the last successful execution; retain the last attempted
+                # query only when no DAX execution succeeded in this turn.
+                "dax_query": dax_query_used or last_dax_attempt,
                 "ai_usage_events": ai_usage_events,
                 "route_metadata_json": route_decision.to_metadata() if route_decision is not None else None,
                 "route_validation_warnings": list(context.get("route_validation_warnings") or []),
                 "had_error": had_error,
                 "error_message": error_message,
                 "failure_reason": failure_reason,
+                "recovered_errors": list(recovered_errors),
                 "failure_scope": "main_model" if had_error else None,
                 "recoverable": False if had_error else None,
             }
@@ -1862,7 +1870,10 @@ class AgentOrchestrator:
                     dax_query = tool_input.get("dax_query")
                     if not dax_query or not str(dax_query).strip():
                         dax_error_attempts += 1
-                        mark_functional_failure("dax_query_empty", "DAX query was empty")
+                        if dax_error_attempts >= DAX_ERROR_ATTEMPT_LIMIT:
+                            mark_functional_failure("dax_query_empty", "DAX query was empty")
+                        else:
+                            record_recoverable_error("dax_query_empty", "DAX query was empty")
                         tool_results.append(
                             ToolResult(tool_call.id, "Error interno: El dax_query llego vacio. Probablemente te quedaste sin tokens o la sintaxis JSON fallo. Por favor, se mas conciso.")
                         )
@@ -1875,11 +1886,11 @@ class AgentOrchestrator:
                         mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
                         return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
-                    if dax_query_used is None:
-                        dax_query_used = str(dax_query)
+                    last_dax_attempt = str(dax_query)
 
                     sql_syntax_match = detect_sql_syntax_in_dax(str(dax_query))
                     if sql_syntax_match:
+                        record_recoverable_error("dax_sql_syntax_blocked", "SQL syntax was blocked in a DAX query")
                         _debug_print(
                             "tool:execute_dax_query:sql_syntax_blocked",
                             {
@@ -1906,6 +1917,7 @@ class AgentOrchestrator:
                         },
                         enabled=settings_debug_enabled,
                     )
+                    dax_failure_reason = None
                     try:
                         tool_output = await self.tool_registry.execute_tool(
                             tool_name,
@@ -1913,14 +1925,18 @@ class AgentOrchestrator:
                             context,
                         )
                     except Exception as exc:
-                        dax_error_attempts += 1
-                        mark_functional_failure("dax_execution_exception", str(exc))
+                        dax_failure_reason = "dax_execution_exception"
                         tool_output = f"Error tecnico ejecutando DAX: {exc}"
 
-                    if _tool_output_is_error(tool_output):
+                    if dax_failure_reason or _tool_output_is_error(tool_output):
                         dax_error_attempts += 1
-                        if failure_reason is None:
-                            mark_functional_failure("dax_generation_failed", "DAX query execution failed")
+                        reason = dax_failure_reason or "dax_generation_failed"
+                        if dax_error_attempts >= DAX_ERROR_ATTEMPT_LIMIT:
+                            mark_functional_failure(reason, "DAX query execution failed")
+                        else:
+                            record_recoverable_error(reason, "DAX query execution failed")
+                    else:
+                        dax_query_used = str(dax_query)
 
                     _debug_print(
                         "tool:execute_dax_query:response",

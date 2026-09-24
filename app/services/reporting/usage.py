@@ -15,7 +15,6 @@ def record_section_usage(report_id: int, section: ReportSection) -> None:
     try:
         for raw in section.ai_usage_events:
             event = dict(raw)
-            event["source_type"] = "report"
             metadata = dict(event.pop("metadata_json", None) or {})
             metadata.update({
                 "execution_source": "report",

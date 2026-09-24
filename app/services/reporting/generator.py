@@ -44,6 +44,7 @@ class ReportGenerator:
                 section = ReportSection(
                     key=question.key, title=question.title, question=question.question,
                     answer="", had_error=True, error_message=str(exc),
+                    failure_reason="execution_failed",
                 )
             else:
                 actual_tier = next((metadata.get("actual_service_tier")
@@ -53,7 +54,8 @@ class ReportGenerator:
                 section = ReportSection(
                     key=question.key, title=question.title, question=question.question,
                     answer=result.answer, had_error=result.had_error,
-                    error_message=result.error_message, dax_query=result.dax_query,
+                    error_message=result.error_message, failure_reason=result.failure_reason,
+                    recovered_errors=list(result.recovered_errors), dax_query=result.dax_query,
                     tools_called=list(result.tools_called), model_key=result.model_key,
                     model=result.model, provider=result.provider,
                     service_tier=result.service_tier,

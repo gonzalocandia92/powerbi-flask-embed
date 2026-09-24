@@ -106,11 +106,18 @@
       const heading = document.createElement('h4');
       heading.className = 'h5 mb-3';
       heading.textContent = section.title;
+      const status = document.createElement('p');
+      status.className = `small mb-2 ${section.had_error ? 'text-danger' : section.recovered_error_count ? 'text-warning' : 'text-success'}`;
+      status.textContent = section.had_error
+        ? `No se completó · ${section.failure_reason || 'execution_failed'}`
+        : section.recovered_error_count
+          ? `Generado correctamente · ${section.recovered_error_count} error(es) intermedio(s) recuperado(s)`
+          : 'Generado correctamente';
       const answer = document.createElement('div');
       answer.className = section.had_error ? 'text-warning' : '';
       answer.style.whiteSpace = 'pre-wrap';
       answer.textContent = section.had_error ? 'No se pudo generar esta sección.' : section.answer;
-      body.append(heading, answer);
+      body.append(heading, status, answer);
       card.append(body);
       container.append(card);
     }
