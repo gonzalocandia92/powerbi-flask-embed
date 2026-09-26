@@ -462,6 +462,7 @@ class AnalyticsSkillForm(FlaskForm):
     preferred_tables = TextAreaField("Tablas preferidas", validators=[Optional()])
     allowed_dimensions = TextAreaField("Dimensiones permitidas", validators=[Optional()])
     constraints = TextAreaField("Restricciones", validators=[Optional()])
+    semantic_notes = TextAreaField("Notas semanticas", validators=[Optional()])
     required_schema_items = FieldList(
         FormField(RequiredSchemaItemForm),
         min_entries=1,

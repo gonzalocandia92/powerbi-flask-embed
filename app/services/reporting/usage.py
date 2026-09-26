@@ -21,6 +21,8 @@ def record_section_usage(report_id: int, section: ReportSection) -> None:
                 "report_stage": "analysis",
                 "report_section_key": section.key,
             })
+            if section.report_run_id:
+                metadata["report_run_id"] = section.report_run_id
             ai_billing.record_ai_usage_event(report=report, metadata_json=metadata, **event)
         db.session.commit()
     except Exception:

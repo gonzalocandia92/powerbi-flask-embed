@@ -1,6 +1,15 @@
 {% extends "layout.html" %}
 {% block title %}Informes KLARA - Sudata PBI{% endblock %}
 {% block body %}
+<style>
+  .klara-md > :last-child { margin-bottom: 0; }
+  .klara-md h1, .klara-md h2, .klara-md h3, .klara-md h4, .klara-md h5, .klara-md h6 { font-size: 1.05em; font-weight: 700; margin: .75rem 0 .4rem; }
+  .klara-md ul, .klara-md ol { padding-left: 1.4rem; }
+  .klara-md pre { background: #e9ecef; border-radius: .4rem; padding: .6rem; overflow-x: auto; }
+  .klara-md code { background: #e9ecef; border-radius: .25rem; padding: .05rem .3rem; font-size: .875em; }
+  .klara-md pre code { background: none; padding: 0; }
+  .klara-md blockquote { border-left: 3px solid #adb5bd; margin: .5rem 0; padding-left: .75rem; color: #555; }
+</style>
 <div class="container-fluid py-2" id="reporting-page">
   {% set active_ai_section = 'reporting' %}
   {% include "admin/ai_config/_navigation.html" %}
@@ -24,8 +33,8 @@
         </div>
       </div>
       <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center gap-2"><h5 class="mb-0">Preguntas</h5><button class="btn btn-sm btn-outline-primary" id="reporting-add" type="button"><i class="bi bi-plus-lg me-1"></i>Agregar pregunta</button></div>
-        <div class="card-body"><div id="reporting-questions"></div><p class="text-muted small mb-0">Cada pregunta se ejecuta por separado, en el orden mostrado. Máximo {{ max_questions }} preguntas.</p></div>
+        <div class="card-header d-flex justify-content-between align-items-center gap-2"><h5 class="mb-0">Preguntas</h5><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ai_reporting.questions_template') }}">Descargar plantilla</a><label class="btn btn-sm btn-outline-primary mb-0">Importar CSV<input id="reporting-csv" type="file" accept=".csv,text/csv" hidden></label><button class="btn btn-sm btn-outline-primary" id="reporting-add" type="button"><i class="bi bi-plus-lg me-1"></i>Agregar pregunta</button></div></div>
+        <div class="card-body"><div id="reporting-csv-message" class="mb-2"></div><div id="reporting-questions"></div><p class="text-muted small mb-0">Cada pregunta se ejecuta por separado, en el orden mostrado. Máximo {{ max_questions }} preguntas.</p></div>
       </div>
     </div>
     <div class="col-xl-4">
@@ -37,18 +46,20 @@
     </div>
   </div>
   <section id="reporting-result" class="mt-4 d-none" aria-live="polite">
-    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><h3 class="mb-0" id="reporting-result-title"></h3><div class="d-flex gap-2"><button class="btn btn-outline-primary btn-sm" id="reporting-copy" type="button">Copiar Markdown</button><button class="btn btn-outline-primary btn-sm" id="reporting-download" type="button">Descargar .md</button></div></div>
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h3 class="mb-0" id="reporting-result-title"></h3><div class="text-muted small font-monospace" id="reporting-run-id"></div></div><div class="d-flex gap-2"><button class="btn btn-outline-primary btn-sm" id="reporting-copy" type="button">Copiar Markdown</button><button class="btn btn-outline-primary btn-sm" id="reporting-download" type="button">Descargar .md</button></div></div>
     <div id="reporting-sections"></div>
     <details class="mt-3"><summary class="mb-2">Ver Markdown</summary><textarea class="form-control font-monospace" id="reporting-markdown" rows="12" readonly></textarea></details>
   </section>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script>
+{% block scripts %}{{ super() }}<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script><script>
 (() => {
   const models = {{ models|tojson }};
   const defaultModelKey = {{ default_model_key|tojson }};
   const maxQuestions = {{ max_questions }};
   const endpoint = {{ url_for('ai_reporting.generate')|tojson }};
+  const importEndpoint = {{ url_for('ai_reporting.import_questions')|tojson }};
+  const skillsEndpoint = {{ url_for('ai_reporting.skills')|tojson }};
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
   const byId = id => document.getElementById(id);
   const questions = byId('reporting-questions');
@@ -57,6 +68,8 @@
   const message = byId('reporting-message');
   const result = byId('reporting-result');
   let markdown = '';
+  let skillCatalog = [];
+  const renderMarkdown = text => KlaraMarkdown.render(text, document);
 
   function showMessage(text, kind='danger') {
     message.className = `alert alert-${kind}`;
@@ -72,11 +85,73 @@
     if (questions.children.length >= maxQuestions) return;
     const row = document.createElement('div');
     row.className = 'row g-2 align-items-start mb-3 reporting-row';
-    row.innerHTML = '<div class="col-auto pt-2 text-muted reporting-index"></div><div class="col-md-4"><input class="form-control reporting-title" maxlength="100" placeholder="Título (opcional)"></div><div class="col"><textarea class="form-control reporting-question" maxlength="1000" rows="2" placeholder="Pregunta analítica" required></textarea></div><div class="col-auto"><button class="btn btn-outline-danger reporting-remove" type="button" aria-label="Eliminar pregunta"><i class="bi bi-trash"></i></button></div>';
+    row.innerHTML = '<div class="col-auto pt-2 text-muted reporting-index"></div><div class="col-md-4"><input class="form-control reporting-title" maxlength="100" placeholder="Título (opcional)"></div><div class="col"><textarea class="form-control reporting-question" maxlength="1000" rows="2" placeholder="Pregunta analítica" required></textarea></div><div class="col-auto"><button class="btn btn-outline-danger reporting-remove" type="button" aria-label="Eliminar pregunta"><i class="bi bi-trash"></i></button></div><div class="col-12 ps-4"><details class="reporting-skills small"><summary><span class="reporting-skill-badge badge text-bg-secondary">Automático</span> Skills fijadas (opcional)</summary><div class="reporting-skill-list mt-2"></div></details></div>';
     row.querySelector('.reporting-title').value = title;
     row.querySelector('.reporting-question').value = text;
     questions.append(row);
+    renderSkillList(row, []);
     updateRows();
+  }
+  function selectedSkills(row) {
+    return [...row.querySelectorAll('.reporting-skill-check:checked')].map(input => input.value);
+  }
+  function updateSkillBadge(row) {
+    const count = selectedSkills(row).length;
+    const badge = row.querySelector('.reporting-skill-badge');
+    badge.textContent = count ? `${count} skill(s) fijada(s)` : 'Automático';
+    badge.className = `reporting-skill-badge badge ${count ? 'text-bg-primary' : 'text-bg-secondary'}`;
+  }
+  // Skills are chosen from the Report's effective catalog; never typed freely.
+  function renderSkillList(row, selected) {
+    const list = row.querySelector('.reporting-skill-list');
+    list.replaceChildren();
+    if (!skillCatalog.length) {
+      const empty = document.createElement('span');
+      empty.className = 'text-muted';
+      empty.textContent = 'Este Report no tiene skills efectivas. La selección será automática.';
+      list.append(empty);
+    }
+    for (const skill of skillCatalog) {
+      const label = document.createElement('label');
+      label.className = 'd-flex align-items-baseline gap-2 mb-1';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.className = 'form-check-input reporting-skill-check';
+      input.value = skill.skill_key;
+      input.checked = selected.includes(skill.skill_key);
+      input.addEventListener('change', () => updateSkillBadge(row));
+      const name = document.createElement('code');
+      name.textContent = skill.skill_key;
+      const detail = document.createElement('span');
+      detail.className = 'text-muted';
+      detail.textContent = [skill.title, skill.domain_key && `dominio: ${skill.domain_key}`, skill.scope].filter(Boolean).join(' · ');
+      label.append(input, name, detail);
+      list.append(label);
+    }
+    updateSkillBadge(row);
+  }
+  async function refreshSkills() {
+    const reportId = byId('reporting-report').value;
+    const rows = [...questions.querySelectorAll('.reporting-row')];
+    const previous = rows.map(selectedSkills);
+    skillCatalog = [];
+    if (reportId) {
+      try {
+        const response = await fetch(`${skillsEndpoint}?report_id=${encodeURIComponent(reportId)}`, {credentials:'same-origin'});
+        const data = await response.json();
+        if (response.ok) {
+          skillCatalog = data.skills || [];
+          if (data.dataset_resolved === false) showCsvMessage('warning', ['No se pudo resolver el dataset del Report: la lista no incluye skills por dataset.']);
+        }
+      } catch (_) { /* the catalog stays empty; generation validates again on the server */ }
+    }
+    const valid = new Set(skillCatalog.map(skill => skill.skill_key));
+    const dropped = new Set();
+    rows.forEach((row, index) => {
+      previous[index].filter(key => !valid.has(key)).forEach(key => dropped.add(key));
+      renderSkillList(row, previous[index].filter(key => valid.has(key)));
+    });
+    if (dropped.size) showCsvMessage('warning', [`Se quitaron skills fijadas que no pertenecen a este Report: ${[...dropped].join(', ')}.`]);
   }
   function updateTier() {
     const selected = models.find(item => item.model_key === model.value);
@@ -95,6 +170,7 @@
   function renderResult(data) {
     markdown = data.markdown;
     byId('reporting-result-title').textContent = data.name;
+    byId('reporting-run-id').textContent = data.report_run_id ? `Run ID: ${data.report_run_id}` : '';
     byId('reporting-markdown').value = markdown;
     const container = byId('reporting-sections');
     container.replaceChildren();
@@ -113,17 +189,90 @@
         : section.recovered_error_count
           ? `Generado correctamente · ${section.recovered_error_count} error(es) intermedio(s) recuperado(s)`
           : 'Generado correctamente';
+      // Markdown is rendered through DOM nodes (no innerHTML): raw HTML in answers stays inert text.
+      const routing = section.skill_routing || {};
+      if (section.had_error && routing.unavailable && routing.unavailable.length) {
+        const unavailable = document.createElement('p');
+        unavailable.className = 'small text-danger mb-2';
+        const reasons = {not_found:'no existe', inactive:'inactiva', not_effective_for_report:'no es efectiva para este Report'};
+        unavailable.textContent = 'Skill fijada no disponible: ' + routing.unavailable.map(item => `${item.skill_key} (${reasons[item.reason] || item.reason})`).join(', ');
+        body.append(unavailable);
+      }
       const answer = document.createElement('div');
-      answer.className = section.had_error ? 'text-warning' : '';
-      answer.style.whiteSpace = 'pre-wrap';
-      answer.textContent = section.had_error ? 'No se pudo generar esta sección.' : section.answer;
+      answer.className = `klara-md ${section.had_error ? 'text-warning' : ''}`.trim();
+      answer.append(renderMarkdown(section.had_error ? 'No se pudo generar esta sección.' : section.answer));
       body.append(heading, status, answer);
+      if (routing.mode) {
+        const details = document.createElement('details');
+        details.className = 'mt-3 small';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Routing de skills';
+        const info = document.createElement('div');
+        info.className = 'mt-2';
+        const lines = [`Modo: ${routing.mode}`];
+        if (routing.mode === 'dynamic') lines.push(`Selector: ${routing.selector || 'n/d'}`);
+        if (routing.pinned_skill_keys && routing.pinned_skill_keys.length) lines.push(`Fijadas: ${routing.pinned_skill_keys.join(', ')}`);
+        lines.forEach(line => { const p = document.createElement('div'); p.textContent = line; info.append(p); });
+        const list = document.createElement('ul');
+        list.className = 'mb-0';
+        for (const key of routing.skills || []) { const item = document.createElement('li'); item.textContent = key; list.append(item); }
+        info.append(list);
+        details.append(summary, info);
+        body.append(details);
+      }
+      if (section.semantic_notes && section.semantic_notes.length) {
+        const details = document.createElement('details');
+        details.className = 'mt-3 small';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Contexto semántico';
+        const list = document.createElement('ul');
+        list.className = 'mb-0 mt-2';
+        for (const note of section.semantic_notes) {
+          const item = document.createElement('li');
+          item.textContent = note;
+          list.append(item);
+        }
+        details.append(summary, list);
+        body.append(details);
+      }
       card.append(body);
       container.append(card);
     }
     result.classList.remove('d-none');
     result.scrollIntoView({behavior:'smooth', block:'start'});
   }
+  function showCsvMessage(kind, lines) {
+    const box = byId('reporting-csv-message');
+    box.replaceChildren();
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${kind} small mb-0`;
+    lines.forEach((line, index) => { if (index) alert.append(document.createElement('br')); alert.append(document.createTextNode(line)); });
+    box.append(alert);
+  }
+  byId('reporting-csv').addEventListener('change', async event => {
+    const input = event.target;
+    const file = input.files[0];
+    if (!file) return;
+    const body = new FormData();
+    body.append('csv_file', file);
+    try {
+      const response = await fetch(importEndpoint, {method:'POST', credentials:'same-origin', headers:{'X-CSRFToken':csrf}, body});
+      const data = await response.json();
+      if (!response.ok) return showCsvMessage('danger', data.errors || data.error || ['CSV inválido.']);
+      const current = [...questions.querySelectorAll('.reporting-row')];
+      const blank = current.filter(row => !row.querySelector('.reporting-title').value.trim() && !row.querySelector('.reporting-question').value.trim());
+      const kept = current.length - blank.length;
+      if (kept + data.rows.length > maxQuestions) return showCsvMessage('danger', [`El total superaría ${maxQuestions} preguntas (ya hay ${kept}, el CSV trae ${data.rows.length}).`]);
+      blank.forEach(row => row.remove());
+      data.rows.forEach(row => addQuestion(row.title, row.question));
+      updateRows();
+      showCsvMessage('success', [`Se agregaron ${data.rows.length} pregunta(s).`, ...(data.warnings || [])]);
+    } catch (_) {
+      showCsvMessage('danger', ['No se pudo leer el CSV.']);
+    } finally {
+      input.value = '';
+    }
+  });
   byId('reporting-add').addEventListener('click', () => addQuestion());
   questions.addEventListener('click', event => {
     if (event.target.closest('.reporting-remove')) {
@@ -133,6 +282,7 @@
   });
   model.addEventListener('change', updateTier);
   byId('reporting-report').addEventListener('change', event => {
+    refreshSkills();
     const name = byId('reporting-name');
     if (!name.dataset.edited) name.value = `Informe semanal — ${event.target.selectedOptions[0]?.textContent || ''}`;
   });
@@ -140,7 +290,7 @@
   byId('reporting-generate').addEventListener('click', async () => {
     clearMessage();
     result.classList.add('d-none');
-    const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim()}));
+    const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim(), required_skill_keys:selectedSkills(row)}));
     if (!rows.length || rows.some(row => !row.question)) return showMessage('Ingresá al menos una pregunta y completá todas las filas.');
     if (!model.value || !tier.value) return showMessage('Elegí un modelo y tier disponibles.');
     const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows};
@@ -176,5 +326,6 @@
   if (byId('reporting-report').selectedOptions.length) byId('reporting-name').value = `Informe semanal — ${byId('reporting-report').selectedOptions[0].textContent}`;
   addQuestion();
   updateTier();
+  refreshSkills();
 })();
 </script>{% endblock %}

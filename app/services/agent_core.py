@@ -28,9 +28,12 @@ from app.services.schema_retrieval_service import (
     retrieve_relevant_schema,
 )
 from app.services.skill_router import (
+    PinnedSkillUnavailableError,
     RouteDecision,
     SkillRouterSettings,
     build_skill_router_settings,
+    normalize_pinned_skill_keys,
+    resolve_pinned_skill_route,
     resolve_skill_route,
     validate_dax_against_route,
 )
@@ -1347,7 +1350,8 @@ class AgentOrchestrator:
 
     def __init__(self, settings: RuntimeSettings, prompt_manager: PromptManager, tool_registry: ToolRegistry,
                  *, runtime: Optional[LLMRuntime] = None, model: Optional[ModelConfig] = None,
-                 route_resolver=None, cache_policy: Optional[CachePolicy] = None):
+                 route_resolver=None, cache_policy: Optional[CachePolicy] = None,
+                 pinned_route_resolver=None):
         self.settings = settings
         self.prompt_manager = prompt_manager
         self.tool_registry = tool_registry
@@ -1356,6 +1360,7 @@ class AgentOrchestrator:
                                          max_output_tokens=settings.anthropic_max_tokens,
                                          api_key=settings.anthropic_api_key)
         self.route_resolver = route_resolver or resolve_skill_route
+        self.pinned_route_resolver = pinned_route_resolver or resolve_pinned_skill_route
         self.cache_policy = cache_policy or CachePolicy()
         self.metrics = {}
 
@@ -1412,6 +1417,45 @@ class AgentOrchestrator:
     async def estimate_request_tokens_payload(self, *, system_prompt, messages, tools):
         return await self.runtime.count_tokens(self._request(system_prompt, messages, tools))
 
+    def _pinned_skill_failure_result(
+        self, context, *, conv_id, report_id, pinned_skill_keys, reason, message, unavailable,
+    ) -> Dict[str, Any]:
+        """Fail the turn before any model call when pinned skills cannot be used."""
+        return {
+            "answer": SAFE_TECHNICAL_ERROR_ANSWER,
+            "conversation_id": conv_id,
+            "report_id": report_id,
+            "tool_rounds": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "model": self.model.physical_model,
+            "model_key": self.model.model_key,
+            "provider": self.model.provider,
+            "gateway": self.model.gateway,
+            "service_tier": self.model.service_tier,
+            "actual_model": self.model.physical_model,
+            "model_metadata": self.model.metadata(),
+            "latency_by_component_ms": dict(self.metrics),
+            "mcp_used": False,
+            "tools_called": [],
+            "dax_query": None,
+            "ai_usage_events": list(context.get("ai_usage_events") or []),
+            "route_metadata_json": {
+                "skill_route_source": "pinned",
+                "pinned_skill_keys": list(pinned_skill_keys),
+                "resolved_skill_keys": [],
+                "unavailable_pinned_skills": [dict(item) for item in unavailable],
+            },
+            "semantic_notes": [],
+            "route_validation_warnings": [],
+            "had_error": True,
+            "error_message": message,
+            "failure_reason": reason,
+            "recovered_errors": [],
+            "failure_scope": "skill_routing",
+            "recoverable": False,
+        }
+
     async def generate_response(
         self,
         *,
@@ -1428,6 +1472,7 @@ class AgentOrchestrator:
         schema_retrieval_prompt: Optional[str] = None,
         schema_table_context_limit: Optional[int] = None,
         schema_measure_context_limit: Optional[int] = None,
+        required_skill_keys: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         schema_text = schema_text or ""
         settings_debug_enabled = self.settings.debug_enabled or _debug_enabled()
@@ -1475,7 +1520,33 @@ class AgentOrchestrator:
 
         route_decision: Optional[RouteDecision] = None
         router_settings = self.settings.skill_router_settings
-        if router_settings.enabled and report_id is not None:
+        pinned_skill_keys = normalize_pinned_skill_keys(required_skill_keys)
+        if pinned_skill_keys:
+            # Pinned skills replace dynamic selection entirely: no embedding,
+            # candidate search or selector runs, and no fallback if they are invalid.
+            try:
+                route_decision = await self.pinned_route_resolver(
+                    required_skill_keys=pinned_skill_keys,
+                    report_id=int(report_id) if report_id is not None else None,
+                    empresa_id=empresa_id,
+                    dataset_id=dataset_id,
+                    settings=router_settings,
+                )
+            except PinnedSkillUnavailableError as exc:
+                return self._pinned_skill_failure_result(
+                    context, conv_id=conv_id, report_id=report_id, pinned_skill_keys=pinned_skill_keys,
+                    reason="pinned_skill_unavailable", message=str(exc), unavailable=exc.unavailable,
+                )
+            except Exception as exc:
+                logging.exception("[SkillRouter] Pinned skill resolution failed")
+                return self._pinned_skill_failure_result(
+                    context, conv_id=conv_id, report_id=report_id, pinned_skill_keys=pinned_skill_keys,
+                    reason="pinned_skill_resolution_failed", message=f"Pinned skills could not be resolved: {type(exc).__name__}",
+                    unavailable=[],
+                )
+            context["route_decision"] = route_decision
+            _debug_print("skill_router:pinned", route_decision.to_metadata(), enabled=settings_debug_enabled)
+        elif router_settings.enabled and report_id is not None:
             route_decision = await self.route_resolver(
                 user_message=user_message,
                 report_id=int(report_id),
@@ -1512,6 +1583,10 @@ class AgentOrchestrator:
                 )
 
         apply_route_context = (
+            route_decision is not None
+            and route_decision.route_source == "pinned"
+            and bool(route_decision.selected_skills)
+        ) or (
             router_settings.enabled
             and router_settings.mode == "active"
             and route_decision is not None
@@ -1633,6 +1708,7 @@ class AgentOrchestrator:
                 "dax_query": dax_query_used or last_dax_attempt,
                 "ai_usage_events": ai_usage_events,
                 "route_metadata_json": route_decision.to_metadata() if route_decision is not None else None,
+                "semantic_notes": route_decision.semantic_notes() if route_decision is not None else [],
                 "route_validation_warnings": list(context.get("route_validation_warnings") or []),
                 "had_error": had_error,
                 "error_message": error_message,

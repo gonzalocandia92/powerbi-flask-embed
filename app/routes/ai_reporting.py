@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import asyncio
+import csv
 import logging
+from io import StringIO
 from dataclasses import replace
 
-from flask import Blueprint, current_app, jsonify, render_template, request
+import requests
+from flask import Blueprint, Response, current_app, jsonify, render_template, request
 from flask_login import login_required
 
 from app import db
@@ -16,18 +19,26 @@ from app.services.analytics import (
     AnalyticsModelError, AnalyticsReportNotFoundError, build_analytics_engine,
 )
 from app.services.llm.profiles import PROFILES
+from app.services.skill_catalog import SkillScopeContext, list_effective_skills, unknown_skill_keys
 from app.services.reporting import ReportDefinition, ReportGenerator, ReportQuestion, render_markdown
 from app.services.reporting.usage import record_section_usage
 from app.utils.decorators import admin_required
+from app.utils.powerbi import get_current_dataset_id
 
 
 bp = Blueprint("ai_reporting", __name__, url_prefix="/admin/ai-reporting")
 MAX_QUESTIONS = 20
+MAX_QUESTION_CHARS = 1000
+MAX_TITLE_CHARS = 100
+MAX_CSV_BYTES = 2 * 1024 * 1024
+TITLE_HEADERS = ("title", "titulo", "título")
+QUESTION_HEADERS = ("question", "pregunta")
 PUBLIC_FAILURE_REASONS = frozenset({
     "dax_generation_failed", "dax_query_empty", "dax_execution_exception",
     "tool_round_limit", "unsupported_tool", "semantic_model_unavailable",
-    "agent_execution_exception",
+    "agent_execution_exception", "pinned_skill_unavailable", "pinned_skill_resolution_failed",
 })
+MAX_PINNED_SKILLS = 10
 
 
 def _public_failure_reason(reason: str | None) -> str | None:
@@ -38,6 +49,23 @@ def _public_failure_reason(reason: str | None) -> str | None:
     if reason.endswith("_prompt_too_long"):
         return "provider_prompt_too_long"
     return "execution_failed"
+
+
+def _effective_skills_for_report(report: Report):
+    """Effective skills (report > dataset > empresa > global) with the same scope
+    the analytical engine uses. Returns (skills, dataset_resolved)."""
+    dataset_resolved = True
+    try:
+        dataset_id = get_current_dataset_id(report)
+    except (requests.RequestException, RuntimeError, KeyError):
+        dataset_id, dataset_resolved = None, False
+    try:
+        empresa_id = ai_billing.resolve_report_billing_context(report).empresa_id
+    except ai_billing.BillingConfigurationError:
+        empresa_id = None
+    skills = list_effective_skills(SkillScopeContext(
+        dataset_id=dataset_id, empresa_id=empresa_id, report_id=report.id))
+    return skills, dataset_resolved
 
 
 def _model_tiers(record: AIModelConfig, config: dict) -> list[str]:
@@ -127,10 +155,20 @@ def _definition_from_payload(data: dict, models: list[dict]) -> ReportDefinition
             raise ValueError(f"La pregunta {index} debe tener entre 1 y 1000 caracteres.")
         if not isinstance(title, str) or not 1 <= len(title.strip()) <= 100:
             raise ValueError(f"El título de la pregunta {index} debe tener hasta 100 caracteres.")
+        pins = row.get("required_skill_keys") or []
+        if (not isinstance(pins, list) or len(pins) > MAX_PINNED_SKILLS
+                or any(not isinstance(key, str) or not key.strip() or len(key) > 120 for key in pins)):
+            raise ValueError(f"Las skills fijadas de la pregunta {index} no son válidas (máximo {MAX_PINNED_SKILLS}).")
         questions.append(ReportQuestion(
             key=f"section_{index:03}", title=title.strip(),
-            question=question.strip(), order=index,
+            question=question.strip(), order=index, required_skill_keys=tuple(pins),
         ))
+    pinned = [key for item in questions for key in item.required_skill_keys]
+    if pinned:
+        effective, _ = _effective_skills_for_report(report)
+        missing = unknown_skill_keys(pinned, effective)
+        if missing:
+            raise ValueError("Skills fijadas no disponibles para este Report: " + ", ".join(missing))
     return ReportDefinition(
         report_id=report_id, name=name.strip(), questions=questions,
         analysis_model_key=model_key,
@@ -149,6 +187,97 @@ def page():
         models=models, default_model_key=default_model_key,
         luna_warning=luna_warning, max_questions=MAX_QUESTIONS,
     )
+
+
+def _csv_error(message: str):
+    return jsonify({"errors": [message], "warnings": [], "rows": []}), 400
+
+
+@bp.route("/import-questions", methods=["POST"])
+@login_required
+@admin_required
+def import_questions():
+    """Parse a title,question CSV into rows for the form; nothing is executed or stored."""
+    upload = request.files.get("csv_file")
+    if not upload or not upload.filename:
+        return _csv_error("Seleccioná un archivo CSV.")
+    raw = upload.stream.read(MAX_CSV_BYTES + 1)
+    if len(raw) > MAX_CSV_BYTES:
+        return _csv_error("El CSV supera el límite de 2 MB.")
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return _csv_error("El CSV debe estar codificado en UTF-8.")
+    try:
+        dialect = csv.Sniffer().sniff(text[:4096], delimiters=",;")
+    except csv.Error:
+        dialect = csv.excel  # e.g. a single-column file
+    reader = csv.DictReader(StringIO(text), dialect=dialect)
+    try:
+        headers = {str(name or "").strip().lower(): name for name in (reader.fieldnames or [])}
+    except csv.Error as exc:
+        return _csv_error(f"CSV inválido: {exc}")
+    question_header = next((headers[key] for key in QUESTION_HEADERS if key in headers), None)
+    title_header = next((headers[key] for key in TITLE_HEADERS if key in headers), None)
+    if question_header is None:
+        return _csv_error("Falta la columna question o pregunta.")
+    rows, errors, warnings, seen = [], [], [], set()
+    try:
+        for line_number, raw_row in enumerate(reader, start=2):
+            question = str(raw_row.get(question_header) or "").strip()
+            title = str(raw_row.get(title_header) or "").strip() if title_header else ""
+            if not question and not title:
+                continue  # fully blank line
+            if not question:
+                errors.append(f"Fila {line_number}: la pregunta está vacía.")
+                continue
+            if len(question) > MAX_QUESTION_CHARS:
+                errors.append(f"Fila {line_number}: la pregunta supera {MAX_QUESTION_CHARS} caracteres.")
+                continue
+            if len(title) > MAX_TITLE_CHARS:
+                errors.append(f"Fila {line_number}: el título supera {MAX_TITLE_CHARS} caracteres.")
+                continue
+            if question.casefold() in seen:
+                warnings.append(f"Fila {line_number}: pregunta duplicada.")
+            seen.add(question.casefold())
+            rows.append({"title": title, "question": question, "line": line_number})
+    except csv.Error as exc:
+        return _csv_error(f"CSV inválido: {exc}")
+    if not rows and not errors:
+        errors.append("El archivo no contiene preguntas.")
+    if len(rows) > MAX_QUESTIONS:
+        errors.append(f"El archivo contiene más de {MAX_QUESTIONS} preguntas.")
+    return jsonify({"rows": rows[:MAX_QUESTIONS], "errors": errors, "warnings": warnings,
+                    "summary": {"questions": len(rows)}}), (400 if errors else 200)
+
+
+@bp.route("/questions-template.csv", methods=["GET"])
+@login_required
+@admin_required
+def questions_template():
+    return Response(
+        '\ufefftitle,question\n"Ventas","¿Cuánto se vendió durante la última semana cerrada?"\n',
+        mimetype="text/csv; charset=utf-8",
+        headers={"Content-Disposition": 'attachment; filename="preguntas-informe.csv"'},
+    )
+
+
+@bp.route("/skills", methods=["GET"])
+@login_required
+@admin_required
+def skills():
+    """Effective skills of a Report, used to pin skills to questions."""
+    report = db.session.get(Report, request.args.get("report_id", type=int) or 0)
+    if report is None:
+        return jsonify({"error": "El Report seleccionado no existe."}), 404
+    effective, dataset_resolved = _effective_skills_for_report(report)
+    return jsonify({
+        "dataset_resolved": dataset_resolved,
+        "skills": [{
+            "skill_key": skill.skill_key, "title": skill.title,
+            "domain_key": skill.domain_key, "scope": skill.scope,
+        } for skill in effective],
+    })
 
 
 @bp.route("/generate", methods=["POST"])
@@ -183,6 +312,7 @@ def generate():
         logging.exception("[AIReporting] Report generation failed")
         return jsonify({"error": "No se pudo generar el informe. Revisá la configuración o intentá nuevamente."}), 500
     return jsonify({
+        "report_run_id": draft.report_run_id,
         "name": draft.name,
         "markdown": render_markdown(draft),
         "sections": [{
@@ -192,5 +322,8 @@ def generate():
             "failure_reason": (_public_failure_reason(section.failure_reason) or "execution_failed")
                               if section.had_error else None,
             "recovered_error_count": len(section.recovered_errors),
+            # Administrative/debug metadata only; the public Markdown never includes it.
+            "semantic_notes": [] if section.had_error else list(section.semantic_notes),
+            "skill_routing": dict(section.skill_routing),
         } for section in draft.sections],
     })

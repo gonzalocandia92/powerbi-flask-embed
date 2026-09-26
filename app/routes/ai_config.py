@@ -15,6 +15,7 @@ from app import db
 from app.forms import AgentPromptConfigForm, AIModelPricingForm, AnalyticsSkillForm, BillingLimitForm
 from app.models import AgentPromptConfig, AIModelPricing, AIUsageEvent, AnalyticsSkill, BillingLimit, Empresa, Report
 from app.services import ai_billing
+from app.services.semantic_notes import normalize_semantic_notes
 from app.services.llm.profiles import PROFILES, profile_catalog, profile_for
 from app.services.skill_vector_service import trigger_all_skill_reindex_update, trigger_skill_embedding_update
 from app.utils.decorators import retry_on_db_error
@@ -1508,12 +1509,20 @@ def _metadata_from_form(form, existing_metadata=None):
         "allowed_dimensions": _lines_from_form(form, "allowed_dimensions"),
         "constraints": _lines_from_form(form, "constraints"),
     }
-    return _replace_known_json_fields(
+    metadata = _replace_known_json_fields(
         existing_metadata,
         METADATA_JSON_KEYS,
         payload,
         drop_keys=DEPRECATED_METADATA_JSON_KEYS,
     )
+    # Curated notes live as an extra metadata key so CSV export/import keeps
+    # carrying them inside metadata_extra_json; an empty field clears them.
+    notes = normalize_semantic_notes((form.semantic_notes.data or "").splitlines())
+    if notes:
+        metadata["semantic_notes"] = notes
+    else:
+        metadata.pop("semantic_notes", None)
+    return metadata
 
 
 def _routing_from_form(form, existing_routing=None):
@@ -1548,6 +1557,7 @@ def _populate_skill_form_from_model(form, skill):
     form.preferred_tables.data = _lines_to_text(metadata.get("preferred_tables"))
     form.allowed_dimensions.data = _lines_to_text(metadata.get("allowed_dimensions"))
     form.constraints.data = _lines_to_text(metadata.get("constraints"))
+    form.semantic_notes.data = _lines_to_text(normalize_semantic_notes(metadata.get("semantic_notes")))
     _populate_required_schema_items(form, metadata)
     form.trigger_terms.data = _lines_to_text(routing.get("trigger_terms"))
     form.example_questions.data = _lines_to_text(routing.get("example_questions"))

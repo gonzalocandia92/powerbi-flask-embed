@@ -15,6 +15,8 @@ from app.services.chat_credentials import resolve_powerbi_env_for_report
 from app.services.klara_execution import ExecutionContext, KlaraExecutionService
 from app.services.llm import LiteLLMRuntime
 from app.services.llm.contracts import ModelConfig
+from app.services.semantic_notes import normalize_semantic_notes
+from app.services.skill_router import normalize_pinned_skill_keys
 from app.utils.powerbi import get_current_dataset_id
 
 from .contracts import (
@@ -26,6 +28,9 @@ from .contracts import (
     AnalyticsResult,
     PreparedAnalyticsExecution,
 )
+
+
+MAX_REQUIRED_SKILLS = 10
 
 
 class KlaraAnalyticsEngine:
@@ -55,6 +60,13 @@ class KlaraAnalyticsEngine:
             raise AnalyticsConfigurationError("history must be a list")
         if not isinstance(request.trace_context, dict):
             raise AnalyticsConfigurationError("trace_context must be a dictionary")
+        keys = request.required_skill_keys
+        if not isinstance(keys, (list, tuple)) or len(keys) > MAX_REQUIRED_SKILLS or any(
+            not isinstance(key, str) or not key.strip() or len(key) > 120 for key in keys
+        ):
+            raise AnalyticsConfigurationError(
+                f"required_skill_keys must be a list of up to {MAX_REQUIRED_SKILLS} non-empty skill keys"
+            )
         if request.service_tier is not None and (
             not isinstance(request.service_tier, str) or not request.service_tier.strip()
         ):
@@ -84,6 +96,7 @@ class KlaraAnalyticsEngine:
             recovered_errors=list(payload.get("recovered_errors") or []),
             route_metadata_json=payload.get("route_metadata_json"),
             route_validation_warnings=list(payload.get("route_validation_warnings") or []),
+            semantic_notes=normalize_semantic_notes(payload.get("semantic_notes")),
             latency_by_component_ms=dict(payload.get("latency_by_component_ms") or {}),
             trace_id=payload.get("trace_id"),
             execution_metadata=dict(payload.get("execution_metadata") or {}),
@@ -175,6 +188,7 @@ class KlaraAnalyticsEngine:
             service_tier=request.service_tier,
             billing_context=billing_context,
             trace_context=dict(request.trace_context),
+            required_skill_keys=normalize_pinned_skill_keys(request.required_skill_keys),
         )
         return PreparedAnalyticsExecution(
             request=replace(

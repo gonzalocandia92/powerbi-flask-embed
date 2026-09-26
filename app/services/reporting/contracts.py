@@ -11,6 +11,21 @@ class ReportQuestion:
     title: str
     question: str
     order: int = 0
+    # Skills fixed by the report definition (not suggestions). Empty = automatic
+    # routing; otherwise the dynamic selector is skipped for this question.
+    required_skill_keys: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        keys = self.required_skill_keys
+        if isinstance(keys, str) or not isinstance(keys, (list, tuple)):
+            raise ValueError("required_skill_keys must be a list or tuple of skill keys")
+        if any(not isinstance(key, str) or not key.strip() for key in keys):
+            raise ValueError("required_skill_keys cannot contain empty or non-string values")
+        unique: list[str] = []
+        for key in (key.strip() for key in keys):
+            if key.casefold() not in {item.casefold() for item in unique}:
+                unique.append(key)
+        object.__setattr__(self, "required_skill_keys", tuple(unique))
 
 
 @dataclass
@@ -57,10 +72,24 @@ class ReportSection:
     latency_by_component_ms: dict[str, Any] = field(default_factory=dict)
     ai_usage_events: list[dict[str, Any]] = field(default_factory=list)
     trace_id: str | None = None
+    # Identity of the whole generation this section belongs to (see ReportDraft).
+    report_run_id: str | None = None
+    # Curated, internal interpretation notes from the skills used by this section.
+    # Never rendered into the public Markdown; future writers may consume them.
+    semantic_notes: list[str] = field(default_factory=list)
+    # How skills were chosen: {"mode": "pinned"|"dynamic", "selector": ..., "skills": [...],
+    # "pinned_skill_keys": [...], "unavailable": [{"skill_key", "reason"}]}. Admin/debug only.
+    skill_routing: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
 class ReportDraft:
+    """Portable analytical artifact: identity, configuration and section results.
+
+    It carries no credentials and is the intended input of a future writer.
+    """
+
+    report_run_id: str
     report_id: int
     name: str
     analysis_model_key: str | None

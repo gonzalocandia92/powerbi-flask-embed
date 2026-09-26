@@ -13,6 +13,7 @@ from app.services.decisions import (
     LLMQueryRewriter, LLMSkillSelector, EmbeddingSkillSelector, ExistingSkillRouter,
     JevSkillSelector, JevWithLLMFallbackSelector,
 )
+from app.services.skill_router import normalize_pinned_skill_keys
 from app.services.observability import hash_identifier, start_observation, observation_preview
 
 
@@ -40,6 +41,8 @@ class ExecutionContext:
     execution_policy: ExecutionPolicy | None = None
     billing_context: Any = field(default=None, repr=False)
     trace_context: dict = field(default_factory=dict)
+    # Skills fixed by the consumer; when set, dynamic skill selection is skipped.
+    required_skill_keys: list = field(default_factory=list)
     decision_usage_events: list = field(default_factory=list, repr=False)
 
 
@@ -163,6 +166,7 @@ class KlaraExecutionService:
             service_tier=context.service_tier or main.service_tier,
             reasoning_effort=main.reasoning_effort, cache=cache,
         )
+        pinned_keys = normalize_pinned_skill_keys(context.required_skill_keys)
         with start_observation(name="powerbi-chat-agent", as_type="agent", input={"user_message": context.user_message}) as span:
             assessment = ComplexityAssessment()
             classifier_failed = False
@@ -199,6 +203,8 @@ class KlaraExecutionService:
                         "schematablelimit": policy.schema_table_limit, "schemameasurelimit": policy.schema_measure_limit,
                         "cache_scope": policy.cache.scope.key, "execution_policy": asdict(policy),
                         "complexity_classifier_strategy": assessment.strategy,
+                        "skill_route_source": "pinned" if pinned_keys else "dynamic",
+                        "pinned_skill_keys": list(pinned_keys),
                         "skill_selector_strategy": (
                             getattr(self.skill_selector, "strategy", type(self.skill_selector).__name__)
                             if self.skill_selector else ("llm" if settings.skill_router_settings.selector_enabled else "embeddings")
@@ -215,7 +221,10 @@ class KlaraExecutionService:
                     rewriter = LLMQueryRewriter(self.runtime, rewriter_model, metrics, policy.cache)
             selector = self.skill_selector
             selector_strategy = getattr(selector, "strategy", "custom") if selector is not None else "llm"
-            if selector is None:
+            if pinned_keys:
+                # Pinned skills bypass selection: do not even build a selector.
+                selector, selector_strategy = None, "pinned"
+            elif selector is None:
                 selector_component = component_resolver("skill_selector", **scope) if component_resolver else None
                 if selector_component is not None and selector_component.strategy == "embeddings":
                     selector = EmbeddingSkillSelector(metrics)
@@ -259,7 +268,10 @@ class KlaraExecutionService:
                 powerbi_credentials=context.powerbi_credentials, custom_instructions=context.custom_instructions,
                 schema_retrieval_prompt=context.schema_retrieval_prompt,
                 schema_table_context_limit=policy.schema_table_limit, schema_measure_context_limit=policy.schema_measure_limit,
+                **({"required_skill_keys": pinned_keys} if pinned_keys else {}),
             )
+            metadata["resolved_skill_keys"] = list(
+                (result.get("route_metadata_json") or {}).get("resolved_skill_keys") or [])
             metrics["total"] = round((time.monotonic() - started) * 1000)
             result["latency_by_component_ms"] = dict(metrics)
             result["execution_metadata"] = metadata

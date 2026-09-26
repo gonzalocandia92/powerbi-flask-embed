@@ -10,8 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from flask import has_app_context
 
+from app import db
 from app.models import AnalyticsSkill
 from app.services.observability import hash_identifier, observation_preview, start_observation
+from app.services.semantic_notes import collect_semantic_notes
 from app.services.skill_catalog import (
     SkillScopeContext,
     list_effective_skills,
@@ -139,6 +141,16 @@ class RouteDecision:
     resolved_companion_skill_ids: List[int] = field(default_factory=list)
     resolved_companion_skill_keys: List[str] = field(default_factory=list)
     missing_companion_skill_keys: List[str] = field(default_factory=list)
+    # "dynamic" = embeddings + selector; "pinned" = fixed by the caller (no selector).
+    route_source: str = "dynamic"
+    pinned_skill_keys: List[str] = field(default_factory=list)
+
+    def semantic_notes(self) -> List[str]:
+        """Curated notes of the skills that actually took part in this route."""
+        try:
+            return collect_semantic_notes(skill.metadata for skill in self.selected_skills)
+        except Exception:  # Auxiliary metadata must never break an execution.
+            return []
 
     def to_metadata(self) -> Dict[str, Any]:
         return {
@@ -175,6 +187,9 @@ class RouteDecision:
             "resolved_companion_skill_ids": list(self.resolved_companion_skill_ids),
             "resolved_companion_skill_keys": list(self.resolved_companion_skill_keys),
             "missing_companion_skill_keys": list(self.missing_companion_skill_keys),
+            "skill_route_source": self.route_source,
+            "pinned_skill_keys": list(self.pinned_skill_keys),
+            "resolved_skill_keys": [skill.skill_key for skill in self.selected_skills],
         }
 
 
@@ -1023,6 +1038,103 @@ def _build_selector_decision(
         constraints=_unique_strings(constraints),
         is_hard_route=is_hard,
     )
+
+
+class PinnedSkillUnavailableError(Exception):
+    """A pinned skill is missing, inactive or not effective for the report scope.
+
+    There is deliberately no fallback to the dynamic selector: pinning exists
+    for reproducibility, so answering with a different skill would defeat it.
+    """
+
+    def __init__(self, unavailable: List[Dict[str, str]], pinned_skill_keys: List[str]):
+        self.unavailable = [dict(item) for item in unavailable]
+        self.pinned_skill_keys = list(pinned_skill_keys)
+        detail = ", ".join(f"{item['skill_key']} ({item['reason']})" for item in self.unavailable)
+        super().__init__(f"Pinned skill unavailable: {detail}")
+
+
+def normalize_pinned_skill_keys(values: Any) -> List[str]:
+    """Trim, drop blanks/non-strings and dedupe (case-insensitively) keeping order."""
+    if not isinstance(values, (list, tuple)):
+        return []
+    keys: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        key = value.strip()
+        if key and key.casefold() not in seen:
+            seen.add(key.casefold())
+            keys.append(key)
+    return keys
+
+
+def _pinned_unavailable_reason(skill_key: str) -> str:
+    rows = AnalyticsSkill.query.filter(
+        db.func.lower(AnalyticsSkill.skill_key) == skill_key.casefold()
+    ).all()
+    if not rows:
+        return "not_found"
+    if not any(row.is_active for row in rows):
+        return "inactive"
+    return "not_effective_for_report"
+
+
+def resolve_pinned_skill_route_sync(
+    *,
+    required_skill_keys: List[str],
+    report_id: Optional[int],
+    empresa_id: Optional[int],
+    dataset_id: Optional[str],
+    settings: Optional[SkillRouterSettings] = None,
+) -> RouteDecision:
+    """Build a RouteDecision from explicitly pinned skills.
+
+    Skills are validated against the effective catalog of the report
+    (report > dataset > empresa > global, active only) and then go through the
+    same context assembly and companion expansion as dynamically selected
+    skills. No embedding, candidate search or selector is involved.
+    """
+    keys = normalize_pinned_skill_keys(required_skill_keys)
+    if not keys:
+        raise ValueError("required_skill_keys must contain at least one skill key")
+    scope_context = SkillScopeContext(report_id=report_id, empresa_id=empresa_id, dataset_id=dataset_id)
+    effective = list_effective_skills(scope_context, skill_keys=keys)
+    by_key = {str(skill.skill_key or "").casefold(): skill for skill in effective}
+    unavailable = [
+        {"skill_key": key, "reason": _pinned_unavailable_reason(key)}
+        for key in keys if key.casefold() not in by_key
+    ]
+    if unavailable:
+        raise PinnedSkillUnavailableError(unavailable, keys)
+
+    router_settings = settings or build_skill_router_settings()
+    decision = RouteDecision(strategy="soft_route", confidence=1.0)
+    selected_ids: set[int] = set()
+    for key in keys:
+        _append_candidate_context(decision, _candidate_from_skill(by_key[key.casefold()]), selected_skill_ids=selected_ids)
+    first = decision.selected_skills[0]
+    is_hard = (
+        router_settings.hard_enforcement_enabled
+        and all(bool(skill.metadata) for skill in decision.selected_skills)
+        and str(first.enforcement_mode or "soft").strip().lower() in {"hard", "hard_candidate"}
+    )
+    decision.strategy = "hard_route" if is_hard else "soft_route"
+    decision.is_hard_route = is_hard
+    pinned_display = [skill.skill_key for skill in decision.selected_skills]
+    decision = _expand_required_companions(
+        decision, report_id=report_id, empresa_id=empresa_id, dataset_id=dataset_id,
+    )
+    decision.route_source = "pinned"
+    decision.decision_source = "pinned"
+    decision.pinned_skill_keys = pinned_display
+    return decision
+
+
+async def resolve_pinned_skill_route(**kwargs) -> RouteDecision:
+    """Async wrapper: catalog lookups are blocking database work."""
+    return await asyncio.to_thread(resolve_pinned_skill_route_sync, **kwargs)
 
 
 async def resolve_skill_route(

@@ -38,6 +38,10 @@ class AnalyticsRequest:
     service_tier: str | None = None
     cache_policy: CachePolicy | None = None
     trace_context: dict[str, Any] = field(default_factory=dict)
+    # Skills fixed by an internal consumer (e.g. Reporting). When non-empty the
+    # dynamic skill selector is skipped and these skills, plus their declared
+    # companions, define the route. Empty keeps the regular routing.
+    required_skill_keys: list[str] = field(default_factory=list)
     # Advanced override for consumers that have explicitly resolved all roles.
     role_configuration: Any | None = None
 
@@ -64,6 +68,8 @@ class AnalyticsResult:
     recovered_errors: list[dict[str, Any]] = field(default_factory=list)
     route_metadata_json: dict[str, Any] | None = None
     route_validation_warnings: list[str] = field(default_factory=list)
+    # Curated notes from the skills of the active route; empty when none apply.
+    semantic_notes: list[str] = field(default_factory=list)
     latency_by_component_ms: dict[str, Any] = field(default_factory=dict)
     trace_id: str | None = None
     execution_metadata: dict[str, Any] = field(default_factory=dict)
