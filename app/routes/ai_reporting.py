@@ -7,7 +7,6 @@ import logging
 from io import StringIO
 from dataclasses import replace
 
-import requests
 from flask import Blueprint, Response, current_app, jsonify, render_template, request
 from flask_login import login_required
 
@@ -17,13 +16,16 @@ from app.services import ai_billing, model_catalog
 from app.services.analytics import (
     AnalyticsBillingLimitExceededError, AnalyticsConfigurationError,
     AnalyticsModelError, AnalyticsReportNotFoundError, build_analytics_engine,
+    list_effective_skills_for_report,
 )
 from app.services.llm.profiles import PROFILES
-from app.services.skill_catalog import SkillScopeContext, list_effective_skills, unknown_skill_keys
-from app.services.reporting import ReportDefinition, ReportGenerator, ReportQuestion, render_markdown
-from app.services.reporting.usage import record_section_usage
+from app.services.reporting import (
+    HtmlReportRenderer, ReportDefinition, ReportGenerator, ReportPipeline, ReportQuestion,
+    ReportWriterConfigurationError, ReportWriterInvalidOutputError, render_markdown,
+)
+from app.services.reporting.usage import record_section_usage, record_writer_usage
+from app.services.reporting.writer_factory import resolve_report_writer
 from app.utils.decorators import admin_required
-from app.utils.powerbi import get_current_dataset_id
 
 
 bp = Blueprint("ai_reporting", __name__, url_prefix="/admin/ai-reporting")
@@ -49,23 +51,6 @@ def _public_failure_reason(reason: str | None) -> str | None:
     if reason.endswith("_prompt_too_long"):
         return "provider_prompt_too_long"
     return "execution_failed"
-
-
-def _effective_skills_for_report(report: Report):
-    """Effective skills (report > dataset > empresa > global) with the same scope
-    the analytical engine uses. Returns (skills, dataset_resolved)."""
-    dataset_resolved = True
-    try:
-        dataset_id = get_current_dataset_id(report)
-    except (requests.RequestException, RuntimeError, KeyError):
-        dataset_id, dataset_resolved = None, False
-    try:
-        empresa_id = ai_billing.resolve_report_billing_context(report).empresa_id
-    except ai_billing.BillingConfigurationError:
-        empresa_id = None
-    skills = list_effective_skills(SkillScopeContext(
-        dataset_id=dataset_id, empresa_id=empresa_id, report_id=report.id))
-    return skills, dataset_resolved
 
 
 def _model_tiers(record: AIModelConfig, config: dict) -> list[str]:
@@ -165,8 +150,7 @@ def _definition_from_payload(data: dict, models: list[dict]) -> ReportDefinition
         ))
     pinned = [key for item in questions for key in item.required_skill_keys]
     if pinned:
-        effective, _ = _effective_skills_for_report(report)
-        missing = unknown_skill_keys(pinned, effective)
+        missing = list_effective_skills_for_report(report).missing(pinned)
         if missing:
             raise ValueError("Skills fijadas no disponibles para este Report: " + ", ".join(missing))
     return ReportDefinition(
@@ -270,14 +254,7 @@ def skills():
     report = db.session.get(Report, request.args.get("report_id", type=int) or 0)
     if report is None:
         return jsonify({"error": "El Report seleccionado no existe."}), 404
-    effective, dataset_resolved = _effective_skills_for_report(report)
-    return jsonify({
-        "dataset_resolved": dataset_resolved,
-        "skills": [{
-            "skill_key": skill.skill_key, "title": skill.title,
-            "domain_key": skill.domain_key, "scope": skill.scope,
-        } for skill in effective],
-    })
+    return jsonify(list_effective_skills_for_report(report).to_payload())
 
 
 @bp.route("/generate", methods=["POST"])
@@ -293,13 +270,27 @@ def generate():
     except (AnalyticsModelError, ValueError) as exc:
         return jsonify({"error": str(exc)}), 400
 
+    # Preflight the writer BEFORE spending analytical tokens: an unassigned or
+    # unpriced report_writer role would otherwise waste a full analysis.
+    try:
+        writer = resolve_report_writer(config, definition.report_id)
+    except ReportWriterConfigurationError as exc:
+        return jsonify({"error": str(exc), "code": exc.code}), 400
+    except ai_billing.BillingLimitExceeded:
+        return jsonify({"error": "Se alcanzó el límite de consumo de IA para este Report."}), 403
+
     async def record_usage(section):
         await asyncio.to_thread(record_section_usage, definition.report_id, section)
 
+    async def record_writer(report_run_id, event):
+        await asyncio.to_thread(record_writer_usage, definition.report_id, report_run_id, event)
+
+    pipeline = ReportPipeline(
+        ReportGenerator(build_analytics_engine(config), record_usage=record_usage),
+        writer, HtmlReportRenderer(), record_writer_usage=record_writer,
+    )
     try:
-        draft = asyncio.run(ReportGenerator(
-            build_analytics_engine(config), record_usage=record_usage,
-        ).generate(definition))
+        result = asyncio.run(pipeline.run(definition))
     except AnalyticsBillingLimitExceededError:
         return jsonify({"error": "Se alcanzó el límite de consumo de IA para este Report."}), 403
     except AnalyticsReportNotFoundError:
@@ -311,10 +302,15 @@ def generate():
     except Exception:
         logging.exception("[AIReporting] Report generation failed")
         return jsonify({"error": "No se pudo generar el informe. Revisá la configuración o intentá nuevamente."}), 500
+    draft = result.draft
     return jsonify({
         "report_run_id": draft.report_run_id,
         "name": draft.name,
         "markdown": render_markdown(draft),
+        "writer": _writer_payload(result),
+        # The final report and its HTML are client-facing; everything below is admin/debug.
+        "final_report": result.final_report.model_dump(mode="json") if result.final_report else None,
+        "html": result.html,
         "sections": [{
             "key": section.key, "title": section.title,
             "answer": "" if section.had_error else section.answer,
@@ -322,8 +318,27 @@ def generate():
             "failure_reason": (_public_failure_reason(section.failure_reason) or "execution_failed")
                               if section.had_error else None,
             "recovered_error_count": len(section.recovered_errors),
+            # Reason codes only: recovered error messages may carry DAX or client data.
+            "recovered_errors": [
+                {"reason": _public_failure_reason(item.get("reason")) or "execution_failed"}
+                for item in section.recovered_errors if isinstance(item, dict)
+            ],
             # Administrative/debug metadata only; the public Markdown never includes it.
             "semantic_notes": [] if section.had_error else list(section.semantic_notes),
             "skill_routing": dict(section.skill_routing),
         } for section in draft.sections],
     })
+
+
+def _writer_payload(result) -> dict:
+    error = result.writer_error
+    return {
+        "status": "ok" if result.writer_ok else "failed",
+        "error": None if error is None else {
+            "code": error.code, "message": str(error),
+            "validation_errors": list(error.errors) if isinstance(error, ReportWriterInvalidOutputError) else [],
+        },
+        "render_error": result.render_error,
+        "attempts": list(result.writer_attempts),
+        "usage_record_failures": result.usage_record_failures,
+    }

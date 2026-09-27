@@ -281,6 +281,8 @@ def build_catalog_resolver(settings, *, report_id=None, empresa_id=None, selecti
                 "model" if settings.skill_router_settings.selector_enabled else "embeddings"
             ),
             "complexity_classifier": "disabled",
+            # Reporting writer has no implicit model: it must be assigned explicitly.
+            "report_writer": "disabled",
         },
     )
 

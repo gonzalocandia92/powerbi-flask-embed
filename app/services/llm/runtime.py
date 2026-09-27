@@ -134,6 +134,10 @@ class LiteLLMRuntime:
             payload["temperature"] = request.temperature
         if request.model.service_tier:
             payload["service_tier"] = request.model.service_tier
+        if request.response_format == "json_object":
+            payload["response_format"] = {"type": "json_object"}
+        elif request.response_format is not None:
+            raise LLMError("invalid_response_format", "Only json_object response_format is supported")
         if request.model.reasoning_effort and not request.model.family_key:
             payload["reasoning_effort"] = request.model.reasoning_effort
         if request.thinking_mode_override not in (None, "off"):
@@ -223,6 +227,10 @@ class LiteLLMRuntime:
         if request.model.service_tier:
             payload["service_tier"] = request.model.service_tier
         decision = profile.apply(payload, request).metadata()
+        if request.response_format == "json_object":
+            payload["text"] = {**dict(payload.get("text") or {}), "format": {"type": "json_object"}}
+        elif request.response_format is not None:
+            raise LLMError("invalid_response_format", "Only json_object response_format is supported")
         if request.cache.enabled:
             payload["extra_body"] = {**dict(payload.get("extra_body") or {}),
                                      "prompt_cache_options": {"mode": "implicit", "ttl": "30m"}}

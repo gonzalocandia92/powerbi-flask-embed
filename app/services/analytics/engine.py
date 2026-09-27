@@ -12,7 +12,7 @@ from app.models import Report
 from app.services import agent_prompts, ai_billing, model_catalog
 from app.services.agent_core import build_runtime_settings
 from app.services.chat_credentials import resolve_powerbi_env_for_report
-from app.services.klara_execution import ExecutionContext, KlaraExecutionService
+from app.services.klara_execution import ExecutionContext, KlaraExecutionService, skipped_components
 from app.services.llm import LiteLLMRuntime
 from app.services.llm.contracts import ModelConfig
 from app.services.semantic_notes import normalize_semantic_notes
@@ -147,7 +147,10 @@ class KlaraAnalyticsEngine:
             raise AnalyticsModelError(str(exc)) from exc
 
         try:
-            ai_billing.validate_execution_pricing(report, settings, model_roles)
+            skipped = skipped_components(request.required_skill_keys)
+            # Only pass the plan when something is skipped: default calls stay unchanged.
+            ai_billing.validate_execution_pricing(
+                report, settings, model_roles, **({"skipped_components": skipped} if skipped else {}))
         except ai_billing.BillingLimitExceeded as exc:
             raise AnalyticsBillingLimitExceededError(str(exc)) from exc
         except ai_billing.BillingConfigurationError as exc:

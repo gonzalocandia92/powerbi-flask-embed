@@ -138,6 +138,9 @@ class LLMRequest:
     operation: str = "chat-response"
     thinking_mode_override: str | None = None
     thinking_override_reason: str | None = None
+    # Provider-neutral request for JSON-only output ("json_object"); the runtime
+    # maps it to each API surface. Callers must still validate the parsed JSON.
+    response_format: str | None = None
 
 
 @dataclass

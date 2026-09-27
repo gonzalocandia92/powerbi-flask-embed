@@ -136,8 +136,13 @@ def validate_pricing_coverage(model) -> None:
             _validate_price_columns(pricing, profile)
 
 
-def validate_execution_pricing(report: Report, settings, model_roles=None) -> None:
-    """Validate every potentially billable execution component before tokens are spent."""
+def validate_execution_pricing(report: Report, settings, model_roles=None, *, skipped_components=()) -> None:
+    """Validate every potentially billable execution component before tokens are spent.
+
+    ``skipped_components`` names components the execution plan will not run (for
+    example ``skill_selector`` when skills are pinned); they need no pricing.
+    """
+    skipped = frozenset(skipped_components or ())
     from app.services.klara_execution import configured_model_roles
     from app.services.llm.profiles import PROFILES
 
@@ -151,6 +156,8 @@ def validate_execution_pricing(report: Report, settings, model_roles=None) -> No
         if settings.skill_router_settings.selector_enabled:
             role_names.append("skill_selector")
     for role in role_names:
+        if role != "main_agent" and role in skipped:
+            continue
         model = roles.resolve(role, **scope)
         validate_pricing_coverage(model)
         if role == 'query_rewriter':
@@ -159,6 +166,8 @@ def validate_execution_pricing(report: Report, settings, model_roles=None) -> No
                 profile.validate_off_override(model)
     if component_resolver is not None:
         for role in ("query_rewriter", "skill_selector", "complexity_classifier"):
+            if role in skipped:
+                continue
             try:
                 component = component_resolver(role, **scope)
             except Exception:

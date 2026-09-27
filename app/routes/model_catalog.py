@@ -19,12 +19,13 @@ bp = Blueprint('model_catalog', __name__, url_prefix='/admin/ai-models')
 PROVIDERS = {'anthropic', 'openai', 'deepseek'}
 GATEWAYS = {'direct', 'openrouter'}
 SCOPES = {'global', 'empresa', 'report'}
-ROLES = {'main_agent', 'query_rewriter', 'skill_selector', 'complexity_classifier'}
-CONFIGURABLE_COMPONENTS = {'query_rewriter', 'skill_selector', 'complexity_classifier'}
+ROLES = {'main_agent', 'query_rewriter', 'skill_selector', 'complexity_classifier', 'report_writer'}
+CONFIGURABLE_COMPONENTS = {'query_rewriter', 'skill_selector', 'complexity_classifier', 'report_writer'}
 COMPONENT_STRATEGIES = {
     'query_rewriter': {'model', 'disabled'},
     'skill_selector': {'model', 'embeddings', 'jev', 'jev_with_llm_fallback'},
     'complexity_classifier': {'model', 'disabled'},
+    'report_writer': {'model', 'disabled'},
 }
 SECRET_OPTION_MARKERS = ('api_key', 'secret', 'token', 'authorization', 'password')
 MODEL_KEY_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')

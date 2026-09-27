@@ -17,6 +17,11 @@ from app.services.skill_router import normalize_pinned_skill_keys
 from app.services.observability import hash_identifier, start_observation, observation_preview
 
 
+def skipped_components(required_skill_keys) -> frozenset:
+    """Components the execution plan will not run, so preflight need not validate them."""
+    return frozenset({"skill_selector"}) if normalize_pinned_skill_keys(required_skill_keys) else frozenset()
+
+
 @dataclass
 class ExecutionContext:
     user_message: str
@@ -123,7 +128,8 @@ def configured_model_roles(settings, configuration=None):
 class KlaraExecutionService:
     def __init__(self, *, runtime=None, model_roles=None, query_rewriter=None, skill_selector=None,
                  complexity_classifier=None, policy_resolver=None, tool_registry=None,
-                 route_resolver=None, prompt_manager=None, classifier_timeout=2.0):
+                 route_resolver=None, prompt_manager=None, classifier_timeout=2.0,
+                 pinned_route_resolver=None):
         self.runtime = runtime or LiteLLMRuntime()
         self.model_roles = model_roles
         self.query_rewriter = query_rewriter
@@ -132,6 +138,7 @@ class KlaraExecutionService:
         self.policy_resolver = policy_resolver or StaticExecutionPolicyResolver()
         self.tool_registry = tool_registry
         self.route_resolver = route_resolver
+        self.pinned_route_resolver = pinned_route_resolver
         self.prompt_manager = prompt_manager
         self.classifier_timeout = classifier_timeout
 
@@ -258,7 +265,8 @@ class KlaraExecutionService:
             )
             agent = AgentOrchestrator(effective_settings, self.prompt_manager or PromptManager(settings.history_limit), registry,
                 runtime=self.runtime, model=main, cache_policy=policy.cache,
-                route_resolver=self.route_resolver or ExistingSkillRouter(selector, metrics))
+                route_resolver=self.route_resolver or ExistingSkillRouter(selector, metrics),
+                pinned_route_resolver=self.pinned_route_resolver)
             agent.metrics = metrics
             result = await agent.generate_response(
                 user_message=context.user_message, dataset_id=context.dataset_id, history=context.history,

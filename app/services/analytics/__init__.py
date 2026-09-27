@@ -12,6 +12,7 @@ from .contracts import (
     PreparedAnalyticsExecution,
 )
 from .engine import KlaraAnalyticsEngine, build_analytics_engine
+from .report_skills import ReportSkillCatalog, list_effective_skills_for_report
 
 __all__ = [
     "AnalyticsBillingLimitExceededError",
@@ -25,4 +26,6 @@ __all__ = [
     "PreparedAnalyticsExecution",
     "KlaraAnalyticsEngine",
     "build_analytics_engine",
+    "ReportSkillCatalog",
+    "list_effective_skills_for_report",
 ]
