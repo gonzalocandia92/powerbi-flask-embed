@@ -10,7 +10,7 @@ from typing import Annotated, Literal, Union
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SCHEMA_VERSION = "1.0"
+SCHEMA_VERSION = "1.1"
 
 MAX_KPIS = 8
 MAX_HIGHLIGHTS = 6
@@ -38,9 +38,18 @@ class ReportPeriod(_Strict):
     comparison_label: Annotated[str, Field(max_length=120)] | None = None
 
 
+class ReportHighlight(_Strict):
+    """One executive-summary bullet; provenance-bearing like KPIs and sections."""
+    text: ShortText
+    source_section_keys: SourceKeys = Field(default_factory=list)
+
+
 class ExecutiveSummary(_Strict):
     headline: ShortText
-    highlights: Annotated[list[ShortText], Field(max_length=MAX_HIGHLIGHTS)] = Field(default_factory=list)
+    # Optional: the headline is a synthesis and may legitimately span every
+    # successful section, so an empty list here is not itself a validation error.
+    headline_source_section_keys: SourceKeys = Field(default_factory=list)
+    highlights: Annotated[list[ReportHighlight], Field(max_length=MAX_HIGHLIGHTS)] = Field(default_factory=list)
 
 
 class ReportKPI(_Strict):
@@ -48,8 +57,11 @@ class ReportKPI(_Strict):
     label: ShortText
     value: Annotated[str, Field(min_length=1, max_length=80)]
     secondary_value: Annotated[str, Field(max_length=120)] | None = None
-    # Semantics only; the renderer decides how a trend looks.
+    # Semantics only; the renderer decides how these look.
+    # trend: direction of the change. impact: whether that direction is good news,
+    # bad news, or neither (e.g. trend=up + impact=negative for rising expenses).
     trend: Literal["up", "down", "stable", "neutral"] | None = None
+    impact: Literal["positive", "negative", "neutral"] | None = None
     source_section_keys: SourceKeys = Field(default_factory=list)
 
 
@@ -125,7 +137,7 @@ class ReportNote(_Strict):
 
 
 class FinalReport(_Strict):
-    schema_version: Literal["1.0"] = SCHEMA_VERSION
+    schema_version: Literal["1.1"] = SCHEMA_VERSION
     title: ShortText
     subtitle: Annotated[str, Field(max_length=300)] | None = None
     period: ReportPeriod = Field(default_factory=ReportPeriod)
@@ -143,11 +155,27 @@ class FinalReport(_Strict):
                 raise ValueError(f"{label} must have unique keys")
         return self
 
-    def referenced_source_keys(self) -> set[str]:
-        keys: set[str] = set()
-        for group in (self.kpis, self.sections, self.attention_points, self.notes):
+    def analytical_source_keys(self) -> set[str]:
+        """Sources for claims that assert an analytical result.
+
+        These must resolve to *successful* ReportDraft sections: a failed
+        section is not evidence for a KPI, a highlight, a section or an
+        attention point.
+        """
+        keys: set[str] = set(self.executive_summary.headline_source_section_keys)
+        for highlight in self.executive_summary.highlights:
+            keys.update(highlight.source_section_keys)
+        for group in (self.kpis, self.sections, self.attention_points):
             for item in group:
                 keys.update(item.source_section_keys)
+        return keys
+
+    def note_source_keys(self) -> set[str]:
+        """Sources for ``notes``: may point at a failed section (to say, neutrally,
+        that an analysis was unavailable) as well as at successful ones."""
+        keys: set[str] = set()
+        for note in self.notes:
+            keys.update(note.source_section_keys)
         return keys
 
 

@@ -12,11 +12,18 @@ from .final_report import (
     BulletListBlock, CalloutBlock, FinalReport, ParagraphBlock, ReportBlock, TableBlock,
 )
 
-_TREND = {  # semantic value -> (css class, glyph, accessible label)
-    "up": ("trend-up", "▲", "en alza"),
-    "down": ("trend-down", "▼", "en baja"),
-    "stable": ("trend-stable", "▬", "estable"),
-    "neutral": ("trend-neutral", "●", "sin tendencia"),
+# trend controls direction only (glyph + accessible label); it never implies a
+# color. impact controls the color/semantic style; it never implies a direction.
+_TREND_GLYPH = {
+    "up": ("▲", "en alza"),
+    "down": ("▼", "en baja"),
+    "stable": ("▬", "estable"),
+    "neutral": ("●", "sin tendencia"),
+}
+_IMPACT_STYLE = {
+    "positive": ("impact-positive", "favorable"),
+    "negative": ("impact-negative", "desfavorable"),
+    "neutral": ("impact-neutral", "neutro"),
 }
 _ATTENTION = {"high": ("attn-high", "Alta"), "medium": ("attn-medium", "Media"), "low": ("attn-low", "Baja")}
 _CALLOUT = {"info": "callout-info", "warning": "callout-warning", "critical": "callout-critical"}
@@ -45,8 +52,8 @@ ul{margin:0 0 12px;padding-left:22px}li{margin-bottom:6px}
 .kpi-value{font-size:1.6rem;font-weight:700;line-height:1.3}
 .kpi-secondary{font-size:.85rem;color:var(--muted)}
 .trend{display:inline-block;margin-top:4px;padding:1px 8px;border-radius:10px;font-size:.78rem;font-weight:600}
-.trend-up{color:var(--pos);background:var(--pos-bg)}.trend-down{color:var(--neg);background:var(--neg-bg)}
-.trend-stable,.trend-neutral{color:var(--neu);background:var(--neu-bg)}
+.impact-positive{color:var(--pos);background:var(--pos-bg)}.impact-negative{color:var(--neg);background:var(--neg-bg)}
+.impact-neutral{color:var(--neu);background:var(--neu-bg)}
 .section-summary{color:var(--ink);margin-bottom:14px}
 .table-wrap{overflow-x:auto;margin:0 0 16px}
 table{border-collapse:collapse;width:100%;font-size:.92rem}
@@ -109,7 +116,8 @@ class HtmlReportRenderer:
 
     def _summary(self, report: FinalReport) -> str:
         summary = report.executive_summary
-        items = "".join(f"<li>{_e(item)}</li>" for item in summary.highlights)
+        # Provenance (source_section_keys) is admin/debug data, kept out of the client HTML.
+        items = "".join(f"<li>{_e(item.text)}</li>" for item in summary.highlights)
         listing = f"<ul>{items}</ul>" if items else ""
         return f"<section><h2>Resumen ejecutivo</h2><p class=\"headline\">{_e(summary.headline)}</p>{listing}</section>"
 
@@ -121,8 +129,12 @@ class HtmlReportRenderer:
             secondary = f"<div class=\"kpi-secondary\">{_e(kpi.secondary_value)}</div>" if kpi.secondary_value else ""
             trend = ""
             if kpi.trend:
-                css, glyph, label = _TREND[kpi.trend]
-                trend = f"<span class=\"trend {css}\" title=\"{_e(label)}\"><span aria-hidden=\"true\">{glyph}</span> {_e(label)}</span>"
+                glyph, direction_label = _TREND_GLYPH[kpi.trend]
+                # Impact stays purely visual (color, via impact_css): the word
+                # "favorable"/"desfavorable" is deliberately not shown as text.
+                impact_css, _impact_label = _IMPACT_STYLE[kpi.impact or "neutral"]
+                trend = (f"<span class=\"trend {impact_css}\" title=\"{_e(direction_label)}\">"
+                        f"<span aria-hidden=\"true\">{glyph}</span> {_e(direction_label)}</span>")
             cards.append(f"<div class=\"kpi\"><div class=\"kpi-label\">{_e(kpi.label)}</div>"
                          f"<div class=\"kpi-value\">{_e(kpi.value)}</div>{secondary}{trend}</div>")
         return f"<section class=\"kpis\" aria-label=\"Indicadores destacados\">{''.join(cards)}</section>"

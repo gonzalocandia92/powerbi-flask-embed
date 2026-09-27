@@ -110,6 +110,7 @@ REGLAS DE CONTENIDO
 - No inventes números, fechas, sucursales, productos ni causas. No modifiques, redondees ni recalcules cifras: copiá los valores tal como aparecen (formato incluido, por ejemplo "$20.425.450" o "-3,45%"). No calcules sumas, promedios ni porcentajes nuevos.
 - Resumí sin perder información importante: no descartes cifras, variaciones ni anomalías relevantes de las respuestas.
 - Priorizá en el resumen ejecutivo: cambios relevantes, anomalías, estabilidad y puntos de atención. No repitas simplemente todas las secciones. Usá entre 3 y 6 highlights cuando haya material suficiente.
+- Cada highlight es {text, source_section_keys}: declará qué secciones exitosas lo respaldan. headline_source_section_keys es opcional; usalo cuando el titular resuma algo puntual, no cuando sintetice todo el informe.
 - Usá attention_points sólo cuando exista evidencia explícita en el draft. No exageres ni suavices la magnitud de los resultados.
 - Las tarjetas kpis deben ser pocas y relevantes; cada value debe ser una cifra literal del draft.
 - period: completá label/start/end/comparison_label sólo si surgen de las respuestas. Si no están respaldados, dejá null. Nunca inventes fechas.
@@ -124,9 +125,9 @@ REGLAS DE FORMATO
 - Escribí en español rioplatense neutro y profesional.
 - No incluyas HTML, Markdown, estilos, colores ni clases. Sólo texto plano en los campos de texto.
 - Las tablas deben ser estructuradas (columns + rows como objetos con las mismas keys de las columns). Nunca tablas en Markdown.
-- trend es semántico: "up", "down", "stable" o "neutral". No devuelvas colores.
+- trend describe la dirección del cambio ("up", "down", "stable", "neutral"). impact describe si esa dirección conviene al negocio ("positive", "negative", "neutral"): ventas en alza es trend=up + impact=positive, pero gastos o morosidad en alza es trend=up + impact=negative. Asigná impact sólo si el contexto del draft permite interpretarlo razonablemente; si no es claro, usá impact="neutral" o dejalo sin asignar. No inventes objetivos de negocio ni decidas que una métrica es buena o mala sin evidencia suficiente. Ninguno de los dos campos es un color: eso lo decide el renderer.
 - Bloques permitidos: paragraph, bullet_list, table, callout (severity info|warning|critical).
-- source_section_keys de cada KPI, sección, attention_point y nota deben contener sólo keys de secciones del ReportDraft que respalden ese contenido.
+- source_section_keys de kpis, highlights, headline_source_section_keys, sections y attention_points deben referenciar únicamente secciones con status "ok": una sección "failed" nunca respalda una afirmación analítica. En notes sí podés referenciar una sección "failed", pero sólo para señalar de forma neutra que ese análisis no estuvo disponible.
 - No incluyas DAX, consultas, nombres de skills, routing, tokens, modelos ni información de depuración.
 - Respondé únicamente con un objeto JSON válido que cumpla el schema. Sin texto adicional ni bloques de código.
 """
@@ -134,7 +135,7 @@ REGLAS DE FORMATO
 
 def build_system_prompt() -> str:
     schema = json.dumps(final_report_json_schema(), ensure_ascii=False, separators=(",", ":"))
-    return f"{_RULES}\nSCHEMA JSON DE SALIDA (FinalReport, schema_version \"1.0\"):\n{schema}\n"
+    return f"{_RULES}\nSCHEMA JSON DE SALIDA (FinalReport, schema_version \"1.1\"):\n{schema}\n"
 
 
 def compact_draft(draft: ReportDraft) -> dict[str, Any]:
@@ -173,10 +174,16 @@ def _clip(value: str) -> str:
     return value if len(value) <= MAX_ERROR_CHARS else value[:MAX_ERROR_CHARS] + "…"
 
 
-def parse_final_report(text: str, valid_section_keys: set[str]) -> tuple[FinalReport | None, list[str]]:
+def parse_final_report(
+    text: str, ok_section_keys: set[str], failed_section_keys: set[str] = frozenset(),
+) -> tuple[FinalReport | None, list[str]]:
     """Parse and validate writer output. Returns (report, []) or (None, schema errors).
 
-    Error strings never echo model-provided values, only paths and messages.
+    ``ok_section_keys`` are the ReportDraft's successful sections: the only valid
+    provenance for an analytical claim (kpis, highlights, sections, attention
+    points). ``failed_section_keys`` additionally validate ``notes``, which may
+    neutrally point at a failed section. Error strings never echo model-provided
+    values, only paths and messages.
     """
     try:
         data = json.loads(_strip_fences(text))
@@ -192,10 +199,18 @@ def parse_final_report(text: str, valid_section_keys: set[str]) -> tuple[FinalRe
             path = ".".join(str(part) for part in item.get("loc", ())) or "(raíz)"
             errors.append(_clip(f"{path}: {item.get('msg')}"))
         return None, errors
-    unknown = sorted(report.referenced_source_keys() - valid_section_keys)
-    if unknown:
-        return None, [_clip("source_section_keys referencia secciones inexistentes del ReportDraft: "
-                            + ", ".join(unknown[:20]) + ". Keys válidas: " + ", ".join(sorted(valid_section_keys)))]
+    unknown_analytical = sorted(report.analytical_source_keys() - ok_section_keys)
+    if unknown_analytical:
+        return None, [_clip(
+            "source_section_keys de kpis/highlights/headline/sections/attention_points debe referenciar sólo "
+            "secciones exitosas (status \"ok\") del ReportDraft. No son válidas: "
+            + ", ".join(unknown_analytical[:20]) + ". Secciones exitosas disponibles: "
+            + ", ".join(sorted(ok_section_keys)))]
+    all_keys = ok_section_keys | failed_section_keys
+    unknown_notes = sorted(report.note_source_keys() - all_keys)
+    if unknown_notes:
+        return None, [_clip("source_section_keys de notes referencia secciones inexistentes del ReportDraft: "
+                            + ", ".join(unknown_notes[:20]) + ". Keys válidas: " + ", ".join(sorted(all_keys)))]
     return report, []
 
 
@@ -271,14 +286,17 @@ class LLMReportWriter:
         payload = compact_draft(draft)
         if not any(item["status"] == "ok" for item in payload["sections"]):
             raise ReportWriterExecutionError("El ReportDraft no tiene secciones analíticas exitosas para redactar.")
-        valid_keys = {section.key for section in draft.sections}
+        # Analytical claims (kpis, highlights, sections, attention points) may only
+        # be sourced from successful sections; notes may also point at a failed one.
+        ok_keys = {section.key for section in draft.sections if not section.had_error}
+        failed_keys = {section.key for section in draft.sections if section.had_error}
         messages = [LLMMessage("user", json.dumps(payload, ensure_ascii=False))]
         with _stage_observation(draft):
             errors: list[str] = []
             for attempt in range(1, MAX_REPAIR_RETRIES + 2):
                 repair = attempt > 1
                 response, latency_ms = await self._generate(messages)
-                report, errors = parse_final_report(response.text, valid_keys)
+                report, errors = parse_final_report(response.text, ok_keys, failed_keys)
                 info = WriterAttempt(
                     attempt=attempt, repair=repair, valid=report is not None, model=self.model,
                     response=response, latency_ms=latency_ms, validation_errors=list(errors),
