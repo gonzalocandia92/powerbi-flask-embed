@@ -11,31 +11,6 @@
     color: #172033;
   }
 
-  .ai-tabs {
-    border-bottom: 1px solid #e5e9f0;
-  }
-
-  .ai-tabs .nav-link {
-    color: #687386;
-    border: 0;
-    border-bottom: 3px solid transparent;
-    border-radius: 0;
-    margin: 0 1.5rem 0 0;
-    padding: 0.8rem 0 !important;
-  }
-
-  .ai-tabs .nav-link:hover {
-    background: transparent;
-    color: #667eea;
-  }
-
-  .ai-tabs .nav-link.active {
-    background: transparent;
-    color: #667eea;
-    border-bottom-color: #667eea;
-    box-shadow: none;
-  }
-
   .config-panel {
     border: 1px solid #e5e9f0;
     border-radius: 14px;
@@ -285,31 +260,10 @@
 <div class="container-fluid ai-config-page">
   <div class="mb-4">
     <h1 class="page-title mb-1">Configuracion AI</h1>
-    <p class="text-muted mb-0">Administra limites, prompts del agente y precios de modelos sin redeploy.</p>
+    <p class="text-muted mb-0">Administra límites, modelos, componentes, evaluaciones, prompts y pricing sin redeploy.</p>
   </div>
 
-  <ul class="nav ai-tabs mb-4">
-    <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'limits' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='limits') }}">
-        <i class="bi bi-speedometer2 me-1"></i>Limites de consumo
-      </a>
-    </li>
-    <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'pricing' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='pricing') }}">
-        <i class="bi bi-tags me-1"></i>Pricing de modelos
-      </a>
-    </li>
-    <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'prompts' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='prompts') }}">
-        <i class="bi bi-chat-square-text me-1"></i>Prompts del agente
-      </a>
-    </li>
-    <li class="nav-item">
-      <a class="nav-link {% if active_tab == 'skills' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='skills') }}">
-        <i class="bi bi-diagram-3 me-1"></i>Skills analiticas
-      </a>
-    </li>
-  </ul>
+  {% include "admin/ai_config/_navigation.html" %}
 
   {% if active_tab == 'limits' %}
   <div class="card config-panel mb-4">
@@ -406,6 +360,31 @@
     </div>
   </div>
   {% elif active_tab == 'pricing' %}
+  {% if pending_usage_count %}
+  <div class="alert alert-warning" role="status">
+    <strong>{{ pending_usage_count }} evento{{ '' if pending_usage_count == 1 else 's' }} pendiente{{ '' if pending_usage_count == 1 else 's' }} de conciliación.</strong>
+    Su importe no está confirmado; la reserva estimada cuenta para el límite.
+  </div>
+  <div class="card config-panel mb-4">
+    <div class="card-header"><h5 class="mb-0">Uso pendiente de conciliación</h5></div>
+    <div class="table-responsive">
+      <table class="table config-table align-middle mb-0">
+        <thead><tr><th>Fecha</th><th>Evento</th><th>Modelo</th><th>Motivo</th><th class="text-end">Reserva USD</th></tr></thead>
+        <tbody>
+          {% for event in pending_usage %}
+          <tr>
+            <td>{{ event.created_at.strftime('%d/%m/%Y %H:%M UTC') }}</td>
+            <td>{{ event.id }}</td>
+            <td>{{ event.actual_model or event.model }}</td>
+            <td>{{ (event.metadata_json or {}).get('billing_pending_reason', 'Pendiente') }}</td>
+            <td class="text-end">{{ '%.6f'|format(event.reserved_cost_usd or 0) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
   <div class="card config-panel">
     <div class="card-header">
       <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
@@ -421,7 +400,11 @@
           <tr>
             <th>Proveedor</th>
             <th>Modelo</th>
+            <th>Gateway</th>
             <th>Tipo de evento</th>
+            <th>Service tier</th>
+            <th>Pricing tier</th>
+            <th>Contexto</th>
             <th class="text-end">Input / 1M</th>
             <th class="text-end">Output / 1M</th>
             <th class="text-end">Cache write / 1M</th>
@@ -435,7 +418,8 @@
           {% for pricing in pricings %}
           <tr>
             <td class="text-capitalize">{{ pricing.provider }}</td>
-            <td class="fw-semibold">{{ pricing.model }}</td>
+            <td class="fw-semibold">{{ pricing.model }}<br><small class="text-muted">Tarifa #{{ pricing.id }}</small>{% if pricing.source_url %}<br><a href="{{ pricing.source_url }}" target="_blank" rel="noopener noreferrer" class="small">Fuente</a>{% endif %}</td>
+            <td>{{ pricing.gateway or 'histórico' }}</td>
             <td>
               {% if pricing.event_type == 'generation' %}
                 Chat / Generacion
@@ -447,11 +431,14 @@
                 {{ pricing.event_type }}
               {% endif %}
             </td>
+            <td>{{ pricing.service_tier or 'default' }}</td>
+            <td>{{ pricing.pricing_tier or 'default' }}</td>
+            <td>{{ pricing.context_band or '—' }}</td>
             <td class="text-end">{{ '%.4f'|format(pricing.input_cost_per_million_usd or 0) }}</td>
             <td class="text-end">{{ '%.4f'|format(pricing.output_cost_per_million_usd or 0) }}</td>
             <td class="text-end">{{ '%.4f'|format(pricing.cache_write_cost_per_million_usd or 0) }}</td>
             <td class="text-end">{{ '%.4f'|format(pricing.cache_read_cost_per_million_usd or 0) }}</td>
-            <td>{{ pricing.effective_from.strftime('%d/%m/%Y') }}</td>
+            <td>{{ pricing.effective_from.strftime('%d/%m/%Y') }}{% if pricing.effective_to %}<br><small>hasta {{ pricing.effective_to.strftime('%d/%m/%Y') }}</small>{% endif %}</td>
             <td>
               <span class="badge {{ 'bg-success' if pricing.is_active else 'bg-secondary' }}">
                 {{ 'Activo' if pricing.is_active else 'Inactivo' }}
@@ -470,7 +457,7 @@
           </tr>
           {% else %}
           <tr>
-            <td colspan="10" class="text-center text-muted py-5">No hay pricings configurados.</td>
+            <td colspan="14" class="text-center text-muted py-5">No hay pricings configurados.</td>
           </tr>
           {% endfor %}
         </tbody>

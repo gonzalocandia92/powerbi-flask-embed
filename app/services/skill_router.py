@@ -10,8 +10,10 @@ from typing import Any, Dict, List, Optional
 
 from flask import has_app_context
 
+from app import db
 from app.models import AnalyticsSkill
 from app.services.observability import hash_identifier, observation_preview, start_observation
+from app.services.semantic_notes import collect_semantic_notes
 from app.services.skill_catalog import (
     SkillScopeContext,
     list_effective_skills,
@@ -19,6 +21,17 @@ from app.services.skill_catalog import (
     unknown_skill_keys,
 )
 from app.services.skill_vector_service import VOYAGE_SKILL_MODEL, build_skill_routing_document, search_skill_candidates
+
+from app.services.llm import (
+    CachePolicy,
+    LLMMessage,
+    LLMRequest,
+    LiteLLMRuntime,
+    ModelConfig,
+    ToolDefinition,
+    provider_error_type,
+    safe_error_metadata,
+)
 
 LOG = logging.getLogger(__name__)
 
@@ -69,6 +82,10 @@ class SkillRouterSettings:
     selector_model: str = "claude-haiku-4-5-20251001"
     selector_candidate_limit: int = 8
     selector_confidence_threshold: float = 0.70
+    jev_model: str = "jev-latest"
+    jev_threshold: float = 0.60
+    jev_no_match_threshold: float = 0.60
+    jev_timeout_seconds: int = 10
     hard_enforcement_enabled: bool = False
     hard_score_threshold: float = 0.78
     hard_margin_threshold: float = 0.12
@@ -114,11 +131,26 @@ class RouteDecision:
     selector_mode: Optional[str] = None
     selector_reason: Optional[str] = None
     selector_no_skill_match: Optional[bool] = None
+    selector_status: Optional[str] = None
+    selector_error_type: Optional[str] = None
+    selector_recoverable: Optional[bool] = None
+    selector_failure_scope: Optional[str] = None
+    selector_details: Dict[str, Any] = field(default_factory=dict)
     decision_source: Optional[str] = None
     required_companion_skill_keys: List[str] = field(default_factory=list)
     resolved_companion_skill_ids: List[int] = field(default_factory=list)
     resolved_companion_skill_keys: List[str] = field(default_factory=list)
     missing_companion_skill_keys: List[str] = field(default_factory=list)
+    # "dynamic" = embeddings + selector; "pinned" = fixed by the caller (no selector).
+    route_source: str = "dynamic"
+    pinned_skill_keys: List[str] = field(default_factory=list)
+
+    def semantic_notes(self) -> List[str]:
+        """Curated notes of the skills that actually took part in this route."""
+        try:
+            return collect_semantic_notes(skill.metadata for skill in self.selected_skills)
+        except Exception:  # Auxiliary metadata must never break an execution.
+            return []
 
     def to_metadata(self) -> Dict[str, Any]:
         return {
@@ -145,11 +177,19 @@ class RouteDecision:
             "selector_mode": self.selector_mode,
             "selector_reason": self.selector_reason,
             "selector_no_skill_match": self.selector_no_skill_match,
+            "selector_status": self.selector_status,
+            "selector_error_type": self.selector_error_type,
+            "selector_recoverable": self.selector_recoverable,
+            "selector_failure_scope": self.selector_failure_scope,
+            "selector_details": dict(self.selector_details),
             "decision_source": self.decision_source,
             "required_companion_skill_keys": list(self.required_companion_skill_keys),
             "resolved_companion_skill_ids": list(self.resolved_companion_skill_ids),
             "resolved_companion_skill_keys": list(self.resolved_companion_skill_keys),
             "missing_companion_skill_keys": list(self.missing_companion_skill_keys),
+            "skill_route_source": self.route_source,
+            "pinned_skill_keys": list(self.pinned_skill_keys),
+            "resolved_skill_keys": [skill.skill_key for skill in self.selected_skills],
         }
 
 
@@ -162,6 +202,10 @@ class SkillSelectorDecision:
     no_skill_match: Optional[bool] = False
     status: str = "success"
     error_type: Optional[str] = None
+    recoverable: Optional[bool] = None
+    failure_scope: Optional[str] = None
+    source: Optional[str] = None
+    details: Dict[str, Any] = field(default_factory=dict)
 
     def to_metadata(self) -> Dict[str, Any]:
         return {
@@ -172,6 +216,10 @@ class SkillSelectorDecision:
             "no_skill_match": self.no_skill_match,
             "status": self.status,
             "error_type": self.error_type,
+            "recoverable": self.recoverable,
+            "failure_scope": self.failure_scope,
+            "source": self.source,
+            "details": dict(self.details),
         }
 
 
@@ -215,6 +263,12 @@ def build_skill_router_settings(config: Optional[Dict[str, Any]] = None) -> Skil
             _cfg(config, "SKILL_ROUTER_SELECTOR_CONFIDENCE_THRESHOLD", "0.70"),
             0.70,
         ),
+        jev_model=str(_cfg(config, "SKILL_ROUTER_JEV_MODEL", "jev-latest") or "jev-latest"),
+        jev_threshold=_parse_float(_cfg(config, "SKILL_ROUTER_JEV_THRESHOLD", "0.60"), 0.60),
+        jev_no_match_threshold=_parse_float(
+            _cfg(config, "SKILL_ROUTER_JEV_NO_MATCH_THRESHOLD", "0.60"), 0.60,
+        ),
+        jev_timeout_seconds=_parse_int(_cfg(config, "SKILL_ROUTER_JEV_TIMEOUT_SECONDS", "10"), 10),
         hard_enforcement_enabled=_parse_bool(
             _cfg(config, "SKILL_ROUTER_HARD_ENFORCEMENT_ENABLED", "false"),
             default=False,
@@ -258,51 +312,6 @@ def _score(candidate: Dict[str, Any]) -> float:
     if vector_similarity is not None:
         return float(vector_similarity)
     return 0.0
-
-
-def _usage_metric(usage: Any, field_name: str) -> int:
-    if usage is None:
-        return 0
-    value = getattr(usage, field_name, None)
-    if value is None and isinstance(usage, dict):
-        value = usage.get(field_name)
-    try:
-        return int(value or 0)
-    except (TypeError, ValueError):
-        return 0
-
-
-def _anthropic_usage_metrics(usage: Any) -> Dict[str, int]:
-    return {
-        "input_tokens": _usage_metric(usage, "input_tokens"),
-        "output_tokens": _usage_metric(usage, "output_tokens"),
-        "cache_write_tokens": _usage_metric(usage, "cache_creation_input_tokens"),
-        "cache_read_tokens": _usage_metric(usage, "cache_read_input_tokens"),
-    }
-
-
-def _anthropic_cost_details(model: str, usage_metrics: Dict[str, int]) -> Optional[Dict[str, float]]:
-    try:
-        from app.services import ai_billing
-
-        pricing = ai_billing.resolve_pricing(provider="anthropic", model=model, event_type="generation")
-        costs = ai_billing.calculate_cost_breakdown(
-            pricing,
-            input_tokens=usage_metrics["input_tokens"],
-            output_tokens=usage_metrics["output_tokens"],
-            cache_write_tokens=usage_metrics["cache_write_tokens"],
-            cache_read_tokens=usage_metrics["cache_read_tokens"],
-        )
-    except Exception:
-        return None
-
-    return {
-        "input": float(costs["input_cost_usd"] or 0.0),
-        "output": float(costs["output_cost_usd"] or 0.0),
-        "cache_creation_input_tokens": float(costs["cache_write_cost_usd"] or 0.0),
-        "cache_read_input_tokens": float(costs["cache_read_cost_usd"] or 0.0),
-        "total": float(costs["total_cost_usd"] or 0.0),
-    }
 
 
 def _unique_strings(values: List[str]) -> List[str]:
@@ -582,6 +591,11 @@ def _apply_route_metadata(
         decision.selector_confidence = selector_decision.confidence
         decision.selector_reason = selector_decision.reason
         decision.selector_no_skill_match = selector_decision.no_skill_match
+        decision.selector_status = selector_decision.status
+        decision.selector_error_type = selector_decision.error_type
+        decision.selector_recoverable = selector_decision.recoverable
+        decision.selector_failure_scope = selector_decision.failure_scope
+        decision.selector_details = dict(selector_decision.details)
     return decision
 
 
@@ -622,43 +636,37 @@ def _parse_selector_payload(payload: Any, valid_skill_ids: set[int]) -> SkillSel
     )
 
 
-def _extract_selector_tool_input(response: Any) -> Optional[Dict[str, Any]]:
-    for block in getattr(response, "content", []) or []:
-        block_type = getattr(block, "type", None)
-        if block_type is None and isinstance(block, dict):
-            block_type = block.get("type")
-        if block_type != "tool_use":
-            continue
-        name = getattr(block, "name", None)
-        if name is None and isinstance(block, dict):
-            name = block.get("name")
-        if name != "submit_skill_selection":
-            continue
-        tool_input = getattr(block, "input", None)
-        if tool_input is None and isinstance(block, dict):
-            tool_input = block.get("input")
-        if isinstance(tool_input, dict):
-            return tool_input
-    return None
-
-
-def _extract_response_text(response: Any) -> str:
-    parts: List[str] = []
-    for block in getattr(response, "content", []) or []:
-        text = getattr(block, "text", None)
-        if text is None and isinstance(block, dict):
-            text = block.get("text")
-        if text:
-            parts.append(str(text))
-    return "\n".join(parts).strip()
-
-
 def _selector_error_decision(error_type: str, reason: str = "") -> SkillSelectorDecision:
     return SkillSelectorDecision(
         status="error",
         error_type=error_type,
         reason=reason[:1000],
         no_skill_match=None,
+        recoverable=True,
+        failure_scope="secondary_component",
+    )
+
+
+def _select_embedding_skill_candidates(
+    *,
+    candidates: List[Dict[str, Any]],
+    settings: SkillRouterSettings,
+) -> SkillSelectorDecision:
+    """Apply the vector-routing policy through the selector contract."""
+    vector_decision = _build_decision(candidates=candidates, settings=settings)
+    selected_skill_ids = [skill.skill_id for skill in vector_decision.selected_skills]
+    selected_skill_id_set = set(selected_skill_ids)
+    rejected_skill_ids = [
+        int(candidate["skill"].id)
+        for candidate in candidates
+        if int(candidate["skill"].id) not in selected_skill_id_set
+    ]
+    return SkillSelectorDecision(
+        selected_skill_ids=selected_skill_ids,
+        rejected_skill_ids=rejected_skill_ids,
+        confidence=vector_decision.confidence,
+        reason=vector_decision.fallback_reason or "vector_similarity_ranking",
+        no_skill_match=not selected_skill_ids,
     )
 
 
@@ -669,19 +677,23 @@ async def _select_skill_candidates(
     settings: SkillRouterSettings,
     usage_totals: Optional[Dict[str, int]] = None,
     ai_usage_events: Optional[List[Dict[str, Any]]] = None,
+    runtime=None,
+    model=None,
+    cache_policy=None,
 ) -> SkillSelectorDecision:
     """Ask a small LLM selector to choose from already-authorized candidates."""
     if not candidates:
         return SkillSelectorDecision(no_skill_match=True, reason="No candidates available")
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
-    if not api_key:
-        return _selector_error_decision("missing_anthropic_api_key", "ANTHROPIC_API_KEY is required")
-
-    try:
-        from anthropic import AsyncAnthropic  # type: ignore
-    except ImportError:
-        return _selector_error_decision("missing_anthropic_package", "The anthropic package is not available")
+    provider = model.provider if model is not None else "anthropic"
+    api_key = model.api_key if model is not None else os.getenv("ANTHROPIC_API_KEY")
+    if not api_key and runtime is None:
+        return _selector_error_decision(
+            provider_error_type(provider, "missing_api_key"),
+            f"{provider.upper()} API key is required",
+        )
+    runtime = runtime or LiteLLMRuntime()
+    model = model or ModelConfig("skill_selector", settings.selector_model, max_output_tokens=500, api_key=api_key)
 
     cards = [build_skill_selector_card(candidate["skill"]) for candidate in candidates]
     valid_skill_ids = {int(card["skill_id"]) for card in cards}
@@ -694,7 +706,7 @@ async def _select_skill_candidates(
     tool_schema = {
         "name": "submit_skill_selection",
         "description": "Devuelve la seleccion final de skills para la pregunta.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "selected_skill_ids": {"type": "array", "items": {"type": "integer"}},
@@ -715,42 +727,33 @@ async def _select_skill_candidates(
 
     with start_observation(
         name="select-skill-candidates",
-        as_type="generation",
+        as_type="chain",
         input=selector_input,
         model=settings.selector_model,
     ) as observation:
         try:
-            async with AsyncAnthropic(api_key=api_key) as client:
-                response = await asyncio.wait_for(
-                    client.messages.create(
-                        model=settings.selector_model,
-                        max_tokens=500,
-                        extra_body={"temperature": 0.0},
-                        system=system_prompt,
-                        messages=[
-                            {
-                                "role": "user",
-                                "content": json.dumps(selector_input, ensure_ascii=False),
-                            }
-                        ],
-                        tools=[tool_schema],
-                        tool_choice={"type": "tool", "name": "submit_skill_selection"},
-                    ),
-                    timeout=max(1, settings.timeout_seconds),
-                )
-            payload = _extract_selector_tool_input(response)
+            response = await asyncio.wait_for(
+                runtime.generate(LLMRequest(
+                    model=model, instructions=[{"text": system_prompt}],
+                    messages=[LLMMessage("user", json.dumps(selector_input, ensure_ascii=False))],
+                    tools=[ToolDefinition(**tool_schema)], tool_choice="submit_skill_selection",
+                    cache=cache_policy or CachePolicy(),
+                    temperature=0.0, operation="skill-selection-generation",
+                )), timeout=max(1, settings.timeout_seconds),
+            )
+            payload = next((call.arguments for call in response.tool_calls if call.name == "submit_skill_selection"), None)
             if payload is None:
-                payload = json.loads(_extract_response_text(response))
+                payload = json.loads(response.text)
             decision = _parse_selector_payload(payload, valid_skill_ids)
-            usage_metrics = _anthropic_usage_metrics(getattr(response, "usage", None))
+            usage_metrics = response.usage.ledger_fields()
             if usage_totals is not None:
                 usage_totals["input_tokens"] = int(usage_totals.get("input_tokens", 0)) + usage_metrics["input_tokens"]
                 usage_totals["output_tokens"] = int(usage_totals.get("output_tokens", 0)) + usage_metrics["output_tokens"]
             if ai_usage_events is not None:
                 ai_usage_events.append(
                     {
-                        "provider": "anthropic",
-                        "model": settings.selector_model,
+                        "provider": model.provider,
+                        "model": model.physical_model,
                         "event_type": "generation",
                         "source_type": "skill_router_selector",
                         "trigger_type": "user_request",
@@ -762,6 +765,13 @@ async def _select_skill_candidates(
                         "cache_write_tokens": usage_metrics["cache_write_tokens"],
                         "cache_read_tokens": usage_metrics["cache_read_tokens"],
                         "metadata_json": {
+                            "component": "skill_selector",
+                            "normalized_usage": response.usage.metadata(),
+                            "actual_model": response.model,
+                            **model.metadata(),
+                            "actual_service_tier": response.actual_service_tier,
+                            "pricing_quote": response.pricing_quote,
+                            **response.thinking_decision,
                             "selector_mode": settings.selector_mode,
                             "candidate_count": len(candidates),
                             **decision.to_metadata(),
@@ -769,28 +779,30 @@ async def _select_skill_candidates(
                     }
                 )
             if observation is not None:
-                update_payload = {
-                    "output": decision.to_metadata(),
-                    "usage_details": {
-                        "input": usage_metrics["input_tokens"],
-                        "output": usage_metrics["output_tokens"],
-                    },
-                }
-                cost_details = _anthropic_cost_details(settings.selector_model, usage_metrics)
-                if cost_details is not None:
-                    update_payload["cost_details"] = cost_details
-                observation.update(**update_payload)
+                # Usage and cost belong to the runtime's single generation observation.
+                observation.update(output=decision.to_metadata())
             return decision
         except Exception as exc:
-            LOG.exception("[SkillRouter] LLM skill selector failed")
+            error_metadata = safe_error_metadata(
+                exc,
+                provider=model.provider,
+                recoverable=True,
+                failure_scope="secondary_component",
+            )
+            LOG.warning(
+                "[SkillRouter] LLM skill selector failed provider=%s error_type=%s http_status=%s",
+                model.provider,
+                error_metadata["error_type"],
+                error_metadata.get("provider_http_status"),
+            )
             estimated_tokens = _estimate_tokens(system_prompt + json.dumps(selector_input, ensure_ascii=False))
             if usage_totals is not None:
                 usage_totals["input_tokens"] = int(usage_totals.get("input_tokens", 0)) + estimated_tokens
             if ai_usage_events is not None:
                 ai_usage_events.append(
                     {
-                        "provider": "anthropic",
-                        "model": settings.selector_model,
+                        "provider": model.provider,
+                        "model": model.physical_model,
                         "event_type": "generation",
                         "source_type": "skill_router_selector",
                         "trigger_type": "user_request",
@@ -800,14 +812,21 @@ async def _select_skill_candidates(
                         "output_tokens": 0,
                         "total_tokens": estimated_tokens,
                         "metadata_json": {
+                            "component": "skill_selector",
+                            **model.metadata(),
                             "selector_mode": settings.selector_mode,
                             "candidate_count": len(candidates),
                             "estimated_usage": True,
-                            "error_type": "anthropic_provider_error",
+                            "billable": False,
+                            "usage_accounting": "diagnostic_estimate",
+                            **error_metadata,
                         },
                     }
                 )
-            error_decision = _selector_error_decision("anthropic_provider_error", repr(exc))
+            error_decision = _selector_error_decision(
+                error_metadata["error_type"],
+                "Secondary model unavailable; vector routing fallback applied",
+            )
             if observation is not None:
                 observation.update(output=error_decision.to_metadata())
             return error_decision
@@ -841,6 +860,7 @@ def _append_rerank_usage_event(
                 "output_tokens": 0,
                 "total_tokens": total_tokens,
                 "metadata_json": {
+                    "component": "skill_router",
                     "router_mode": router_mode,
                     "candidate_count": candidate_count,
                     "document_count": int(getattr(usage, "document_count", 0) or candidate_count),
@@ -971,8 +991,10 @@ def _build_selector_decision(
     selector_decision: SkillSelectorDecision,
     settings: SkillRouterSettings,
 ) -> RouteDecision:
-    selected_ids = set(selector_decision.selected_skill_ids[: settings.max_selected_skills])
-    selected_candidates = [candidate for candidate in candidates if int(candidate["skill"].id) in selected_ids]
+    candidate_by_id = {int(candidate["skill"].id): candidate for candidate in candidates}
+    selected_candidates = [candidate_by_id[skill_id]
+                           for skill_id in selector_decision.selected_skill_ids[: settings.max_selected_skills]
+                           if skill_id in candidate_by_id]
     if not selected_candidates:
         return RouteDecision(
             strategy="no_skill_match",
@@ -1018,6 +1040,103 @@ def _build_selector_decision(
     )
 
 
+class PinnedSkillUnavailableError(Exception):
+    """A pinned skill is missing, inactive or not effective for the report scope.
+
+    There is deliberately no fallback to the dynamic selector: pinning exists
+    for reproducibility, so answering with a different skill would defeat it.
+    """
+
+    def __init__(self, unavailable: List[Dict[str, str]], pinned_skill_keys: List[str]):
+        self.unavailable = [dict(item) for item in unavailable]
+        self.pinned_skill_keys = list(pinned_skill_keys)
+        detail = ", ".join(f"{item['skill_key']} ({item['reason']})" for item in self.unavailable)
+        super().__init__(f"Pinned skill unavailable: {detail}")
+
+
+def normalize_pinned_skill_keys(values: Any) -> List[str]:
+    """Trim, drop blanks/non-strings and dedupe (case-insensitively) keeping order."""
+    if not isinstance(values, (list, tuple)):
+        return []
+    keys: List[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        key = value.strip()
+        if key and key.casefold() not in seen:
+            seen.add(key.casefold())
+            keys.append(key)
+    return keys
+
+
+def _pinned_unavailable_reason(skill_key: str) -> str:
+    rows = AnalyticsSkill.query.filter(
+        db.func.lower(AnalyticsSkill.skill_key) == skill_key.casefold()
+    ).all()
+    if not rows:
+        return "not_found"
+    if not any(row.is_active for row in rows):
+        return "inactive"
+    return "not_effective_for_report"
+
+
+def resolve_pinned_skill_route_sync(
+    *,
+    required_skill_keys: List[str],
+    report_id: Optional[int],
+    empresa_id: Optional[int],
+    dataset_id: Optional[str],
+    settings: Optional[SkillRouterSettings] = None,
+) -> RouteDecision:
+    """Build a RouteDecision from explicitly pinned skills.
+
+    Skills are validated against the effective catalog of the report
+    (report > dataset > empresa > global, active only) and then go through the
+    same context assembly and companion expansion as dynamically selected
+    skills. No embedding, candidate search or selector is involved.
+    """
+    keys = normalize_pinned_skill_keys(required_skill_keys)
+    if not keys:
+        raise ValueError("required_skill_keys must contain at least one skill key")
+    scope_context = SkillScopeContext(report_id=report_id, empresa_id=empresa_id, dataset_id=dataset_id)
+    effective = list_effective_skills(scope_context, skill_keys=keys)
+    by_key = {str(skill.skill_key or "").casefold(): skill for skill in effective}
+    unavailable = [
+        {"skill_key": key, "reason": _pinned_unavailable_reason(key)}
+        for key in keys if key.casefold() not in by_key
+    ]
+    if unavailable:
+        raise PinnedSkillUnavailableError(unavailable, keys)
+
+    router_settings = settings or build_skill_router_settings()
+    decision = RouteDecision(strategy="soft_route", confidence=1.0)
+    selected_ids: set[int] = set()
+    for key in keys:
+        _append_candidate_context(decision, _candidate_from_skill(by_key[key.casefold()]), selected_skill_ids=selected_ids)
+    first = decision.selected_skills[0]
+    is_hard = (
+        router_settings.hard_enforcement_enabled
+        and all(bool(skill.metadata) for skill in decision.selected_skills)
+        and str(first.enforcement_mode or "soft").strip().lower() in {"hard", "hard_candidate"}
+    )
+    decision.strategy = "hard_route" if is_hard else "soft_route"
+    decision.is_hard_route = is_hard
+    pinned_display = [skill.skill_key for skill in decision.selected_skills]
+    decision = _expand_required_companions(
+        decision, report_id=report_id, empresa_id=empresa_id, dataset_id=dataset_id,
+    )
+    decision.route_source = "pinned"
+    decision.decision_source = "pinned"
+    decision.pinned_skill_keys = pinned_display
+    return decision
+
+
+async def resolve_pinned_skill_route(**kwargs) -> RouteDecision:
+    """Async wrapper: catalog lookups are blocking database work."""
+    return await asyncio.to_thread(resolve_pinned_skill_route_sync, **kwargs)
+
+
 async def resolve_skill_route(
     *,
     user_message: str,
@@ -1029,6 +1148,7 @@ async def resolve_skill_route(
     ai_usage_events: Optional[List[Dict[str, Any]]] = None,
     candidate_skill_keys: Optional[List[str]] = None,
     force_enabled: bool = False,
+    selector=None,
 ) -> RouteDecision:
     """Resolve a route from the original user message without interrupting chat."""
     router_settings = settings or build_skill_router_settings()
@@ -1103,7 +1223,7 @@ async def resolve_skill_route(
                             "input_tokens": total_tokens,
                             "output_tokens": 0,
                             "total_tokens": total_tokens,
-                            "metadata_json": {"input_type": "query", "router_mode": router_settings.mode},
+                            "metadata_json": {"component": "skill_router", "input_type": "query", "router_mode": router_settings.mode},
                         }
                     )
                 if embedding_observation is not None:
@@ -1130,6 +1250,7 @@ async def resolve_skill_route(
                         "output_tokens": 0,
                         "total_tokens": estimated_tokens,
                         "metadata_json": {
+                            "component": "skill_router",
                             "input_type": "query",
                             "router_mode": router_settings.mode,
                             "estimated_usage": True,
@@ -1143,8 +1264,10 @@ async def resolve_skill_route(
             return decision
 
         try:
+            selector_requested = selector is not None or router_settings.selector_enabled
+            selector_is_embedding = getattr(selector, "strategy", None) == "embeddings"
             search_limit = router_settings.candidate_limit
-            if router_settings.selector_enabled:
+            if selector_requested and not selector_is_embedding:
                 search_limit = max(search_limit, router_settings.selector_candidate_limit)
             with start_observation(name="search-skill-candidates", as_type="retriever") as search_observation:
                 candidates = await asyncio.to_thread(
@@ -1160,6 +1283,7 @@ async def resolve_skill_route(
                     search_observation.update(output={"candidate_count": len(candidates)})
             vector_candidates = _dedupe_by_skill_key(candidates[: router_settings.candidate_limit])
             selector_candidates = _dedupe_by_skill_key(candidates[: router_settings.selector_candidate_limit])
+            selection_candidates = vector_candidates if selector_is_embedding else selector_candidates
             rerank_failed = False
             if router_settings.rerank_enabled and vector_candidates:
                 with start_observation(name="rerank-skill-candidates", as_type="reranker") as rerank_observation:
@@ -1193,15 +1317,41 @@ async def resolve_skill_route(
             selector_decision: Optional[SkillSelectorDecision] = None
             decision = vector_decision
             decision_source = "vector" if vector_decision.selected_skills else "none"
-            if router_settings.selector_enabled and selector_candidates:
-                selector_decision = await _select_skill_candidates(
-                    user_message=user_message,
-                    candidates=selector_candidates,
-                    settings=router_settings,
-                    usage_totals=usage_totals,
-                    ai_usage_events=ai_usage_events,
-                )
-                if router_settings.selector_mode == "active":
+            if selector_requested and selection_candidates:
+                if selector is None:
+                    selector_decision = await _select_skill_candidates(
+                        user_message=user_message,
+                        candidates=selection_candidates,
+                        settings=router_settings,
+                        usage_totals=usage_totals,
+                        ai_usage_events=ai_usage_events,
+                    )
+                else:
+                    try:
+                        selector_timeout = max(1, router_settings.timeout_seconds)
+                        if getattr(selector, "strategy", None) == "jev_with_llm_fallback":
+                            selector_timeout += max(1, router_settings.jev_timeout_seconds) + 1
+                        selector_decision = await asyncio.wait_for(selector.select(
+                            user_message, selection_candidates, {"settings": router_settings,
+                                "usage_totals": usage_totals, "ai_usage_events": ai_usage_events}),
+                            timeout=selector_timeout)
+                        valid_ids = {int(c["skill"].id) for c in selection_candidates}
+                        if not set(selector_decision.selected_skill_ids).issubset(valid_ids):
+                            raise ValueError("Selector returned IDs outside the candidate set")
+                        if not 0 <= selector_decision.confidence <= 1:
+                            raise ValueError("Selector returned invalid confidence")
+                    except Exception:
+                        selector_decision = _selector_error_decision("selector_failure")
+                if selector_is_embedding:
+                    # Keep vector routing's enforcement and threshold semantics,
+                    # while using the same selector contract and observability as
+                    # model-based strategies.
+                    decision = _build_decision(
+                        candidates=selection_candidates,
+                        settings=router_settings,
+                    )
+                    decision_source = "vector" if decision.selected_skills else "none"
+                elif router_settings.selector_mode == "active":
                     if selector_decision.status == "error":
                         # Candidate retrieval is intentionally broad. If the final
                         # selector is unavailable, inject only the strongest vector
@@ -1223,7 +1373,8 @@ async def resolve_skill_route(
                             fallback_reason="selector_no_skill_match",
                         )
                         decision_source = "none"
-                    elif selector_decision.confidence < router_settings.selector_confidence_threshold:
+                    elif (selector_decision.source != "jev"
+                          and selector_decision.confidence < router_settings.selector_confidence_threshold):
                         decision = RouteDecision(
                             strategy="no_skill_match",
                             confidence=selector_decision.confidence,
@@ -1232,11 +1383,15 @@ async def resolve_skill_route(
                         decision_source = "none"
                     else:
                         decision = _build_selector_decision(
-                            candidates=selector_candidates,
+                            candidates=selection_candidates,
                             selector_decision=selector_decision,
                             settings=router_settings,
                         )
-                        decision_source = "llm_selector" if decision.selected_skills else "none"
+                        decision_source = (
+                            selector_decision.source or "llm_selector"
+                        ) if decision.selected_skills else "none"
+                        if selector_decision.details.get("fallback_used"):
+                            decision.fallback_reason = "jev_failed_used_llm_selector"
             decision = _expand_required_companions(
                 decision,
                 report_id=report_id,
@@ -1245,9 +1400,9 @@ async def resolve_skill_route(
             )
             decision = _apply_route_metadata(
                 decision,
-                candidates=selector_candidates if router_settings.selector_enabled else vector_candidates,
+                candidates=selection_candidates if selector_requested else vector_candidates,
                 selector_decision=selector_decision,
-                selector_mode=router_settings.selector_mode if router_settings.selector_enabled else None,
+                selector_mode=router_settings.selector_mode if selector_requested else None,
                 decision_source=decision_source,
             )
             if observation is not None:
@@ -1255,7 +1410,7 @@ async def resolve_skill_route(
                     output={
                         **decision.to_metadata(),
                         "candidate_count": len(
-                            selector_candidates if router_settings.selector_enabled else vector_candidates
+                            selection_candidates if selector_requested else vector_candidates
                         ),
                         "rerank_scores": [
                             round(float(candidate.get("rerank_score") or 0.0), 4)

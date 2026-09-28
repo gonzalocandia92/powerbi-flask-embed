@@ -37,25 +37,47 @@
             {{ form.event_type(class="form-select" + (" is-invalid" if form.event_type.errors else "")) }}
             {% for error in form.event_type.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
           </div>
+          <div class="col-lg-3 col-md-6">
+            {{ form.service_tier.label(class="form-label") }}
+            {{ form.service_tier(class="form-control" + (" is-invalid" if form.service_tier.errors else ""), placeholder="vacío / flex") }}
+            {% for error in form.service_tier.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-lg-3 col-md-6">
+            {{ form.pricing_tier.label(class="form-label") }}
+            {{ form.pricing_tier(class="form-control" + (" is-invalid" if form.pricing_tier.errors else ""), placeholder="peak / off-peak") }}
+            {% for error in form.pricing_tier.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-lg-3 col-md-6">
+            {{ form.gateway.label(class="form-label") }}{{ form.gateway(class="form-select" + (" is-invalid" if form.gateway.errors else "")) }}
+            {% for error in form.gateway.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-lg-3 col-md-6" id="context-band-wrap">
+            {{ form.context_band.label(class="form-label") }}{{ form.context_band(class="form-select") }}
+            {% for error in form.context_band.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+          </div>
+          <div class="col-lg-6 col-md-6">
+            {{ form.source_url.label(class="form-label") }}{{ form.source_url(class="form-control" + (" is-invalid" if form.source_url.errors else ""), placeholder="https://...") }}
+            {% for error in form.source_url.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+          </div>
 
           <div class="col-lg-3 col-md-6">
             {{ form.input_cost_per_million_usd.label(class="form-label") }}
-            {{ form.input_cost_per_million_usd(class="form-control" + (" is-invalid" if form.input_cost_per_million_usd.errors else ""), step="0.000001", min="0") }}
+            {{ form.input_cost_per_million_usd(class="form-control" + (" is-invalid" if form.input_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
             {% for error in form.input_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
           </div>
           <div class="col-lg-3 col-md-6">
             {{ form.output_cost_per_million_usd.label(class="form-label") }}
-            {{ form.output_cost_per_million_usd(class="form-control" + (" is-invalid" if form.output_cost_per_million_usd.errors else ""), step="0.000001", min="0") }}
+            {{ form.output_cost_per_million_usd(class="form-control" + (" is-invalid" if form.output_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
             {% for error in form.output_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
           </div>
           <div class="col-lg-3 col-md-6">
             {{ form.cache_write_cost_per_million_usd.label(class="form-label") }}
-            {{ form.cache_write_cost_per_million_usd(class="form-control" + (" is-invalid" if form.cache_write_cost_per_million_usd.errors else ""), step="0.000001", min="0") }}
+            {{ form.cache_write_cost_per_million_usd(class="form-control" + (" is-invalid" if form.cache_write_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
             {% for error in form.cache_write_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
           </div>
           <div class="col-lg-3 col-md-6">
             {{ form.cache_read_cost_per_million_usd.label(class="form-label") }}
-            {{ form.cache_read_cost_per_million_usd(class="form-control" + (" is-invalid" if form.cache_read_cost_per_million_usd.errors else ""), step="0.000001", min="0") }}
+            {{ form.cache_read_cost_per_million_usd(class="form-control" + (" is-invalid" if form.cache_read_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
             {% for error in form.cache_read_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
           </div>
 
@@ -78,8 +100,9 @@
         </div>
 
         <div class="alert alert-info mt-4 mb-0">
-          <i class="bi bi-info-circle me-2"></i>Solo puede existir un pricing activo por proveedor, modelo y tipo de evento.
+          <i class="bi bi-info-circle me-2"></i>DeepSeek directo requiere dos tarifas vigentes (peak y off-peak). GPT-5.6 requiere contexto corto y largo por service tier. Los importes se administran aquí; la banda se selecciona automáticamente en cada llamada.
         </div>
+        {% if referenced %}<div class="alert alert-warning mt-3">Esta tarifa ya fue usada. Al guardar se creará una versión nueva y los eventos anteriores conservarán la tarifa original.</div>{% endif %}
 
         <div class="d-flex justify-content-end gap-2 mt-4">
           <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='pricing') }}">Cancelar</a>
@@ -90,3 +113,19 @@
   </div>
 </div>
 {% endblock %}
+{% block scripts %}{{ super() }}<script>
+(() => {
+  const model = document.getElementById('model');
+  const gateway = document.getElementById('gateway');
+  const tier = document.getElementById('pricing_tier');
+  const context = document.getElementById('context-band-wrap');
+  const update = () => {
+    const direct = gateway.value === 'direct';
+    const deepseek = direct && document.getElementById('provider').value.toLowerCase() === 'deepseek' && ['deepseek-flash','deepseek-v4-pro'].includes(model.value);
+    const gpt56 = direct && document.getElementById('provider').value.toLowerCase() === 'openai' && model.value.startsWith('gpt-5.6');
+    context.hidden = !gpt56;
+    tier.placeholder = deepseek ? 'peak / off-peak' : 'Tarifa adicional (si aplica)';
+  };
+  [model, gateway, document.getElementById('provider')].forEach(el => el.addEventListener('change', update)); update();
+})();
+</script>{% endblock %}

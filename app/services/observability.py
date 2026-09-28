@@ -26,7 +26,7 @@ def _has_langfuse_credentials() -> bool:
 
 
 def init_langfuse() -> bool:
-    """Initialize Langfuse and Anthropic instrumentation once."""
+    """Initialize Langfuse once; generation tracing belongs to LLMRuntime."""
     global _INITIALIZED, _LANGFUSE_CLIENT, _FLUSH_REGISTERED
 
     with _LOCK:
@@ -52,22 +52,8 @@ def init_langfuse() -> bool:
             _LANGFUSE_CLIENT = None
             return False
 
-        try:
-            from opentelemetry.instrumentation.anthropic import AnthropicInstrumentor
-        except ImportError:
-            logging.warning(
-                "Langfuse initialized but Anthropic auto-instrumentation is unavailable; "
-                "install 'opentelemetry-instrumentation-anthropic' for generation traces"
-            )
-        else:
-            try:
-                instrumentor = AnthropicInstrumentor()
-                if not getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
-                    instrumentor.instrument()
-            except Exception as exc:
-                if "already instrumented" not in str(exc).lower():
-                    logging.exception("Failed to instrument Anthropic SDK for Langfuse")
-
+        # Generation observations are owned by LLMRuntime. SDK instrumentation
+        # would duplicate them (and can export private continuation state).
         if not _FLUSH_REGISTERED:
             atexit.register(flush_langfuse)
             _FLUSH_REGISTERED = True

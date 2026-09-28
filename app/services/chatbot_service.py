@@ -19,9 +19,16 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink, Report
-from app.services import agent_prompts, ai_billing
-from app.services.chat_credentials import resolve_powerbi_env_for_report
+from app.services import ai_billing, model_catalog
 from app.services.agent_core import DEFAULT_MODEL
+from app.services.analytics import (
+    AnalyticsBillingLimitExceededError,
+    AnalyticsExecutor,
+    AnalyticsModelError,
+    AnalyticsReportNotFoundError,
+    AnalyticsRequest,
+    build_analytics_engine,
+)
 from app.services.observability import (
     hash_identifier,
     observation_preview,
@@ -29,8 +36,6 @@ from app.services.observability import (
     start_observation,
     trace_user_id,
 )
-from app.services import chat_mcp
-from app.utils.chatbot_context import get_report_and_dataset_by_slug
 from app.utils.decorators import retry_on_db_error
 
 
@@ -46,7 +51,28 @@ class ChatbotLimitExceededError(ChatbotServiceError):
     """Raised when the configured AI spend limit has already been reached."""
 
 
-def _chat_message_to_anthropic_message(message: ChatMessage) -> Optional[Dict[str, Any]]:
+class ChatbotModelNotAllowedError(ChatbotServiceError):
+    """Raised when a client requests a model outside the effective allowlist."""
+
+
+# Internal ``source`` values ("chat"/"whatsapp"/...) drive analytics routing,
+# billing source_type and tracing tags, and must not change: other code and
+# historical AIUsageEvent rows depend on them. ``channel`` is a distinct,
+# UI-facing concept (see ChatSession.channel) that this module maps to at the
+# single point where a session is created, so the rest of the pipeline never
+# has to know about it. Sources without an explicit mapping (e.g. "internal",
+# used by non-chat AnalyticsExecutor callers) intentionally get no channel.
+_CHANNEL_BY_SOURCE = {
+    "chat": "klara_chat",
+    "whatsapp": "whatsapp",
+}
+
+
+def _channel_for_source(source: Optional[str]) -> Optional[str]:
+    return _CHANNEL_BY_SOURCE.get((source or "").strip().lower())
+
+
+def _chat_message_to_history_message(message: ChatMessage) -> Optional[Dict[str, Any]]:
     role = (message.role or "").strip().lower()
     content = message.content or ""
 
@@ -61,7 +87,7 @@ def _chat_message_to_anthropic_message(message: ChatMessage) -> Optional[Dict[st
     return {"role": "assistant", "content": content}
 
 
-def _load_anthropic_history(
+def _load_history(
     *,
     session_id: int,
     exclude_message_id: Optional[int] = None,
@@ -76,7 +102,7 @@ def _load_anthropic_history(
 
     history: List[Dict[str, Any]] = []
     for message in query.all():
-        entry = _chat_message_to_anthropic_message(message)
+        entry = _chat_message_to_history_message(message)
         if entry is not None:
             history.append(entry)
     return history
@@ -119,6 +145,7 @@ def _ensure_session_for_turn(
     conversation_id: Optional[str],
     reset_history: bool,
     question: str,
+    channel: Optional[str] = None,
 ) -> ChatSession:
     session: Optional[ChatSession] = None
     session_id = _extract_session_id(conversation_id)
@@ -127,7 +154,7 @@ def _ensure_session_for_turn(
         session = db.session.get(ChatSession, session_id)
 
     if session is None or reset_history:
-        session = ChatSession(slug=slug, title=_build_session_title(question))
+        session = ChatSession(slug=slug, title=_build_session_title(question), channel=channel)
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
@@ -137,36 +164,22 @@ def _ensure_session_for_turn(
         session.slug = slug
     if not session.title:
         session.title = _build_session_title(question)
+    # Self-heal: a session created before ``channel`` existed, or created
+    # without it for any other reason, gets classified the moment we have
+    # reliable evidence for it (this same request already knows its real
+    # channel). Never overwrite a channel that was already set explicitly.
+    if not session.channel and channel:
+        session.channel = channel
     return session
 
 
 @retry_on_db_error(max_retries=3, delay=1)
-def _resolve_report_and_dataset_sync(slug: str) -> Tuple[Report, str, Dict[str, str]]:
-    try:
-        resolved = get_report_and_dataset_by_slug(slug)
-    except Exception as exc:
-        logging.exception("[ChatbotService] Failed to resolve dataset for slug %s", slug)
-        resolved = None
-        resolution_error = exc
-    else:
-        resolution_error = None
-
-    if resolved:
-        report, dataset_id = resolved
-    else:
-        link = (
-            PublicLink.query
-            .filter_by(custom_slug=slug, is_active=True)
-            .first()
-        )
-        if not link:
-            raise ChatbotNotFoundError(f"Slug not found or inactive: {slug}") from resolution_error
-
-        report = link.report
-        dataset_id = os.getenv("CHATBOT_DATASET_ID") or report.report_id
-
-    powerbi_credentials = resolve_powerbi_env_for_report(report)
-    return report, dataset_id, powerbi_credentials
+def _resolve_report_sync(slug: str) -> Report:
+    """Resolve the Chat-specific public slug without preparing analytics context."""
+    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
+    if not link:
+        raise ChatbotNotFoundError(f"Slug not found or inactive: {slug}")
+    return link.report
 
 
 @retry_on_db_error(max_retries=3, delay=1)
@@ -177,12 +190,15 @@ def _prepare_turn_sync(
     conversation_id: Optional[str],
     reset_history: bool,
     question: str,
-) -> Tuple[int, List[Dict[str, Any]]]:
+    requested_model_key: Optional[str] = None,
+    channel: Optional[str] = None,
+) -> Tuple[int, int, List[Dict[str, Any]]]:
     session = _ensure_session_for_turn(
         slug=slug,
         conversation_id=conversation_id,
         reset_history=reset_history,
         question=question,
+        channel=channel,
     )
     session.workspace_id_fk = billing_context.workspace_id
     session.report_id_fk = billing_context.report_id
@@ -192,19 +208,20 @@ def _prepare_turn_sync(
         session_id=session.id,
         role="user",
         content=question,
+        requested_model_key=requested_model_key,
     )
     _prepare_sqlite_id(user_message, ChatMessage)
     db.session.add(user_message)
     db.session.flush()
 
-    history = _load_anthropic_history(
+    history = _load_history(
         session_id=session.id,
         exclude_message_id=user_message.id,
     )
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     db.session.commit()
-    return session.id, history
+    return session.id, user_message.id, history
 
 
 def _record_result_usage_events(
@@ -215,12 +232,14 @@ def _record_result_usage_events(
     billing_context: ai_billing.BillingContext,
     model: str,
     had_error: bool,
+    source: str = "chat",
 ) -> int:
     persisted_events = 0
+    cost_events = []
     for raw_event in result.get("ai_usage_events") or []:
         event_payload = dict(raw_event)
         metadata_json = event_payload.pop("metadata_json", None)
-        ai_billing.record_ai_usage_event(
+        recorded_event = ai_billing.record_ai_usage_event(
             session_id=session_id,
             message_id=message_id,
             workspace_id=billing_context.workspace_id,
@@ -231,12 +250,13 @@ def _record_result_usage_events(
             metadata_json=metadata_json,
             **event_payload,
         )
+        cost_events.append(recorded_event)
         persisted_events += 1
 
     input_tokens = result.get("input_tokens")
     output_tokens = result.get("output_tokens")
     if persisted_events == 0 and (input_tokens is not None or output_tokens is not None):
-        ai_billing.record_ai_usage_event(
+        recorded_event = ai_billing.record_ai_usage_event(
             session_id=session_id,
             message_id=message_id,
             workspace_id=billing_context.workspace_id,
@@ -244,10 +264,15 @@ def _record_result_usage_events(
             empresa_id=billing_context.empresa_id,
             billing_scope_type=billing_context.billing_scope_type,
             billing_scope_id=billing_context.billing_scope_id,
-            provider="anthropic",
+            provider=result.get("provider") or "anthropic",
             model=model,
             event_type="generation",
-            source_type="chat",
+            # Bug fixed: this used to hardcode "chat" regardless of the real
+            # execution source, so a WhatsApp interaction that fell back to
+            # this estimate (no ai_usage_events from the pipeline) would be
+            # misclassified as chat in billing/analytics. Always use the
+            # actual source ("chat"/"whatsapp"/...) instead.
+            source_type=source,
             trigger_type="user_request",
             operation_name="chat-response-fallback",
             status="error" if had_error else "success",
@@ -255,12 +280,16 @@ def _record_result_usage_events(
             output_tokens=output_tokens,
             total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
             metadata_json={
+                "component": "main_agent",
+                "execution_source": source,
                 "estimated_usage": True,
                 "fallback_reason": "missing_ai_usage_events",
             },
         )
+        cost_events.append(recorded_event)
         persisted_events += 1
 
+    result["cost_breakdown"] = ai_billing.summarize_pipeline_costs(cost_events)
     return persisted_events
 
 
@@ -273,6 +302,9 @@ def _persist_success_sync(
     result: Dict[str, Any],
     latency_ms: int,
     anthropic_model: str,
+    requested_model_key: Optional[str] = None,
+    user_message_id: Optional[int] = None,
+    source: str = "chat",
 ) -> Dict[str, Any]:
     session = db.session.get(ChatSession, session_id)
     if session is None:
@@ -285,6 +317,13 @@ def _persist_success_sync(
         content=result.get("answer", ""),
         latency_ms=latency_ms,
         model_used=result.get("model") or anthropic_model,
+        requested_model_key=requested_model_key,
+        model_key=result.get("model_key"),
+        model_provider=result.get("provider"),
+        physical_model=result.get("model"),
+        model_gateway=result.get("gateway"),
+        service_tier=result.get("service_tier"),
+        actual_model=result.get("actual_model"),
         input_tokens=result.get("input_tokens"),
         output_tokens=result.get("output_tokens"),
         # NOTA: Se utiliza el campo heredado mcp_used para almacenar si el agente ejecutó herramientas (tools_called) en este turno, evitando migraciones de DB.
@@ -293,6 +332,7 @@ def _persist_success_sync(
         dax_query=result.get("dax_query"),
         had_error=had_error,
         error_message=result.get("error_message") if had_error else None,
+        reply_to_message_id=user_message_id,
     )
     _prepare_sqlite_id(assistant_message, ChatMessage)
     db.session.add(assistant_message)
@@ -305,10 +345,12 @@ def _persist_success_sync(
         billing_context=billing_context,
         model=result.get("model") or anthropic_model,
         had_error=had_error,
+        source=source,
     )
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     session.had_errors = bool(session.had_errors or had_error)
+    session.last_model_key = result.get("model_key") or session.last_model_key
 
     db.session.commit()
 
@@ -331,6 +373,11 @@ def _persist_success_sync(
         "input_tokens": result.get("input_tokens"),
         "output_tokens": result.get("output_tokens"),
         "model": result.get("model") or anthropic_model,
+        "model_key": result.get("model_key"),
+        "provider": result.get("provider"),
+        "gateway": result.get("gateway"),
+        "service_tier": result.get("service_tier"),
+        "actual_model": result.get("actual_model"),
         "latency_ms": assistant_message.latency_ms,
         "mcp_used": bool(result.get("tools_called")),
         "tools_called": result.get("tools_called") or [],
@@ -341,6 +388,8 @@ def _persist_success_sync(
         "route_metadata_json": result.get("route_metadata_json"),
         "route_validation_warnings": result.get("route_validation_warnings") or [],
         "total_cost_usd": assistant_message.total_cost_usd or 0.0,
+        "cost_breakdown": result.get("cost_breakdown"),
+        "latency_by_component_ms": result.get("latency_by_component_ms"),
     }
 
 
@@ -353,12 +402,16 @@ def _persist_error_sync(
     error_message: str,
     billing_context: Optional[ai_billing.BillingContext] = None,
     result: Optional[Dict[str, Any]] = None,
+    requested_model_key: Optional[str] = None,
+    user_message_id: Optional[int] = None,
+    source: str = "chat",
 ) -> None:
     db.session.rollback()
 
     session = db.session.get(ChatSession, session_id) if session_id is not None else None
+    reply_to_message_id = user_message_id
     if session is None:
-        session = ChatSession(slug=slug, title=_build_session_title(question))
+        session = ChatSession(slug=slug, title=_build_session_title(question), channel=_channel_for_source(source))
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
@@ -366,6 +419,9 @@ def _persist_error_sync(
             session.workspace_id_fk = billing_context.workspace_id
             session.report_id_fk = billing_context.report_id
             session.empresa_id = billing_context.empresa_id
+        # user_message_id (if any) belonged to the original session lookup,
+        # which failed here; it does not exist in this freshly created one.
+        reply_to_message_id = None
 
     error_log = ChatMessage(
         session_id=session.id,
@@ -373,6 +429,13 @@ def _persist_error_sync(
         content=f"Error al procesar la consulta: {error_message}",
         latency_ms=result.get("latency_ms") if result else None,
         model_used=result.get("model") if result else None,
+        requested_model_key=requested_model_key,
+        model_key=result.get("model_key") if result else None,
+        model_provider=result.get("provider") if result else None,
+        physical_model=result.get("model") if result else None,
+        model_gateway=result.get("gateway") if result else None,
+        service_tier=result.get("service_tier") if result else None,
+        actual_model=result.get("actual_model") if result else None,
         input_tokens=result.get("input_tokens") if result else None,
         output_tokens=result.get("output_tokens") if result else None,
         mcp_used=bool(result.get("tools_called")) if result else None,
@@ -380,6 +443,7 @@ def _persist_error_sync(
         dax_query=result.get("dax_query") if result else None,
         had_error=True,
         error_message=error_message,
+        reply_to_message_id=reply_to_message_id,
     )
     _prepare_sqlite_id(error_log, ChatMessage)
     db.session.add(error_log)
@@ -393,12 +457,15 @@ def _persist_error_sync(
             billing_context=billing_context,
             model=result.get("model") or DEFAULT_MODEL,
             had_error=True,
+            source=source,
         )
     # If we are reusing an existing session, the user message was already
     # committed during turn preparation, so only the assistant error is added.
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     session.had_errors = True
+    if result and result.get("model_key"):
+        session.last_model_key = result["model_key"]
 
     db.session.commit()
 
@@ -414,31 +481,6 @@ def _persist_error_sync(
             )
 
 
-def _validate_chat_pricing_sync(report: Report, settings: chat_mcp.RuntimeSettings) -> None:
-    ai_billing.resolve_pricing(
-        provider="anthropic",
-        model=settings.anthropic_model,
-        event_type="generation",
-    )
-    ai_billing.resolve_pricing(
-        provider="anthropic",
-        model="claude-haiku-4-5-20251001",
-        event_type="generation",
-    )
-    ai_billing.resolve_pricing(
-        provider="voyageai",
-        model="voyage-4",
-        event_type="embedding",
-    )
-    if settings.skill_router_settings.selector_enabled:
-        ai_billing.resolve_pricing(
-            provider="anthropic",
-            model=settings.skill_router_settings.selector_model,
-            event_type="generation",
-        )
-    ai_billing.enforce_limit_for_report(report)
-
-
 async def procesar_interaccion_completa(
     pregunta: str,
     *,
@@ -447,6 +489,8 @@ async def procesar_interaccion_completa(
     conversation_id: Optional[str] = None,
     reset_history: bool = False,
     config: Optional[Dict[str, Any]] = None,
+    source: str = "chat",
+    model_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute the full chatbot interaction.
@@ -461,13 +505,35 @@ async def procesar_interaccion_completa(
     if not pregunta:
         raise ValueError("La pregunta no puede estar vacia")
 
-    settings = chat_mcp.build_runtime_settings(config or dict(current_app.config))
+    runtime_config = config or dict(current_app.config)
     start = time.monotonic()
     session_id: Optional[int] = None
+    user_message_id: Optional[int] = None
     report: Optional[Report] = None
     billing_context: Optional[ai_billing.BillingContext] = None
     result: Optional[Dict[str, Any]] = None
+    user_turn_persisted = False
     trace_version = os.getenv("RELEASE_VERSION") or os.getenv("GIT_SHA")
+    channel = _channel_for_source(source)
+
+    async def persist_execution_error(exc: Exception) -> None:
+        if not user_turn_persisted:
+            return
+        try:
+            await asyncio.to_thread(
+                _persist_error_sync,
+                session_id=session_id,
+                slug=slug,
+                question=pregunta,
+                error_message=str(exc),
+                billing_context=billing_context,
+                result=result,
+                requested_model_key=model_key,
+                user_message_id=user_message_id,
+                source=source,
+            )
+        except Exception:
+            logging.exception("[ChatbotService] Failed to log error to DB")
 
     with start_observation(
         name="public-chat-request",
@@ -475,26 +541,53 @@ async def procesar_interaccion_completa(
         input={"message": pregunta},
     ) as root_observation:
         try:
-            report, dataset_id, powerbi_credentials = await asyncio.to_thread(_resolve_report_and_dataset_sync, slug)
-            billing_context = ai_billing.resolve_report_billing_context(report)
-            custom_instructions = await asyncio.to_thread(agent_prompts.resolve_agent_prompt_instructions, report)
-            await asyncio.to_thread(_validate_chat_pricing_sync, report, settings)
-            session_id, history = await asyncio.to_thread(
+            report = await asyncio.to_thread(_resolve_report_sync, slug)
+            billing_context = await asyncio.to_thread(ai_billing.resolve_report_billing_context, report)
+            previous_model_key = await asyncio.to_thread(
+                model_catalog.session_model_key, conversation_id, report_id=report.id
+            )
+            try:
+                model_selection = await asyncio.to_thread(
+                    model_catalog.resolve_client_selection,
+                    requested_model_key=model_key,
+                    session_model_key=previous_model_key,
+                    report_id=report.id,
+                    empresa_id=billing_context.empresa_id,
+                    config=runtime_config,
+                )
+            except model_catalog.ModelSelectionError as exc:
+                raise ChatbotModelNotAllowedError(str(exc)) from exc
+            analytics: AnalyticsExecutor = build_analytics_engine(runtime_config)
+            prepared = await analytics.prepare(AnalyticsRequest(
+                report_id=report.id,
+                question=pregunta,
+                source=source,
+                model_key=model_selection.model.model_key if model_selection else None,
+            ))
+            session_id, user_message_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
                 billing_context=billing_context,
                 slug=slug,
                 conversation_id=conversation_id,
                 reset_history=reset_history,
                 question=pregunta,
+                requested_model_key=model_key,
+                channel=channel,
             )
+            user_turn_persisted = True
 
             trace_metadata = {
                 "feature": "publicchat",
                 "reportid": str(report.id),
-                "datasethash": hash_identifier(dataset_id, prefix="dataset"),
+                "reportname": report.name,
+                "empresa": str(billing_context.empresa_id),
+                "source": source,
                 "slughash": hash_identifier(slug, prefix="slug"),
                 "resethistory": str(bool(reset_history)).lower(),
                 "hashistory": str(bool(history)).lower(),
+                "requestedmodelkey": model_key,
+                "selectedmodelkey": model_selection.model.model_key if model_selection else None,
+                "modelselectionsource": model_selection.source if model_selection else "legacy_default",
             }
             if root_observation is not None:
                 root_observation.update(metadata=trace_metadata)
@@ -504,23 +597,16 @@ async def procesar_interaccion_completa(
                 session_id=str(session_id),
                 trace_name="public-chat-request",
                 metadata=trace_metadata,
-                tags=["public-chat", "powerbi", "anthropic"],
+                tags=[source, "powerbi"],
                 version=trace_version,
             ):
-                result = await chat_mcp.run_chat_turn(
-                    user_message=pregunta,
-                    dataset_id=dataset_id,
+                analytics_result = await analytics.execute_prepared(
+                    prepared,
                     history=history,
-                    settings=settings,
-                    conversation_id=str(session_id),
-                    report_id=report.id,
-                    empresa_id=billing_context.empresa_id,
-                    powerbi_credentials=powerbi_credentials,
-                    custom_instructions=custom_instructions,
-                    schema_retrieval_prompt=report.schema_retrieval_prompt,
-                    schema_table_context_limit=report.schema_table_context_limit,
-                    schema_measure_context_limit=report.schema_measure_context_limit,
+                    execution_id=str(session_id),
+                    trace_context=trace_metadata,
                 )
+                result = analytics_result.to_dict()
 
             latency_ms = int((time.monotonic() - start) * 1000)
             persisted = await asyncio.to_thread(
@@ -530,7 +616,10 @@ async def procesar_interaccion_completa(
                 report_id=report.id,
                 result=result,
                 latency_ms=latency_ms,
-                anthropic_model=settings.anthropic_model,
+                anthropic_model=DEFAULT_MODEL,
+                requested_model_key=model_key,
+                user_message_id=user_message_id,
+                source=source,
             )
 
             if root_observation is not None:
@@ -539,6 +628,7 @@ async def procesar_interaccion_completa(
                         "answer": observation_preview(persisted.get("answer", ""), max_length=1200),
                         "tool_rounds": persisted.get("tool_rounds", 0),
                         "report_id": persisted.get("report_id"),
+                        "cost_breakdown": persisted.get("cost_breakdown"),
                     }
                 )
             return persisted
@@ -547,25 +637,28 @@ async def procesar_interaccion_completa(
             if root_observation is not None:
                 root_observation.update(output={"error": "slug_not_found"})
             raise
-        except ai_billing.BillingLimitExceeded as exc:
+        except AnalyticsReportNotFoundError as exc:
+            if root_observation is not None:
+                root_observation.update(output={"error": "report_not_found"})
+            raise ChatbotNotFoundError(str(exc)) from exc
+        except ChatbotModelNotAllowedError:
+            if root_observation is not None:
+                root_observation.update(output={"error": "model_not_allowed"})
+            raise
+        except AnalyticsModelError as exc:
+            if root_observation is not None:
+                root_observation.update(output={"error": "model_not_allowed"})
+            await persist_execution_error(exc)
+            raise ChatbotModelNotAllowedError(str(exc)) from exc
+        except (ai_billing.BillingLimitExceeded, AnalyticsBillingLimitExceededError) as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": "billing_limit_exceeded"})
+            await persist_execution_error(exc)
             raise ChatbotLimitExceededError(str(exc)) from exc
         except Exception as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": observation_preview(str(exc), max_length=500)})
-            try:
-                await asyncio.to_thread(
-                    _persist_error_sync,
-                    session_id=session_id,
-                    slug=slug,
-                    question=pregunta,
-                    error_message=str(exc),
-                    billing_context=billing_context,
-                    result=result,
-                )
-            except Exception:
-                logging.exception("[ChatbotService] Failed to log error to DB")
+            await persist_execution_error(exc)
             raise ChatbotServiceError(f"Error al procesar la consulta: {str(exc)}") from exc
 
 
@@ -578,6 +671,8 @@ async def procesar_pregunta(
     conversation_id: Optional[str] = None,
     reset_history: bool = False,
     config: Optional[Dict[str, Any]] = None,
+    source: str = "chat",
+    model_key: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Legacy compatibility wrapper.
@@ -604,4 +699,10 @@ async def procesar_pregunta(
         conversation_id=conversation_id,
         reset_history=reset_history,
         config=config,
+        source=source,
+        model_key=model_key,
     )
+
+# Transitional aliases for integrations importing the former helper names.
+_chat_message_to_anthropic_message = _chat_message_to_history_message
+_load_anthropic_history = _load_history
