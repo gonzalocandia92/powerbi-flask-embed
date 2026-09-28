@@ -40,7 +40,17 @@
     <div class="col-xl-4">
       <div class="card"><div class="card-header"><h5 class="mb-0">Generación</h5></div><div class="card-body">
         <p class="mb-2"><span id="reporting-count">1</span> pregunta(s) · ejecución secuencial</p>
-        <div class="alert alert-warning small">La generación consume tokens reales. Incluye el análisis y la redacción con el modelo asignado al rol report_writer. Mantené esta pestaña abierta hasta recibir el resultado; esta versión no guarda el informe.</div>
+        <div class="mb-3">
+          <label class="form-label d-block mb-1">Estrategia</label>
+          <div class="btn-group w-100" role="group" aria-label="Estrategia de generación" id="reporting-strategy-group">
+            <input type="radio" class="btn-check" name="reporting-strategy" id="reporting-strategy-fixed" value="fixed" checked>
+            <label class="btn btn-outline-secondary" for="reporting-strategy-fixed">Fixed</label>
+            <input type="radio" class="btn-check" name="reporting-strategy" id="reporting-strategy-coordinated" value="coordinated">
+            <label class="btn btn-outline-secondary" for="reporting-strategy-coordinated">Coordinated</label>
+          </div>
+          <p class="form-text mb-0">Coordinated permite al modelo report_coordinator pedir hasta 2 análisis adicionales antes de redactar (V1.1). Fixed reproduce exactamente el comportamiento V1.</p>
+        </div>
+        <div class="alert alert-warning small">La generación consume tokens reales. Incluye el análisis y la redacción con el modelo asignado al rol report_writer (y, en modo Coordinated, el rol report_coordinator). Mantené esta pestaña abierta hasta recibir el resultado; esta versión no guarda el informe.</div>
         <button class="btn btn-primary w-100" id="reporting-generate" type="button" {% if not models or not reports %}disabled{% endif %}><span id="reporting-spinner" class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span>Generar informe</button>
       </div></div>
     </div>
@@ -60,6 +70,7 @@
       </div>
       <div data-pane="json" class="d-none"><textarea class="form-control font-monospace" id="reporting-json" rows="24" readonly></textarea></div>
       <div data-pane="debug" class="d-none">
+        <div id="reporting-coordination-card" class="card mb-3 d-none"><div class="card-body"><h4 class="h6">Coordinador (report_coordinator, V1.1)</h4><div id="reporting-coordination-debug" class="small"></div></div></div>
         <div class="card mb-3"><div class="card-body"><h4 class="h6">Redactor (report_writer)</h4><div id="reporting-writer-debug" class="small"></div></div></div>
         <div id="reporting-sections"></div>
         <div class="d-flex gap-2 my-2"><button class="btn btn-outline-primary btn-sm" id="reporting-copy" type="button">Copiar Markdown</button><button class="btn btn-outline-primary btn-sm" id="reporting-download" type="button">Descargar .md</button></div>
@@ -230,6 +241,60 @@
       table.append(tbody); box.append(table);
     }
   }
+  function renderCoordinationDebug(coordination) {
+    const card = byId('reporting-coordination-card');
+    const box = byId('reporting-coordination-debug');
+    box.replaceChildren();
+    if (!coordination) { card.classList.add('d-none'); return; }
+    card.classList.remove('d-none');
+    if (coordination.error) {
+      const err = document.createElement('div'); err.className = 'text-warning';
+      err.textContent = `Coordinador no disponible (${coordination.error.code}): ${coordination.error.message}. Se usó el ReportDraft original, como en modo Fixed.`;
+      box.append(err);
+    }
+    if (coordination.decision) {
+      const action = document.createElement('div');
+      action.textContent = `Decisión: ${coordination.decision.action}`;
+      box.append(action);
+      const summary = document.createElement('div'); summary.className = 'text-muted';
+      summary.textContent = coordination.decision.summary; box.append(summary);
+    }
+    if (coordination.extra_analyses && coordination.extra_analyses.length) {
+      const table = document.createElement('table'); table.className = 'table table-sm mt-2 mb-0';
+      const head = document.createElement('tr');
+      ['Key', 'Pregunta', 'Motivo', 'Relacionado con', 'Estado'].forEach(h => cell(head, h, 'th'));
+      const thead = document.createElement('thead'); thead.append(head); table.append(thead);
+      const tbody = document.createElement('tbody');
+      for (const item of coordination.extra_analyses) {
+        const row = document.createElement('tr');
+        cell(row, item.key); cell(row, item.question); cell(row, item.purpose || '');
+        cell(row, (item.related_section_keys || []).join(', '));
+        cell(row, item.had_error ? `error (${item.failure_reason || 'execution_failed'})` : 'ok');
+        tbody.append(row);
+      }
+      table.append(tbody); box.append(table);
+    }
+    if (coordination.attempts && coordination.attempts.length) {
+      const table = document.createElement('table'); table.className = 'table table-sm mt-2 mb-0';
+      const head = document.createElement('tr');
+      ['Intento', 'Tipo', 'Válido', 'Modelo', 'Tokens in/out', 'Latencia', 'Costo USD'].forEach(h => cell(head, h, 'th'));
+      const thead = document.createElement('thead'); thead.append(head); table.append(thead);
+      const tbody = document.createElement('tbody');
+      for (const a of coordination.attempts) {
+        const row = document.createElement('tr');
+        cell(row, a.attempt); cell(row, a.repair ? 'reparación' : 'inicial'); cell(row, a.valid ? 'sí' : 'no');
+        cell(row, `${a.provider}/${a.model}`); cell(row, `${a.input_tokens} / ${a.output_tokens}`);
+        cell(row, `${a.latency_ms} ms`); cell(row, a.cost_usd == null ? 'n/d' : a.cost_usd);
+        tbody.append(row);
+      }
+      table.append(tbody); box.append(table);
+    }
+    if (coordination.extra_usage_record_failures) {
+      const u = document.createElement('div'); u.className = 'text-warning';
+      u.textContent = `${coordination.extra_usage_record_failures} evento(s) de uso de análisis adicionales no se pudieron registrar en el ledger.`;
+      box.append(u);
+    }
+  }
   function renderFinalReport(data) {
     const writer = data.writer || {status: 'failed', error: null};
     reportHtml = data.html || null;
@@ -250,6 +315,7 @@
         : 'El análisis fue correcto pero falló la redacción del informe. El ReportDraft se conserva en “ReportDraft / Debug”.';
     }
     renderWriterDebug(writer);
+    renderCoordinationDebug(data.coordination || null);
     selectTab(reportHtml ? 'report' : 'debug');
   }
   function downloadText(text, name, type) {
@@ -384,7 +450,8 @@
     const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim(), required_skill_keys:selectedSkills(row)}));
     if (!rows.length || rows.some(row => !row.question)) return showMessage('Ingresá al menos una pregunta y completá todas las filas.');
     if (!model.value || !tier.value) return showMessage('Elegí un modelo y tier disponibles.');
-    const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows};
+    const strategy = document.querySelector('input[name="reporting-strategy"]:checked').value;
+    const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows, strategy};
     if (!payload.name) return showMessage('Ingresá un nombre para el informe.');
     const button = byId('reporting-generate');
     button.disabled = true;

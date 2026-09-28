@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,11 @@ class ReportDefinition:
     questions: list[ReportQuestion]
     analysis_model_key: str | None = None
     analysis_service_tier: str | None = None
+    # V1.1: "fixed" keeps the exact V1 behaviour (ReportDraft -> ReportWriter,
+    # coordinator never instantiated, its config/pricing can never block a run).
+    # "coordinated" inserts one bounded ReportCoordinator round between the
+    # initial ReportDraft and ReportWriter (see ``coordination.CoordinationRunner``).
+    coordination_enabled: bool = False
 
     def __post_init__(self) -> None:
         if isinstance(self.report_id, bool) or not isinstance(self.report_id, int) or self.report_id <= 0:
@@ -80,6 +85,15 @@ class ReportSection:
     # How skills were chosen: {"mode": "pinned"|"dynamic", "selector": ..., "skills": [...],
     # "pinned_skill_keys": [...], "unavailable": [{"skill_key", "reason"}]}. Admin/debug only.
     skill_routing: dict[str, Any] = field(default_factory=dict)
+    # V1.1: provenance. "definition" sections come straight from ReportDefinition
+    # questions; "coordinator" sections were requested by ReportCoordinator and
+    # executed through ``extra_analysis.run_analysis`` (same AnalyticsExecutor).
+    origin: Literal["definition", "coordinator"] = "definition"
+    # Why the coordinator asked for this analysis (RequestedAnalysis.purpose).
+    # Always ``None`` for origin="definition".
+    purpose: str | None = None
+    # Which original section(s) motivated this coordinator-requested analysis.
+    related_section_keys: tuple[str, ...] = ()
 
 
 @dataclass

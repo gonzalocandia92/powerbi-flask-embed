@@ -20,10 +20,14 @@ from app.services.analytics import (
 )
 from app.services.llm.profiles import PROFILES
 from app.services.reporting import (
-    HtmlReportRenderer, ReportDefinition, ReportGenerator, ReportPipeline, ReportQuestion,
-    ReportWriterConfigurationError, ReportWriterInvalidOutputError, render_markdown,
+    CoordinationRunner, HtmlReportRenderer, ReportDefinition, ReportGenerator, ReportPipeline,
+    ReportQuestion, ReportWriterConfigurationError, ReportWriterInvalidOutputError, render_markdown,
 )
-from app.services.reporting.usage import record_section_usage, record_writer_usage
+from app.services.reporting.coordinator import CoordinatorBillingLimitError
+from app.services.reporting.coordinator_factory import resolve_report_coordinator
+from app.services.reporting.usage import (
+    record_coordinator_usage, record_extra_analysis_usage, record_section_usage, record_writer_usage,
+)
 from app.services.reporting.writer_factory import resolve_report_writer
 from app.utils.decorators import admin_required
 
@@ -153,10 +157,14 @@ def _definition_from_payload(data: dict, models: list[dict]) -> ReportDefinition
         missing = list_effective_skills_for_report(report).missing(pinned)
         if missing:
             raise ValueError("Skills fijadas no disponibles para este Report: " + ", ".join(missing))
+    strategy = data.get("strategy") or "fixed"
+    if strategy not in ("fixed", "coordinated"):
+        raise ValueError("La estrategia debe ser 'fixed' o 'coordinated'.")
     return ReportDefinition(
         report_id=report_id, name=name.strip(), questions=questions,
         analysis_model_key=model_key,
         analysis_service_tier=None if tier == "configured" else tier,
+        coordination_enabled=strategy == "coordinated",
     )
 
 
@@ -285,9 +293,30 @@ def generate():
     async def record_writer(report_run_id, event):
         await asyncio.to_thread(record_writer_usage, definition.report_id, report_run_id, event)
 
+    async def record_coordinator(report_run_id, event):
+        await asyncio.to_thread(record_coordinator_usage, definition.report_id, report_run_id, event)
+
+    async def record_extra(section):
+        await asyncio.to_thread(record_extra_analysis_usage, definition.report_id, section)
+
+    def resolve_coordinator():
+        # Lazy on purpose: only called by CoordinationRunner.run(), and only when
+        # ``coordination_enabled`` is true, so a "fixed" run never touches the
+        # report_coordinator role/config/pricing (V1.1 spec).
+        try:
+            return resolve_report_coordinator(config, definition.report_id)
+        except ai_billing.BillingLimitExceeded as exc:
+            raise CoordinatorBillingLimitError(str(exc)) from exc
+
+    analytics_engine = build_analytics_engine(config)
+    coordination_runner = CoordinationRunner(
+        resolve_coordinator, analytics_engine,
+        record_coordinator_usage=record_coordinator, record_extra_usage=record_extra,
+    )
     pipeline = ReportPipeline(
-        ReportGenerator(build_analytics_engine(config), record_usage=record_usage),
-        writer, HtmlReportRenderer(), record_writer_usage=record_writer,
+        ReportGenerator(analytics_engine, record_usage=record_usage),
+        writer, HtmlReportRenderer(), coordination_runner=coordination_runner,
+        record_writer_usage=record_writer,
     )
     try:
         result = asyncio.run(pipeline.run(definition))
@@ -327,6 +356,9 @@ def generate():
             "semantic_notes": [] if section.had_error else list(section.semantic_notes),
             "skill_routing": dict(section.skill_routing),
         } for section in draft.sections],
+        # Admin/debug only (V1.1). Absent ("fixed" strategy or no coordination_runner) is
+        # normal, never surfaced client-side, and never blocks the report on failure.
+        "coordination": _coordination_payload(result.coordination),
     })
 
 
@@ -341,4 +373,39 @@ def _writer_payload(result) -> dict:
         "render_error": result.render_error,
         "attempts": list(result.writer_attempts),
         "usage_record_failures": result.usage_record_failures,
+    }
+
+
+def _coordination_payload(coordination) -> dict | None:
+    """Admin/debug view of one V1.1 coordination round; ``None`` in "fixed" mode.
+
+    Never mixed into ``markdown``/``final_report``/``html`` above: the coordinator's
+    decision, summary and per-analysis metadata are for the admin debug panel only.
+    """
+    if coordination is None:
+        return None
+    decision = coordination.decision
+    return {
+        "ran": coordination.ran,
+        "enriched": coordination.enriched,
+        "error": coordination.coordinator_error,
+        "decision": None if decision is None else {
+            "action": decision.action,
+            "summary": decision.summary,
+            "analyses": [{
+                "question": item.question, "purpose": item.purpose,
+                "expected_value": item.expected_value,
+                "related_section_keys": list(item.related_section_keys),
+            } for item in decision.analyses],
+        },
+        # Provider/model/tokens/latency/cost per LLM call (initial + repair).
+        "attempts": list(coordination.attempts),
+        "extra_analyses": [{
+            "key": section.key, "title": section.title, "question": section.question,
+            "purpose": section.purpose, "related_section_keys": list(section.related_section_keys),
+            "had_error": section.had_error,
+            "failure_reason": (_public_failure_reason(section.failure_reason) or "execution_failed")
+                              if section.had_error else None,
+        } for section in coordination.extra_sections],
+        "extra_usage_record_failures": coordination.extra_usage_record_failures,
     }

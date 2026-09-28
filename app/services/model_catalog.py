@@ -283,6 +283,10 @@ def build_catalog_resolver(settings, *, report_id=None, empresa_id=None, selecti
             "complexity_classifier": "disabled",
             # Reporting writer has no implicit model: it must be assigned explicitly.
             "report_writer": "disabled",
+            # V1.1: report coordinator is optional; an unassigned role must never
+            # block a report (CoordinationRunner treats this as a safe, contained
+            # CoordinatorConfigurationError and falls back to "fixed" behaviour).
+            "report_coordinator": "disabled",
         },
     )
 

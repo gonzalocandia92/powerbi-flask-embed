@@ -1,8 +1,16 @@
-"""ReportPipeline: ReportDefinition -> ReportDraft -> FinalReport -> HTML.
+"""ReportPipeline: ReportDefinition -> ReportDraft -> [coordination] -> FinalReport -> HTML.
 
-Composition only. ``ReportGenerator`` still owns analysis, the writer owns
-redaction, the renderer owns presentation; each is replaceable. A writer failure
-never invalidates the analytical draft: the result always carries it.
+Composition only. ``ReportGenerator`` still owns analysis, an optional
+``CoordinationRunner`` owns the bounded coordinator round (see
+``coordination.py``), the writer owns redaction, the renderer owns
+presentación; each is replaceable. A writer failure never invalidates the
+analytical draft, and neither does a coordinator failure: both are contained
+and the result always carries the draft that was actually written.
+
+``strategy`` lives on ``ReportDefinition`` (``coordination_enabled``); this
+pipeline only ever calls the coordinator when both that flag is set AND a
+``coordination_runner`` was supplied. A "fixed" run (the V1 default) never even
+constructs a coordinator, so its configuration/pricing can never block it.
 """
 from __future__ import annotations
 
@@ -12,6 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Protocol
 
 from .contracts import ReportDefinition, ReportDraft
+from .coordination import CoordinationOutcome, CoordinationRunner
 from .final_report import FinalReport
 from .generator import ReportGenerator
 from .writer import ReportWriter, ReportWriterError, WriterAttempt
@@ -36,6 +45,9 @@ class ReportPipelineResult:
     writer_attempts: list[dict[str, Any]] = field(default_factory=list)
     # Attempts whose ledger event could not be persisted (kept visible for admins).
     usage_record_failures: int = 0
+    # None in "fixed" mode (or when no CoordinationRunner was supplied); otherwise
+    # the full coordination round, for the admin debug panel.
+    coordination: CoordinationOutcome | None = None
 
     @property
     def writer_ok(self) -> bool:
@@ -44,20 +56,27 @@ class ReportPipelineResult:
 
 class ReportPipeline:
     def __init__(self, generator: ReportGenerator, writer: ReportWriter, renderer: FinalReportRenderer,
-                 *, record_writer_usage: WriterUsageRecorder | None = None):
+                 *, coordination_runner: CoordinationRunner | None = None,
+                 record_writer_usage: WriterUsageRecorder | None = None):
         self.generator = generator
         self.writer = writer
         self.renderer = renderer
+        self.coordination_runner = coordination_runner
         self.record_writer_usage = record_writer_usage
 
     async def run(self, definition: ReportDefinition) -> ReportPipelineResult:
-        # Analytical errors (billing, configuration, ...) propagate exactly as before.
+        # Analytical errors (billing, configuración, ...) propagate exactly as before.
         draft = await self.generator.generate(definition)
-        return await self.write(draft)
+        return await self.write(draft, definition)
 
-    async def write(self, draft: ReportDraft) -> ReportPipelineResult:
-        """Writing + rendering for an existing draft (also the entry point of a future coordinator)."""
+    async def write(self, draft: ReportDraft, definition: ReportDefinition | None = None) -> ReportPipelineResult:
+        """Coordination (if configured) + writing + rendering for an existing draft."""
         result = ReportPipelineResult(draft=draft)
+
+        if self.coordination_runner is not None and definition is not None and definition.coordination_enabled:
+            result.coordination = await self.coordination_runner.run(draft, definition)
+            draft = result.coordination.draft
+            result.draft = draft
 
         async def on_attempt(attempt: WriterAttempt) -> None:
             result.writer_attempts.append(attempt.summary())
