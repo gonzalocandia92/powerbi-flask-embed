@@ -162,6 +162,13 @@ REGLAS DE PRESENTACIÓN
 - Una sección status="failed" nunca respalda una afirmación analítica. En notes sí puede referenciarse únicamente para indicar que ese análisis no estuvo disponible.
 - No incluyas DAX, consultas, nombres de skills, routing, tokens, modelos ni información de depuración.
 - Respondé únicamente con un objeto JSON válido que cumpla el schema. Sin texto adicional ni bloques de código.
+
+Las sections con origin="coordinator" son evidencia complementaria
+solicitada para profundizar hallazgos de las secciones indicadas por
+related_section_keys.
+
+Usalas para enriquecer las conclusiones correspondientes.
+NO crees automáticamente una sección independiente por cada análisis adicional.
 """
 
 

@@ -491,13 +491,25 @@ def _compile_vector_sqlite(type_, compiler, **kw):
 
 
 class ChatSession(db.Model):
-    """Chat conversation session — cabecera del log de KLARA."""
+    """Chat conversation session — cabecera del log de KLARA.
+
+    ``channel`` identifies the entry point that originated the conversation
+    (``klara_chat``, ``whatsapp``, and in the future other integrations such
+    as Telegram/Slack). It is a free-text string (never a Postgres ENUM) so
+    new channels can be added without a schema migration, and it is set
+    explicitly by the code path that creates the session — never inferred
+    from ``slug`` or other telemetry, since the same public slug is used by
+    both the web widget and WhatsApp. Historical rows created before this
+    column existed are NULL; see ``backfill_chat_channels.py`` for how they
+    are retroactively classified (never defaulted to ``klara_chat``).
+    """
 
     __tablename__ = 'chat_sessions'
 
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     slug = db.Column(db.String(120), nullable=True, index=True)
     title = db.Column(db.String(200), nullable=True)
+    channel = db.Column(db.String(30), nullable=True, index=True)
     workspace_id_fk = db.Column(db.BigInteger, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=True, index=True)
     empresa_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id'), nullable=True, index=True)
@@ -549,9 +561,18 @@ class ChatMessage(db.Model):
     dax_query = db.Column(db.Text, nullable=True)
     had_error = db.Column(db.Boolean, default=False, nullable=False)
     error_message = db.Column(db.Text, nullable=True)
+    # Explicit, non-fragile link from an assistant reply back to the user
+    # message it answers. Populated for every new turn (success or error) so
+    # pairing never has to guess from ordering alone; NULL on historical rows
+    # created before this column existed (see ChatInteractionProvider, which
+    # falls back to positional pairing only for those legacy rows).
+    reply_to_message_id = db.Column(
+        db.BigInteger, db.ForeignKey('chat_messages.id', ondelete='SET NULL'), nullable=True, index=True
+    )
 
     session = db.relationship('ChatSession', back_populates='messages')
     usage_events = db.relationship('AIUsageEvent', back_populates='message', lazy='dynamic')
+    replied_to = db.relationship('ChatMessage', remote_side='ChatMessage.id')
 
     __table_args__ = (
         db.Index('ix_chat_message_session_created', 'session_id', 'created_at'),
@@ -1267,3 +1288,55 @@ class McpSecurityAuditLog(db.Model):
     outcome = db.Column(db.String(40), nullable=False, default='success')
     details = db.Column(db.JSON, nullable=False, default=dict)
     created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False, index=True)
+
+
+class McpInteraction(db.Model):
+    """One logical analytical question captured from an MCP client.
+
+    MCP clients (Claude Desktop, ChatGPT, other hosts) talk to Power BI
+    through ``mcp-aklara``, which calls back into this Flask app's private
+    broker (``/internal/mcp/*``) to resolve access, list/select skills and
+    fetch relevant schema — but ``execute_dax_query`` itself runs directly
+    against the Power BI REST API using the token handed out by
+    ``/internal/mcp/resolve-access``. This backend never sees the DAX
+    execution or the final answer, which may be produced entirely outside
+    KLARA by the host MCP client, so only the user's question is persisted
+    here — never an answer, cost, tokens or model, which would misrepresent
+    something Klara never computed.
+
+    Deduplication: a single user question can drive several broker calls
+    (list-skills, select-skills, relevant-schema, possibly repeated). See
+    ``app.services.mcp_interaction_service.record_mcp_question`` for the
+    correlation/dedup strategy and its documented limitation (no explicit
+    request/correlation id is available from mcp-aklara today).
+    """
+
+    __tablename__ = 'mcp_interactions'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False, index=True)
+    question = db.Column(db.Text, nullable=False)
+
+    empresa_id = db.Column(
+        db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='SET NULL'), nullable=True, index=True
+    )
+    report_id_fk = db.Column(
+        db.BigInteger, db.ForeignKey('reports.id', ondelete='SET NULL'), nullable=True, index=True
+    )
+
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    mcp_session_public_id = db.Column(db.String(36), nullable=True, index=True)
+    grant_public_id = db.Column(db.String(36), nullable=True, index=True)
+
+    # Which broker call first captured this logical question: 'select_skills'
+    # or 'relevant_schema' (the only two calls that carry the raw question).
+    source_tool = db.Column(db.String(50), nullable=False)
+
+    empresa = db.relationship('Empresa')
+    report = db.relationship('Report')
+    user = db.relationship('User')
+
+    __table_args__ = (
+        db.Index('ix_mcp_interactions_session_created', 'mcp_session_public_id', 'created_at'),
+    )
+

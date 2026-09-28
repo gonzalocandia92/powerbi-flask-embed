@@ -55,6 +55,23 @@ class ChatbotModelNotAllowedError(ChatbotServiceError):
     """Raised when a client requests a model outside the effective allowlist."""
 
 
+# Internal ``source`` values ("chat"/"whatsapp"/...) drive analytics routing,
+# billing source_type and tracing tags, and must not change: other code and
+# historical AIUsageEvent rows depend on them. ``channel`` is a distinct,
+# UI-facing concept (see ChatSession.channel) that this module maps to at the
+# single point where a session is created, so the rest of the pipeline never
+# has to know about it. Sources without an explicit mapping (e.g. "internal",
+# used by non-chat AnalyticsExecutor callers) intentionally get no channel.
+_CHANNEL_BY_SOURCE = {
+    "chat": "klara_chat",
+    "whatsapp": "whatsapp",
+}
+
+
+def _channel_for_source(source: Optional[str]) -> Optional[str]:
+    return _CHANNEL_BY_SOURCE.get((source or "").strip().lower())
+
+
 def _chat_message_to_history_message(message: ChatMessage) -> Optional[Dict[str, Any]]:
     role = (message.role or "").strip().lower()
     content = message.content or ""
@@ -128,6 +145,7 @@ def _ensure_session_for_turn(
     conversation_id: Optional[str],
     reset_history: bool,
     question: str,
+    channel: Optional[str] = None,
 ) -> ChatSession:
     session: Optional[ChatSession] = None
     session_id = _extract_session_id(conversation_id)
@@ -136,7 +154,7 @@ def _ensure_session_for_turn(
         session = db.session.get(ChatSession, session_id)
 
     if session is None or reset_history:
-        session = ChatSession(slug=slug, title=_build_session_title(question))
+        session = ChatSession(slug=slug, title=_build_session_title(question), channel=channel)
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
@@ -146,6 +164,12 @@ def _ensure_session_for_turn(
         session.slug = slug
     if not session.title:
         session.title = _build_session_title(question)
+    # Self-heal: a session created before ``channel`` existed, or created
+    # without it for any other reason, gets classified the moment we have
+    # reliable evidence for it (this same request already knows its real
+    # channel). Never overwrite a channel that was already set explicitly.
+    if not session.channel and channel:
+        session.channel = channel
     return session
 
 
@@ -167,12 +191,14 @@ def _prepare_turn_sync(
     reset_history: bool,
     question: str,
     requested_model_key: Optional[str] = None,
-) -> Tuple[int, List[Dict[str, Any]]]:
+    channel: Optional[str] = None,
+) -> Tuple[int, int, List[Dict[str, Any]]]:
     session = _ensure_session_for_turn(
         slug=slug,
         conversation_id=conversation_id,
         reset_history=reset_history,
         question=question,
+        channel=channel,
     )
     session.workspace_id_fk = billing_context.workspace_id
     session.report_id_fk = billing_context.report_id
@@ -195,7 +221,7 @@ def _prepare_turn_sync(
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     db.session.commit()
-    return session.id, history
+    return session.id, user_message.id, history
 
 
 def _record_result_usage_events(
@@ -206,6 +232,7 @@ def _record_result_usage_events(
     billing_context: ai_billing.BillingContext,
     model: str,
     had_error: bool,
+    source: str = "chat",
 ) -> int:
     persisted_events = 0
     cost_events = []
@@ -240,7 +267,12 @@ def _record_result_usage_events(
             provider=result.get("provider") or "anthropic",
             model=model,
             event_type="generation",
-            source_type="chat",
+            # Bug fixed: this used to hardcode "chat" regardless of the real
+            # execution source, so a WhatsApp interaction that fell back to
+            # this estimate (no ai_usage_events from the pipeline) would be
+            # misclassified as chat in billing/analytics. Always use the
+            # actual source ("chat"/"whatsapp"/...) instead.
+            source_type=source,
             trigger_type="user_request",
             operation_name="chat-response-fallback",
             status="error" if had_error else "success",
@@ -249,7 +281,7 @@ def _record_result_usage_events(
             total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
             metadata_json={
                 "component": "main_agent",
-                "execution_source": "chat",
+                "execution_source": source,
                 "estimated_usage": True,
                 "fallback_reason": "missing_ai_usage_events",
             },
@@ -271,6 +303,8 @@ def _persist_success_sync(
     latency_ms: int,
     anthropic_model: str,
     requested_model_key: Optional[str] = None,
+    user_message_id: Optional[int] = None,
+    source: str = "chat",
 ) -> Dict[str, Any]:
     session = db.session.get(ChatSession, session_id)
     if session is None:
@@ -298,6 +332,7 @@ def _persist_success_sync(
         dax_query=result.get("dax_query"),
         had_error=had_error,
         error_message=result.get("error_message") if had_error else None,
+        reply_to_message_id=user_message_id,
     )
     _prepare_sqlite_id(assistant_message, ChatMessage)
     db.session.add(assistant_message)
@@ -310,6 +345,7 @@ def _persist_success_sync(
         billing_context=billing_context,
         model=result.get("model") or anthropic_model,
         had_error=had_error,
+        source=source,
     )
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
@@ -367,12 +403,15 @@ def _persist_error_sync(
     billing_context: Optional[ai_billing.BillingContext] = None,
     result: Optional[Dict[str, Any]] = None,
     requested_model_key: Optional[str] = None,
+    user_message_id: Optional[int] = None,
+    source: str = "chat",
 ) -> None:
     db.session.rollback()
 
     session = db.session.get(ChatSession, session_id) if session_id is not None else None
+    reply_to_message_id = user_message_id
     if session is None:
-        session = ChatSession(slug=slug, title=_build_session_title(question))
+        session = ChatSession(slug=slug, title=_build_session_title(question), channel=_channel_for_source(source))
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
@@ -380,6 +419,9 @@ def _persist_error_sync(
             session.workspace_id_fk = billing_context.workspace_id
             session.report_id_fk = billing_context.report_id
             session.empresa_id = billing_context.empresa_id
+        # user_message_id (if any) belonged to the original session lookup,
+        # which failed here; it does not exist in this freshly created one.
+        reply_to_message_id = None
 
     error_log = ChatMessage(
         session_id=session.id,
@@ -401,6 +443,7 @@ def _persist_error_sync(
         dax_query=result.get("dax_query") if result else None,
         had_error=True,
         error_message=error_message,
+        reply_to_message_id=reply_to_message_id,
     )
     _prepare_sqlite_id(error_log, ChatMessage)
     db.session.add(error_log)
@@ -414,6 +457,7 @@ def _persist_error_sync(
             billing_context=billing_context,
             model=result.get("model") or DEFAULT_MODEL,
             had_error=True,
+            source=source,
         )
     # If we are reusing an existing session, the user message was already
     # committed during turn preparation, so only the assistant error is added.
@@ -464,11 +508,13 @@ async def procesar_interaccion_completa(
     runtime_config = config or dict(current_app.config)
     start = time.monotonic()
     session_id: Optional[int] = None
+    user_message_id: Optional[int] = None
     report: Optional[Report] = None
     billing_context: Optional[ai_billing.BillingContext] = None
     result: Optional[Dict[str, Any]] = None
     user_turn_persisted = False
     trace_version = os.getenv("RELEASE_VERSION") or os.getenv("GIT_SHA")
+    channel = _channel_for_source(source)
 
     async def persist_execution_error(exc: Exception) -> None:
         if not user_turn_persisted:
@@ -483,6 +529,8 @@ async def procesar_interaccion_completa(
                 billing_context=billing_context,
                 result=result,
                 requested_model_key=model_key,
+                user_message_id=user_message_id,
+                source=source,
             )
         except Exception:
             logging.exception("[ChatbotService] Failed to log error to DB")
@@ -516,7 +564,7 @@ async def procesar_interaccion_completa(
                 source=source,
                 model_key=model_selection.model.model_key if model_selection else None,
             ))
-            session_id, history = await asyncio.to_thread(
+            session_id, user_message_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
                 billing_context=billing_context,
                 slug=slug,
@@ -524,6 +572,7 @@ async def procesar_interaccion_completa(
                 reset_history=reset_history,
                 question=pregunta,
                 requested_model_key=model_key,
+                channel=channel,
             )
             user_turn_persisted = True
 
@@ -569,6 +618,8 @@ async def procesar_interaccion_completa(
                 latency_ms=latency_ms,
                 anthropic_model=DEFAULT_MODEL,
                 requested_model_key=model_key,
+                user_message_id=user_message_id,
+                source=source,
             )
 
             if root_observation is not None:

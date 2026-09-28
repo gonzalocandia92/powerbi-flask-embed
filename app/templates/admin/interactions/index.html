@@ -1,0 +1,290 @@
+{% extends "layout.html" %}
+
+{% block title %}Interacciones KLARA - Sudata PBI{% endblock %}
+
+{% block body %}
+<div class="container-fluid py-4" id="interactions-page">
+  <div class="d-flex justify-content-between align-items-center mb-4 page-header">
+    <div>
+      <h2 class="fw-bold text-dark mb-2">
+        <i class="bi bi-chat-square-text me-2 text-primary"></i>Interacciones KLARA
+      </h2>
+      <p class="text-muted mb-0">
+        <i class="bi bi-info-circle me-1"></i>
+        Preguntas y respuestas de clientes con Klara, por cualquier canal de entrada (histórico incluido).
+      </p>
+    </div>
+  </div>
+
+  <div class="card mb-3">
+    <div class="card-body">
+      <form id="interactions-filters" class="row g-3 align-items-end" onsubmit="return false;">
+        <div class="col-md-2">
+          <label class="form-label" for="filter-date-from">Desde</label>
+          <input type="date" class="form-control" id="filter-date-from">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="filter-date-to">Hasta</label>
+          <input type="date" class="form-control" id="filter-date-to" max="{{ today }}">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="filter-empresa">Cliente</label>
+          <select class="form-select" id="filter-empresa">
+            <option value="">Todos</option>
+            {% for empresa in empresas %}
+            <option value="{{ empresa.id }}">{{ empresa.nombre }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="filter-report">Reporte</label>
+          <select class="form-select" id="filter-report">
+            <option value="">Todos</option>
+            {% for report in reports %}
+            <option value="{{ report.id }}">{{ report.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="filter-channel">Canal</label>
+          <select class="form-select" id="filter-channel">
+            {% for value, label in channel_options %}
+            <option value="{{ value }}">{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="filter-search">Buscar</label>
+          <input type="text" class="form-control" id="filter-search" placeholder="Texto en pregunta o respuesta">
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+      <h6 class="mb-0"><i class="bi bi-list-check me-2"></i>Interacciones</h6>
+      <span class="badge bg-light text-dark" id="interactions-count">0 registros</span>
+    </div>
+    <div class="card-body p-0">
+      <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+          <thead>
+            <tr>
+              <th style="white-space:nowrap;">Fecha</th>
+              <th>Cliente</th>
+              <th>Reporte</th>
+              <th>Canal</th>
+              <th style="max-width:280px;">Pregunta</th>
+              <th style="max-width:280px;">Respuesta</th>
+              <th class="text-end">Costo</th>
+            </tr>
+          </thead>
+          <tbody id="interactions-tbody">
+            <tr><td colspan="7" class="text-center text-muted py-4">Cargando...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card-footer d-flex justify-content-between align-items-center">
+      <div class="text-muted small" id="interactions-pageinfo"></div>
+      <div class="btn-group">
+        <button class="btn btn-sm btn-outline-secondary" id="interactions-prev" type="button">
+          <i class="bi bi-chevron-left"></i> Anterior
+        </button>
+        <button class="btn btn-sm btn-outline-secondary" id="interactions-next" type="button">
+          Siguiente <i class="bi bi-chevron-right"></i>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal fade" id="interaction-detail-modal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">Detalle de interacción</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body" id="interaction-detail-body">
+        <div class="text-center text-muted py-4">Cargando...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+  #interactions-tbody td.truncate {
+    max-width: 320px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  #interactions-tbody tr { cursor: pointer; }
+
+  .markdown-answer { font-size: 0.9rem; }
+  .markdown-answer > *:first-child { margin-top: 0; }
+  .markdown-answer > *:last-child { margin-bottom: 0; }
+  .markdown-answer table { width: auto; max-width: 100%; border-collapse: collapse; margin: 0.5rem 0; }
+  .markdown-answer table th, .markdown-answer table td { border: 1px solid #dee2e6; padding: 0.35rem 0.6rem; }
+  .markdown-answer code { background: rgba(0,0,0,0.06); padding: 0.1rem 0.3rem; border-radius: 3px; }
+  .markdown-answer pre { background: rgba(0,0,0,0.06); padding: 0.6rem; border-radius: 4px; overflow-x: auto; }
+  .markdown-answer pre code { background: none; padding: 0; }
+  .markdown-answer img { max-width: 100%; }
+  .markdown-answer ul, .markdown-answer ol { padding-left: 1.4rem; }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
+(function () {
+  const state = { page: 1, pageSize: 25, totalPages: 1 };
+
+  const el = (id) => document.getElementById(id);
+  const channelLabels = {
+    klara_chat: 'Klara Chat', whatsapp: 'WhatsApp', mcp: 'MCP', unknown: 'Sin identificar',
+  };
+  const channelBadgeClass = {
+    klara_chat: 'bg-primary', whatsapp: 'bg-success', mcp: 'bg-info text-dark', unknown: 'bg-secondary',
+  };
+
+  function escapeHtml(value) {
+    if (value === null || value === undefined) return '';
+    return String(value)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '-';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return iso;
+    return d.toLocaleString('es-AR', { dateStyle: 'short', timeStyle: 'short' });
+  }
+
+  function formatCost(value) {
+    if (value === null || value === undefined) return '—';
+    return '$' + Number(value).toFixed(4);
+  }
+
+  function currentFilters() {
+    const params = new URLSearchParams();
+    if (el('filter-date-from').value) params.set('date_from', el('filter-date-from').value);
+    if (el('filter-date-to').value) params.set('date_to', el('filter-date-to').value);
+    if (el('filter-empresa').value) params.set('empresa_id', el('filter-empresa').value);
+    if (el('filter-report').value) params.set('report_id', el('filter-report').value);
+    if (el('filter-channel').value) params.set('channel', el('filter-channel').value);
+    if (el('filter-search').value.trim()) params.set('q', el('filter-search').value.trim());
+    params.set('page', state.page);
+    params.set('page_size', state.pageSize);
+    return params;
+  }
+
+  function renderRows(rows) {
+    const tbody = el('interactions-tbody');
+    if (!rows.length) {
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Sin interacciones para estos filtros.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = rows.map((row) => {
+      const badge = channelBadgeClass[row.channel] || 'bg-secondary';
+      const label = channelLabels[row.channel] || row.channel;
+      return `<tr data-id="${escapeHtml(row.id)}">
+        <td style="white-space:nowrap;">${formatDate(row.occurred_at)}</td>
+        <td>${escapeHtml(row.empresa_name) || '<span class="text-muted">-</span>'}</td>
+        <td>${escapeHtml(row.report_name) || '<span class="text-muted">-</span>'}</td>
+        <td><span class="badge ${badge}">${escapeHtml(label)}</span></td>
+        <td class="truncate" title="${escapeHtml(row.question)}">${escapeHtml(row.question)}</td>
+        <td class="truncate" title="${escapeHtml(row.answer)}">${row.answer ? escapeHtml(row.answer) : '<span class="text-muted">—</span>'}</td>
+        <td class="text-end">${formatCost(row.total_cost_usd)}</td>
+      </tr>`;
+    }).join('');
+
+    Array.from(tbody.querySelectorAll('tr[data-id]')).forEach((tr) => {
+      tr.addEventListener('click', () => openDetail(tr.getAttribute('data-id')));
+    });
+  }
+
+  async function loadList() {
+    el('interactions-tbody').innerHTML = '<tr><td colspan="7" class="text-center text-muted py-4">Cargando...</td></tr>';
+    const response = await fetch('{{ url_for("admin_interactions.api_list") }}?' + currentFilters().toString());
+    if (!response.ok) {
+      el('interactions-tbody').innerHTML = '<tr><td colspan="7" class="text-center text-danger py-4">Error al cargar interacciones.</td></tr>';
+      return;
+    }
+    const data = await response.json();
+    state.totalPages = data.total_pages || 1;
+    renderRows(data.rows || []);
+    el('interactions-count').textContent = `${data.total} registro(s)`;
+    el('interactions-pageinfo').textContent = `Página ${data.page} de ${data.total_pages}`;
+    el('interactions-prev').disabled = data.page <= 1;
+    el('interactions-next').disabled = data.page >= data.total_pages;
+  }
+
+  function detailField(label, value) {
+    if (value === null || value === undefined || value === '') return '';
+    return `<div class="mb-2"><div class="text-muted small">${label}</div><div>${value}</div></div>`;
+  }
+
+  async function openDetail(id) {
+    const modalEl = el('interaction-detail-modal');
+    const modal = bootstrap.Modal.getOrCreateInstance(modalEl);
+    el('interaction-detail-body').innerHTML = '<div class="text-center text-muted py-4">Cargando...</div>';
+    modal.show();
+
+    const response = await fetch('{{ url_for("admin_interactions.api_detail", interaction_id="__ID__") }}'.replace('__ID__', encodeURIComponent(id)));
+    if (!response.ok) {
+      el('interaction-detail-body').innerHTML = '<div class="text-center text-danger py-4">No se pudo cargar el detalle.</div>';
+      return;
+    }
+    const d = await response.json();
+    const label = channelLabels[d.channel] || d.channel;
+    let html = '';
+    html += detailField('Canal', `<span class="badge ${channelBadgeClass[d.channel] || 'bg-secondary'}">${escapeHtml(label)}</span>`);
+    html += detailField('Fecha', formatDate(d.occurred_at));
+    html += detailField('Cliente', escapeHtml(d.empresa_name));
+    html += detailField('Reporte', escapeHtml(d.report_name));
+    html += `<div class="mb-3"><div class="text-muted small">Pregunta</div><div class="border rounded p-2 bg-light" style="white-space:pre-wrap;">${escapeHtml(d.question) || '-'}</div></div>`;
+    const answerHtml = d.answer
+      ? (window.marked ? marked.parse(d.answer) : escapeHtml(d.answer).replace(/\n/g, '<br>'))
+      : '<span class="text-muted">Sin respuesta (MCP, o interacción incompleta)</span>';
+    html += `<div class="mb-3"><div class="text-muted small">Respuesta</div><div class="border rounded p-2 bg-light markdown-answer">${answerHtml}</div></div>`;
+    html += detailField('Costo', d.total_cost_usd !== null && d.total_cost_usd !== undefined ? formatCost(d.total_cost_usd) : null);
+    html += detailField('Modelo', escapeHtml(d.model_key || d.actual_model));
+    html += detailField('Tokens (input/output)', (d.input_tokens || d.output_tokens) ? `${d.input_tokens ?? '-'} / ${d.output_tokens ?? '-'}` : null);
+    html += detailField('Latencia', d.latency_ms ? `${d.latency_ms} ms` : null);
+    html += detailField('Error', d.had_error ? `<span class="text-danger">${escapeHtml(d.error_message || 'Sí')}</span>` : null);
+    if (d.tools_called) {
+      html += detailField('Herramientas utilizadas', `<pre class="mb-0 small">${escapeHtml(JSON.stringify(d.tools_called, null, 2))}</pre>`);
+    }
+    if (d.dax_query) {
+      html += detailField('DAX generado', `<pre class="mb-0 small">${escapeHtml(d.dax_query)}</pre>`);
+    }
+    if (d.source_tool) {
+      html += detailField('Origen MCP', escapeHtml(d.source_tool));
+    }
+    if (d.user_username) {
+      html += detailField('Usuario MCP', escapeHtml(d.user_username));
+    }
+    el('interaction-detail-body').innerHTML = html;
+  }
+
+  ['filter-date-from', 'filter-date-to', 'filter-empresa', 'filter-report', 'filter-channel'].forEach((id) => {
+    el(id).addEventListener('change', () => { state.page = 1; loadList(); });
+  });
+  let searchTimer = null;
+  el('filter-search').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => { state.page = 1; loadList(); }, 350);
+  });
+  el('interactions-prev').addEventListener('click', () => {
+    if (state.page > 1) { state.page -= 1; loadList(); }
+  });
+  el('interactions-next').addEventListener('click', () => {
+    if (state.page < state.totalPages) { state.page += 1; loadList(); }
+  });
+
+  loadList();
+})();
+</script>
+{% endblock %}
