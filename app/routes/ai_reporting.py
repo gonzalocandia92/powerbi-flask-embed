@@ -4,6 +4,8 @@ from __future__ import annotations
 import asyncio
 import csv
 import logging
+import re
+import time
 from io import StringIO
 from dataclasses import replace
 
@@ -20,10 +22,12 @@ from app.services.analytics import (
 )
 from app.services.llm.profiles import PROFILES
 from app.services.reporting import (
-    CoordinationRunner, HtmlReportRenderer, ReportDefinition, ReportGenerator, ReportPipeline,
-    ReportQuestion, ReportWriterConfigurationError, ReportWriterInvalidOutputError, render_markdown,
+    CoordinationRunner, FinalReport, HtmlReportRenderer, PdfBrowserUnavailableError, PdfRenderError,
+    ReportDefinition, ReportGenerator, ReportPipeline, ReportQuestion, ReportWriterConfigurationError,
+    ReportWriterInvalidOutputError, build_pdf_renderer, render_markdown, report_pdf_filename,
 )
 from app.services.reporting.coordinator import CoordinatorBillingLimitError
+from app.services.reporting.cost import ReportCostService
 from app.services.reporting.coordinator_factory import resolve_report_coordinator
 from app.services.reporting.usage import (
     record_coordinator_usage, record_extra_analysis_usage, record_section_usage, record_writer_usage,
@@ -45,6 +49,8 @@ PUBLIC_FAILURE_REASONS = frozenset({
     "agent_execution_exception", "pinned_skill_unavailable", "pinned_skill_resolution_failed",
 })
 MAX_PINNED_SKILLS = 10
+MAX_PDF_PAYLOAD_BYTES = 2 * 1024 * 1024
+_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 
 
 def _public_failure_reason(reason: str | None) -> str | None:
@@ -359,7 +365,31 @@ def generate():
         # Admin/debug only (V1.1). Absent ("fixed" strategy or no coordination_runner) is
         # normal, never surfaced client-side, and never blocks the report on failure.
         "coordination": _coordination_payload(result.coordination),
+        # Admin only: cost of THIS report_run_id, aggregated from the AI usage ledger.
+        "cost": _cost_payload(result),
     })
+
+
+def _cost_payload(result) -> dict | None:
+    """Cost tab payload. The route only asks ``ReportCostService``; it never queries or prices.
+
+    A failure here must never cost the admin their report, so it degrades to ``None``.
+    """
+    draft = result.draft
+    try:
+        summary = ReportCostService().summarize(
+            draft.report_run_id, report_id=draft.report_id,
+            section_titles={section.key: section.title for section in draft.sections})
+        payload = summary.to_payload()
+    except Exception:
+        logging.exception("[AIReporting] Cost summary failed report_run_id=%s", _log_run_id(draft.report_run_id))
+        return None
+    # Ledger writes that failed are invisible to the ledger query: say so instead of
+    # presenting an incomplete total as complete.
+    payload["ledger_record_failures"] = (
+        result.usage_record_failures
+        + (result.coordination.extra_usage_record_failures if result.coordination else 0))
+    return payload
 
 
 def _writer_payload(result) -> dict:
@@ -409,3 +439,62 @@ def _coordination_payload(coordination) -> dict | None:
         } for section in coordination.extra_sections],
         "extra_usage_record_failures": coordination.extra_usage_record_failures,
     }
+
+
+def _pdf_error(code: str, message: str, status: int):
+    return jsonify({"error": message, "code": code}), status
+
+
+def _log_run_id(value) -> str | None:
+    """``report_run_id`` is only used for log correlation; anything unexpected is dropped."""
+    return value if isinstance(value, str) and _RUN_ID_RE.match(value) else None
+
+
+@bp.route("/render-pdf", methods=["POST"])
+@login_required
+@admin_required
+def render_pdf():
+    """Download an already generated ``FinalReport`` as PDF.
+
+    Body: ``{"final_report": {...}, "report_run_id": "..."?}``. The client never sends
+    HTML: the ``FinalReport`` is re-validated with Pydantic and rendered to HTML by the
+    official ``HtmlReportRenderer`` before Chromium sees it. No LLM, analytics, coordinator
+    or writer is involved, and nothing is stored.
+    """
+    if (request.content_length or 0) > MAX_PDF_PAYLOAD_BYTES:
+        return _pdf_error("invalid_final_report", "El informe supera el tamaño permitido.", 413)
+    payload = request.get_json(silent=True)
+    raw_report = payload.get("final_report") if isinstance(payload, dict) else None
+    run_id = _log_run_id(payload.get("report_run_id")) if isinstance(payload, dict) else None
+    if not isinstance(raw_report, dict):
+        return _pdf_error("invalid_final_report", "El informe recibido no es válido.", 400)
+    try:
+        report = FinalReport.model_validate(raw_report)
+    except ValueError as exc:  # pydantic.ValidationError; details stay in the log
+        logging.warning("[AIReporting] PDF rejected: invalid FinalReport report_run_id=%s errors=%s",
+                        run_id, exc.error_count() if hasattr(exc, "error_count") else "n/a")
+        return _pdf_error("invalid_final_report", "El informe recibido no es válido.", 400)
+
+    started = time.perf_counter()
+    try:
+        html = HtmlReportRenderer().render(report)
+        pdf = asyncio.run(build_pdf_renderer().render(html))
+    except PdfRenderError as exc:
+        logging.error("[AIReporting] PDF failed report_run_id=%s code=%s latency_ms=%d",
+                      run_id, exc.code, (time.perf_counter() - started) * 1000, exc_info=True)
+        if isinstance(exc, PdfBrowserUnavailableError):
+            return _pdf_error(exc.code, "El generador de PDF no está disponible en este momento. "
+                                        "El informe y su HTML no se vieron afectados.", 503)
+        return _pdf_error(exc.code, "No se pudo generar el PDF. El informe no se vio afectado; intentá nuevamente.", 500)
+    except Exception:
+        logging.error("[AIReporting] PDF failed report_run_id=%s code=pdf_render_failed latency_ms=%d",
+                      run_id, (time.perf_counter() - started) * 1000, exc_info=True)
+        return _pdf_error("pdf_render_failed",
+                          "No se pudo generar el PDF. El informe no se vio afectado; intentá nuevamente.", 500)
+    logging.info("[AIReporting] PDF ok report_run_id=%s latency_ms=%d size_bytes=%d",
+                 run_id, (time.perf_counter() - started) * 1000, len(pdf))
+    return Response(pdf, mimetype="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{report_pdf_filename(report)}"',
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+    })

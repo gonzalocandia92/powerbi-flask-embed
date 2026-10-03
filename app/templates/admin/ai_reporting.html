@@ -56,12 +56,13 @@
     </div>
   </div>
   <section id="reporting-result" class="mt-4 d-none" aria-live="polite">
-    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h3 class="mb-0" id="reporting-result-title"></h3><div class="text-muted small font-monospace" id="reporting-run-id"></div></div><div class="d-flex gap-2"><button class="btn btn-outline-primary btn-sm" id="reporting-download-html" type="button">Descargar HTML</button><button class="btn btn-outline-primary btn-sm" id="reporting-download-json" type="button">Descargar JSON</button></div></div>
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h3 class="mb-0" id="reporting-result-title"></h3><div class="text-muted small font-monospace" id="reporting-run-id"></div></div><div class="d-flex gap-2"><button class="btn btn-outline-primary btn-sm" id="reporting-download-html" type="button">Descargar HTML</button><button class="btn btn-outline-primary btn-sm" id="reporting-download-pdf" type="button">Descargar PDF</button><button class="btn btn-outline-primary btn-sm" id="reporting-download-json" type="button">Descargar JSON</button></div></div>
     <div id="reporting-writer-alert" class="alert d-none" role="alert"></div>
     <ul class="nav nav-tabs" id="reporting-tabs" role="tablist">
       <li class="nav-item" role="presentation"><button class="nav-link active" type="button" role="tab" data-tab="report">Informe</button></li>
       <li class="nav-item" role="presentation"><button class="nav-link" type="button" role="tab" data-tab="json">FinalReport JSON</button></li>
       <li class="nav-item" role="presentation"><button class="nav-link" type="button" role="tab" data-tab="debug">ReportDraft / Debug</button></li>
+      <li class="nav-item" role="presentation"><button class="nav-link" type="button" role="tab" data-tab="cost">Costo</button></li>
     </ul>
     <div class="pt-3">
       <div data-pane="report">
@@ -76,11 +77,12 @@
         <div class="d-flex gap-2 my-2"><button class="btn btn-outline-primary btn-sm" id="reporting-copy" type="button">Copiar Markdown</button><button class="btn btn-outline-primary btn-sm" id="reporting-download" type="button">Descargar .md</button></div>
         <details class="mt-2"><summary class="mb-2">Ver Markdown del ReportDraft</summary><textarea class="form-control font-monospace" id="reporting-markdown" rows="12" readonly></textarea></details>
       </div>
+      <div data-pane="cost" class="d-none"><div id="reporting-cost"></div></div>
     </div>
   </section>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script><script>
+{% block scripts %}{{ super() }}<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_pdf.js') }}"></script><script>
 (() => {
   const models = {{ models|tojson }};
   const defaultModelKey = {{ default_model_key|tojson }};
@@ -88,6 +90,7 @@
   const endpoint = {{ url_for('ai_reporting.generate')|tojson }};
   const importEndpoint = {{ url_for('ai_reporting.import_questions')|tojson }};
   const skillsEndpoint = {{ url_for('ai_reporting.skills')|tojson }};
+  const pdfEndpoint = {{ url_for('ai_reporting.render_pdf')|tojson }};
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
   const byId = id => document.getElementById(id);
   const questions = byId('reporting-questions');
@@ -98,6 +101,8 @@
   let markdown = '';
   let reportHtml = null;
   let finalReportJson = null;
+  let finalReportData = null;
+  let reportRunId = null;
   let skillCatalog = [];
   const renderMarkdown = text => KlaraMarkdown.render(text, document);
 
@@ -295,10 +300,121 @@
       box.append(u);
     }
   }
+  // ---- Costo: only presents what the server aggregated from the AI usage ledger (no pricing here).
+  const fmtTokens = n => n == null ? 'n/d' : (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
+  const fmtInt = n => n == null ? 'n/d' : Number(n).toLocaleString('es-AR');
+  const fmtSeconds = (ms, complete) => ms == null ? 'n/d' : `${(ms / 1000).toFixed(1)} s${complete ? '' : ' (parcial)'}`;
+  const STATUS_TEXT = {verified: 'verificado', estimated: 'estimado', missing: 'sin valorizar', unbilled: 'no facturable'};
+  function costText(item) {
+    const bits = [item.cost_display || 'n/d'];
+    if (item.estimated_calls) bits.push(`~${item.estimated_cost_display} (estimado)`);
+    if (item.missing_calls) bits.push(`${item.missing_calls} sin valorizar`);
+    return bits.join(' + ');
+  }
+  function costTable(box, headers, rows, totalRow, numericFrom = 1) {
+    const table = document.createElement('table'); table.className = 'table table-sm table-striped mb-2';
+    const head = document.createElement('tr');
+    headers.forEach((h, index) => { cell(head, h, 'th'); if (index >= numericFrom) head.lastChild.className = 'text-end'; });
+    const thead = document.createElement('thead'); thead.append(head); table.append(thead);
+    const tbody = document.createElement('tbody');
+    const addRow = (values, cls) => {
+      const row = document.createElement('tr'); if (cls) row.className = cls;
+      values.forEach((value, index) => { cell(row, value); if (index >= numericFrom) row.lastChild.className = 'text-end'; });
+      tbody.append(row);
+    };
+    rows.forEach(r => addRow(r.values, r.cls));
+    if (totalRow) addRow(totalRow, 'fw-bold table-light');
+    table.append(tbody); box.append(table);
+  }
+  function heading(box, text) { const h = document.createElement('h4'); h.className = 'h6 mt-3'; h.textContent = text; box.append(h); }
+  function renderCost(cost, warning) {
+    const box = byId('reporting-cost');
+    box.replaceChildren();
+    if (!cost) {
+      const a = document.createElement('div'); a.className = 'alert alert-secondary';
+      a.textContent = 'No se pudo calcular el costo de esta ejecución.'; box.append(a); return;
+    }
+    const card = document.createElement('div'); card.className = 'card mb-3';
+    const body = document.createElement('div'); body.className = 'card-body'; card.append(body);
+    const label = document.createElement('div'); label.className = 'text-muted small';
+    label.textContent = cost.is_exact ? 'Costo total (verificado)' : 'Costo total verificado'; body.append(label);
+    const total = document.createElement('div'); total.className = 'display-6 font-monospace'; total.textContent = cost.cost_display; body.append(total);
+    const facts = document.createElement('div'); facts.className = 'small mt-2';
+    facts.textContent = `${cost.calls} llamada${cost.calls === 1 ? '' : 's'} · Input: ${fmtTokens(cost.input_tokens)} · Cache read: ${fmtTokens(cost.cached_input_tokens)} · Reasoning: ${fmtTokens(cost.reasoning_tokens)} · Output: ${fmtTokens(cost.output_tokens)} · Tiempo acumulado LLM: ${fmtSeconds(cost.latency_ms, cost.latency_complete)}`;
+    body.append(facts);
+    if (cost.repair_calls) {
+      const r = document.createElement('div'); r.className = 'small text-muted';
+      r.textContent = `Retries/repairs incluidos: ${cost.repair_calls} llamada(s) · ${cost.repair_cost_display}`; body.append(r);
+    }
+    box.append(card);
+    if (!cost.is_exact) {
+      const a = document.createElement('div'); a.className = 'alert alert-warning';
+      const parts = [`Costo total verificado: ${cost.cost_display}.`];
+      if (cost.missing_calls) parts.push(`Costo no valorizado: ${cost.missing_calls} llamada(s) sin pricing verificado (no se cuentan como USD 0).`);
+      if (cost.estimated_calls) parts.push(`Reserva estimada de ${cost.estimated_calls} llamada(s) pendiente(s) de conciliación: ${cost.estimated_cost_display} (no incluida en el total).`);
+      a.textContent = parts.join(' '); box.append(a);
+    }
+    if (cost.unbilled_calls) {
+      const n = document.createElement('div'); n.className = 'small text-muted mb-2';
+      n.textContent = `${cost.unbilled_calls} llamada(s) diagnósticas no facturables (USD 0 por diseño del ledger).`; box.append(n);
+    }
+    if (warning) {
+      const a = document.createElement('div'); a.className = 'alert alert-warning';
+      a.textContent = `${warning} evento(s) de uso no se pudieron registrar en el ledger: el total puede estar incompleto.`; box.append(a);
+    }
+    if (!cost.calls) {
+      const a = document.createElement('div'); a.className = 'alert alert-secondary';
+      a.textContent = 'No hay eventos de uso registrados para este report_run_id.'; box.append(a); return;
+    }
+
+    heading(box, 'Por etapa');
+    const stageRows = [];
+    for (const stage of cost.stages) {
+      stageRows.push({values: [stage.label, stage.calls, costText(stage)]});
+      for (const section of stage.sections) {
+        stageRows.push({cls: 'text-muted', values: [`↳ ${section.title ? section.title + ' — ' : ''}${section.key}`, section.calls, costText(section)]});
+      }
+    }
+    costTable(box, ['Etapa', 'Llamadas', 'Costo'], stageRows, ['TOTAL', cost.calls, costText(cost)]);
+
+    heading(box, 'Por componente y modelo');
+    const componentRows = [];
+    for (const component of cost.components) {
+      const stageLabel = (cost.stages.find(s => s.stage === component.stage) || {}).label || component.stage;
+      for (const m of component.models) {
+        componentRows.push({values: [
+          stageLabel, component.label, `${m.provider}/${m.model}`,
+          m.repair_calls ? `${m.calls} (${m.repair_calls} repair)` : m.calls,
+          fmtInt(m.input_tokens), fmtInt(m.cached_input_tokens), fmtInt(m.reasoning_tokens), fmtInt(m.output_tokens), costText(m)]});
+      }
+    }
+    costTable(box, ['Etapa', 'Componente', 'Modelo', 'Llamadas', 'Input', 'Cache', 'Reasoning', 'Output', 'Costo'], componentRows,
+      ['TOTAL', '', '', cost.calls, fmtInt(cost.input_tokens), fmtInt(cost.cached_input_tokens), fmtInt(cost.reasoning_tokens), fmtInt(cost.output_tokens), costText(cost)], 3);
+
+    heading(box, 'Por modelo');
+    costTable(box, ['Modelo', 'Llamadas', 'Costo'],
+      cost.models.map(m => ({values: [`${m.provider}/${m.model}`, m.calls, costText(m)]})));
+
+    const details = document.createElement('details'); details.className = 'mt-3';
+    const summary = document.createElement('summary'); summary.textContent = 'Ver detalle de llamadas'; details.append(summary);
+    const callRows = [];
+    for (const component of cost.components) {
+      for (const c of component.calls_detail) {
+        const kind = c.kind === 'repair' ? `repair ${Math.max((c.attempt || 2) - 1, 1)}` : c.kind === 'retry' ? 'retry' : c.kind === 'initial' ? (c.attempt ? `attempt ${c.attempt}` : 'inicial') : '';
+        const name = [c.label, c.section_key, kind].filter(Boolean).join(' · ');
+        const cost_ = c.cost_display || (c.billing_status === 'estimated' ? `~${c.estimated_cost_display} (estimado)` : 'n/d (sin pricing)');
+        callRows.push({values: [name, `${c.provider}/${c.model}`, c.thinking || '—', fmtInt(c.input_tokens), fmtInt(c.cached_input_tokens), fmtInt(c.reasoning_tokens), fmtInt(c.output_tokens), c.latency_ms == null ? 'n/d' : `${(c.latency_ms / 1000).toFixed(1)} s`, `${cost_} · ${STATUS_TEXT[c.billing_status] || c.billing_status}`]});
+      }
+    }
+    costTable(details, ['Llamada', 'Modelo', 'Thinking', 'Input', 'Cache read', 'Reasoning', 'Output', 'Latencia', 'Costo'], callRows, null, 3);
+    box.append(details);
+  }
   function renderFinalReport(data) {
     const writer = data.writer || {status: 'failed', error: null};
     reportHtml = data.html || null;
     finalReportJson = data.final_report ? JSON.stringify(data.final_report, null, 2) : null;
+    finalReportData = data.final_report || null;
+    reportRunId = data.report_run_id || null;
     // sandbox without allow-scripts/allow-same-origin: model text can never run code or reach this page.
     byId('reporting-frame').srcdoc = reportHtml || '';
     byId('reporting-frame').classList.toggle('d-none', !reportHtml);
@@ -306,6 +422,7 @@
     byId('reporting-json').value = finalReportJson || '';
     byId('reporting-download-html').disabled = !reportHtml;
     byId('reporting-download-json').disabled = !finalReportJson;
+    byId('reporting-download-pdf').disabled = !finalReportData;
     const alert = byId('reporting-writer-alert');
     if (writer.status === 'ok' && !writer.render_error) { alert.className = 'alert d-none'; alert.textContent = ''; }
     else {
@@ -316,6 +433,7 @@
     }
     renderWriterDebug(writer);
     renderCoordinationDebug(data.coordination || null);
+    renderCost(data.cost || null, data.cost ? data.cost.ledger_record_failures : 0);
     selectTab(reportHtml ? 'report' : 'debug');
   }
   function downloadText(text, name, type) {
@@ -470,6 +588,25 @@
     }
   });
   byId('reporting-download-html').addEventListener('click', () => { if (reportHtml) downloadText(reportHtml, 'informe-klara.html', 'text/html;charset=utf-8'); });
+  byId('reporting-download-pdf').addEventListener('click', async () => {
+    // Reuses the FinalReport already on screen: no LLM, analysis, coordinator or writer call.
+    const button = byId('reporting-download-pdf');
+    const label = button.textContent;
+    clearMessage();
+    button.disabled = true;
+    button.textContent = 'Generando PDF…';
+    try {
+      const {blob, filename} = await KlaraReportPdf.requestPdf({endpoint: pdfEndpoint, csrf, finalReport: finalReportData, reportRunId});
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a'); link.href = url; link.download = filename; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      showMessage(error.message || KlaraReportPdf.GENERIC_ERROR);
+    } finally {
+      button.textContent = label;
+      button.disabled = !finalReportData;
+    }
+  });
   byId('reporting-download-json').addEventListener('click', () => { if (finalReportJson) downloadText(finalReportJson, 'informe-klara.json', 'application/json;charset=utf-8'); });
   byId('reporting-copy').addEventListener('click', async () => {
     try { await navigator.clipboard.writeText(markdown); showMessage('Markdown copiado.', 'success'); }

@@ -403,6 +403,22 @@ def enforce_limit_for_report(report: Report, *, as_of: Optional[datetime] = None
         raise BillingLimitExceeded(DEFAULT_BLOCKED_MESSAGE)
 
 
+def list_usage_events_for_report_run(report_run_id: str, *, report_id: Optional[int] = None) -> list:
+    """Ledger rows written for exactly one Reporting generation (``metadata_json.report_run_id``).
+
+    A read-only accessor that keeps the ``AIUsageEvent`` query next to the rest of the
+    ledger code; consumers (e.g. ``ReportCostService``) aggregate the rows but never
+    recompute prices. ``report_id`` narrows by the indexed ``report_id_fk`` column.
+    """
+    if not isinstance(report_run_id, str) or not report_run_id.strip():
+        raise ValueError("report_run_id is required")
+    query = AIUsageEvent.query.filter(
+        AIUsageEvent.metadata_json["report_run_id"].as_string() == report_run_id)
+    if report_id is not None:
+        query = query.filter(AIUsageEvent.report_id_fk == report_id)
+    return query.order_by(AIUsageEvent.created_at.asc(), AIUsageEvent.id.asc()).all()
+
+
 def resolve_pricing(
     *,
     provider: str,

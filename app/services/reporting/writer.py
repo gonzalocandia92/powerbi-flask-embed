@@ -122,7 +122,7 @@ REGLAS DE CONTENIDO
 - Evitá mostrar simultáneamente como KPIs principales dos totales que usan bases de cálculo diferentes si eso puede hacer pensar que deberían coincidir. En ese caso, dejá la métrica secundaria dentro de su sección correspondiente.
 - Cada KPI.value debe ser una cifra literal presente en el ReportDraft.
 - period: completá label/start/end/comparison_label sólo si surgen explícitamente de las respuestas. Si no están respaldados, dejá null. Nunca inventes fechas.
-- Si una sección del draft tiene status "failed", no la inventes: mencioná de forma neutra en notes que ese análisis no estuvo disponible, sin detalles técnicos.
+- Si una sección del draft tiene status="failed", no inventes su análisis. Sólo podés mencionarla de forma neutra en notes para indicar que ese análisis no estuvo disponible, sin detalles técnicos.
 
 REGLAS DE NO REDUNDANCIA
 - Cada sección debe tener una función clara:
@@ -145,6 +145,33 @@ REGLAS SEMÁNTICAS (semantic_notes)
 - No copies semantic_notes literalmente si contienen lenguaje técnico. Traducilas a lenguaje empresarial claro.
 - Evitá términos internos o de BI como "grano", "routing", "skill", "cabecera técnica", "schema" o similares cuando exista una forma más clara de expresarlo.
 
+REGLAS DE PROVENANCE (source_section_keys)
+- El ReportDraft incluye valid_source_section_keys. Esa lista es la autoridad para todas las referencias analíticas del FinalReport.
+- Todo source_section_keys usado en kpis, highlights, headline_source_section_keys, sections y attention_points DEBE contener exclusivamente valores presentes literalmente en valid_source_section_keys.
+- Copiá esas keys exactamente como aparecen. No las traduzcas, no las acortes, no las reformules y no inventes aliases.
+- Ejemplos de keys válidas pueden ser "section_001", "section_002" o "extra_001".
+- NUNCA uses como source_section_keys una key creada por vos para organizar el FinalReport, como "ventas", "sucursales", "ticket_promedio", "medios_pago" o cualquier otro nombre editorial.
+- FinalReportSection.key y source_section_keys cumplen funciones distintas:
+  - FinalReportSection.key es una key editorial que podés crear para estructurar el informe final.
+  - source_section_keys identifica evidencia del ReportDraft y sólo puede usar keys existentes en valid_source_section_keys.
+- Antes de devolver el JSON, verificá que cada valor usado en source_section_keys pertenezca literalmente a valid_source_section_keys.
+- Si un hallazgo se apoya únicamente en una sección del ReportDraft, referenciá sólo esa key.
+- Si un hallazgo combina evidencia de varias secciones, incluí únicamente las keys de las secciones que realmente respaldan esa afirmación.
+- Si una conclusión usa un análisis adicional origin="coordinator", podés referenciar su key, por ejemplo "extra_001".
+- Si una conclusión combina una sección original y una profundización del coordinator, incluí ambas keys cuando ambas sean necesarias para respaldar la afirmación, por ejemplo ["section_002", "extra_001"].
+- No agregues una sección a source_section_keys sólo porque trate un tema parecido.
+- Si existe failed_source_section_keys, esas keys NO pueden respaldar afirmaciones analíticas, KPIs, highlights, headline, sections ni attention_points.
+- Las keys de failed_source_section_keys sólo pueden aparecer en notes cuando sea necesario indicar de forma neutra que ese análisis no estuvo disponible.
+
+REGLAS PARA ANÁLISIS DEL COORDINATOR
+- Las sections con origin="coordinator" son evidencia complementaria solicitada para profundizar hallazgos de las secciones indicadas por related_section_keys.
+- Usá esas sections para enriquecer, aclarar o corregir la interpretación de las conclusiones relacionadas cuando aporten información relevante.
+- NO crees automáticamente una sección independiente en el FinalReport por cada análisis adicional del coordinator.
+- Preferí integrar el hallazgo adicional dentro de la sección de negocio que profundiza.
+- related_section_keys describe qué análisis original motivó la profundización; no implica por sí mismo causalidad.
+- Un análisis adicional puede detectar que una comparación original es incompleta, no comparable o requiere contexto adicional. En ese caso, priorizá la interpretación respaldada por la evidencia adicional sin borrar ni modificar arbitrariamente los datos originales.
+- No ocultes una limitación relevante detectada por un análisis adicional. Presentala de forma clara y orientada al cliente, evitando detalles técnicos internos.
+
 REGLAS DE PRESENTACIÓN
 - Escribí en español rioplatense neutro, profesional, preciso y conciso.
 - El informe debe poder ser leído rápidamente por una persona de negocio.
@@ -158,17 +185,18 @@ REGLAS DE PRESENTACIÓN
 - Asigná impact únicamente cuando el contexto del ReportDraft permita interpretarlo razonablemente. Si no está claro, usá "neutral" o dejalo sin asignar.
 - No inventes objetivos, thresholds ni criterios de negocio para decidir que algo es bueno, malo, urgente o crítico.
 - Bloques permitidos: paragraph, bullet_list, table, callout (severity info|warning|critical).
-- source_section_keys de kpis, highlights, headline_source_section_keys, sections y attention_points deben referenciar únicamente secciones con status="ok".
-- Una sección status="failed" nunca respalda una afirmación analítica. En notes sí puede referenciarse únicamente para indicar que ese análisis no estuvo disponible.
 - No incluyas DAX, consultas, nombres de skills, routing, tokens, modelos ni información de depuración.
 - Respondé únicamente con un objeto JSON válido que cumpla el schema. Sin texto adicional ni bloques de código.
 
-Las sections con origin="coordinator" son evidencia complementaria
-solicitada para profundizar hallazgos de las secciones indicadas por
-related_section_keys.
-
-Usalas para enriquecer las conclusiones correspondientes.
-NO crees automáticamente una sección independiente por cada análisis adicional.
+VALIDACIÓN FINAL ANTES DE RESPONDER
+Antes de emitir el JSON final:
+1. Verificá que todas las cifras y fechas provengan del ReportDraft.
+2. Verificá que no hayas creado relaciones causales no respaldadas.
+3. Verificá que no haya redundancia innecesaria entre summary, paragraphs, tablas y bullets.
+4. Verificá que TODO valor de source_section_keys usado para afirmaciones analíticas pertenezca literalmente a valid_source_section_keys.
+5. Verificá que ninguna key editorial creada para el FinalReport haya sido usada accidentalmente como source_section_keys.
+6. Verificá que las sections origin="coordinator" hayan sido usadas como evidencia complementaria y no convertidas automáticamente en secciones independientes.
+7. Devolvé únicamente el objeto JSON FinalReport válido.
 """
 
 
@@ -177,12 +205,36 @@ def build_system_prompt() -> str:
     return f"{_RULES}\nSCHEMA JSON DE SALIDA (FinalReport, schema_version \"1.1\"):\n{schema}\n"
 
 
+def source_section_keys(draft: ReportDraft) -> tuple[list[str], list[str]]:
+    """Split a draft's section keys into valid and failed provenance, once.
+
+    This is the single source of truth for both what ``compact_draft`` shows
+    the writer as ``valid_source_section_keys``/``failed_source_section_keys``
+    and what ``LLMReportWriter.write`` hands to ``parse_final_report`` as
+    ``ok_section_keys``/``failed_section_keys``. Keeping one function means the
+    allowlist offered to the model and the one enforced by the backend
+    validator can never drift apart. Order follows ``draft.sections``.
+    """
+    valid: list[str] = []
+    failed: list[str] = []
+    for section in draft.sections:
+        (failed if section.had_error else valid).append(section.key)
+    return valid, failed
+
+
 def compact_draft(draft: ReportDraft) -> dict[str, Any]:
     """Minimal view of a draft for the writer.
 
     Excludes DAX, tool traces, usage, routing, recovered-error details, model
     identity and any internal payload. Failed sections carry no technical detail.
+
+    ``valid_source_section_keys``/``failed_source_section_keys`` make the
+    provenance allowlist explicit data in the payload (rather than something
+    the model must infer from ``status``), derived once via
+    ``source_section_keys`` so it always matches what ``parse_final_report``
+    actually accepts.
     """
+    valid_keys, failed_keys = source_section_keys(draft)
     sections = []
     for section in draft.sections:
         if section.had_error:
@@ -191,12 +243,21 @@ def compact_draft(draft: ReportDraft) -> dict[str, Any]:
             continue
         item: dict[str, Any] = {
             "key": section.key, "title": section.title, "question": section.question,
-            "status": "ok", "answer": section.answer,
+            "status": "ok", "answer": section.answer, "origin": section.origin,
         }
+        if section.purpose:
+            item["purpose"] = section.purpose
+        if section.related_section_keys:
+            item["related_section_keys"] = list(section.related_section_keys)
         if section.semantic_notes:
             item["semantic_notes"] = list(section.semantic_notes)
         sections.append(item)
-    return {"report_name": draft.name, "sections": sections}
+    return {
+        "report_name": draft.name,
+        "valid_source_section_keys": valid_keys,
+        "failed_source_section_keys": failed_keys,
+        "sections": sections,
+    }
 
 
 # ---------------------------------------------------------------------- parse/validate
@@ -272,7 +333,7 @@ def _stage_observation(draft: ReportDraft):
 
 
 def _usage_event(model: ModelConfig, response: LLMResponse, *, draft: ReportDraft,
-                 attempt: int, repair: bool, valid: bool) -> dict[str, Any]:
+                 attempt: int, repair: bool, valid: bool, latency_ms: int | None = None) -> dict[str, Any]:
     ledger = response.usage.ledger_fields()
     return {
         "provider": model.provider, "model": model.physical_model, "event_type": "generation",
@@ -285,7 +346,7 @@ def _usage_event(model: ModelConfig, response: LLMResponse, *, draft: ReportDraf
         "metadata_json": {
             "component": WRITER_COMPONENT, "report_stage": WRITER_STAGE,
             "report_run_id": draft.report_run_id, "repair_retry": repair, "attempt": attempt,
-            "output_valid": valid,
+            "latency_ms": latency_ms, "output_valid": valid,
             "normalized_usage": response.usage.metadata(), **model.metadata(),
             "actual_model": response.model, "actual_service_tier": response.actual_service_tier,
             "pricing_quote": response.pricing_quote, **response.thinking_decision,
@@ -327,8 +388,11 @@ class LLMReportWriter:
             raise ReportWriterExecutionError("El ReportDraft no tiene secciones analíticas exitosas para redactar.")
         # Analytical claims (kpis, highlights, sections, attention points) may only
         # be sourced from successful sections; notes may also point at a failed one.
-        ok_keys = {section.key for section in draft.sections if not section.had_error}
-        failed_keys = {section.key for section in draft.sections if section.had_error}
+        # Same helper as compact_draft(), so the allowlist shown to the model and
+        # the one enforced here can never diverge.
+        valid_keys, failed_keys_list = source_section_keys(draft)
+        ok_keys = set(valid_keys)
+        failed_keys = set(failed_keys_list)
         messages = [LLMMessage("user", json.dumps(payload, ensure_ascii=False))]
         with _stage_observation(draft):
             errors: list[str] = []
@@ -340,7 +404,7 @@ class LLMReportWriter:
                     attempt=attempt, repair=repair, valid=report is not None, model=self.model,
                     response=response, latency_ms=latency_ms, validation_errors=list(errors),
                     usage_event=_usage_event(self.model, response, draft=draft, attempt=attempt,
-                                             repair=repair, valid=report is not None),
+                                             repair=repair, latency_ms=latency_ms, valid=report is not None),
                 )
                 if on_attempt is not None:
                     hooked = on_attempt(info)

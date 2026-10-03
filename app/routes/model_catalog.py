@@ -20,14 +20,23 @@ PROVIDERS = {'anthropic', 'openai', 'deepseek'}
 GATEWAYS = {'direct', 'openrouter'}
 SCOPES = {'global', 'empresa', 'report'}
 ROLES = {'main_agent', 'query_rewriter', 'skill_selector', 'complexity_classifier', 'report_writer', 'report_coordinator'}
-CONFIGURABLE_COMPONENTS = {'query_rewriter', 'skill_selector', 'complexity_classifier', 'report_writer', 'report_coordinator'}
-COMPONENT_STRATEGIES = {
-    'query_rewriter': {'model', 'disabled'},
-    'skill_selector': {'model', 'embeddings', 'jev', 'jev_with_llm_fallback'},
-    'complexity_classifier': {'model', 'disabled'},
-    'report_writer': {'model', 'disabled'},
-    'report_coordinator': {'model', 'disabled'},
+STRATEGY_LABELS = {
+    'model': 'Modelo', 'disabled': 'Deshabilitado', 'embeddings': 'Solo embeddings',
+    'jev': 'Jev', 'jev_with_llm_fallback': 'Jev con fallback al selector actual',
 }
+# Single source of truth for internal components. Adding one = one entry here (plus its
+# role in ROLES and a fallback in build_catalog_resolver); the admin screen renders it
+# generically, including the per-role override section for strategy="model".
+COMPONENT_REGISTRY = {
+    'query_rewriter': {'label': 'Reescritor de consultas', 'strategies': ('model', 'disabled')},
+    'skill_selector': {'label': 'Selector de skills',
+                       'strategies': ('embeddings', 'jev', 'jev_with_llm_fallback', 'model')},
+    'complexity_classifier': {'label': 'Clasificador de complejidad', 'strategies': ('disabled', 'model')},
+    'report_writer': {'label': 'Redactor de informes (Reporting)', 'strategies': ('disabled', 'model')},
+    'report_coordinator': {'label': 'Coordinador de informes (Reporting V1.1)', 'strategies': ('disabled', 'model')},
+}
+CONFIGURABLE_COMPONENTS = set(COMPONENT_REGISTRY)
+COMPONENT_STRATEGIES = {role: set(meta['strategies']) for role, meta in COMPONENT_REGISTRY.items()}
 SECRET_OPTION_MARKERS = ('api_key', 'secret', 'token', 'authorization', 'password')
 MODEL_KEY_PATTERN = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
 
@@ -256,18 +265,16 @@ def set_role():
     except ValueError as exc:
         return jsonify({'error': str(exc)}), 400
     try:
-        query = AIModelRoleAssignment.query.filter_by(role=role, scope_type=scope_type, scope_id=scope_id)
-        query.update({'is_active': False}, synchronize_session=False)
+        overrides = catalog_service.role_overrides_from_payload(data) if strategy == 'model' else {}
         assignment = AIModelRoleAssignment(
             model_id=model.id if model else None, role=role, strategy=strategy,
-            scope_type=scope_type, scope_id=scope_id,
-            is_active=True,
-            max_output_tokens=int(data['max_output_tokens']) if data.get('max_output_tokens') else None,
-            reasoning_effort=data.get('reasoning_effort') or None,
-            thinking_mode=data.get('thinking_mode') or None,
-            service_tier=data.get('service_tier') or None,
+            scope_type=scope_type, scope_id=scope_id, is_active=True, **overrides,
             provider_options_json=_validate_provider_options(data.get('provider_options')),
         )
+        if model is not None:
+            catalog_service.validate_role_assignment(role, model, assignment)
+        query = AIModelRoleAssignment.query.filter_by(role=role, scope_type=scope_type, scope_id=scope_id)
+        query.update({'is_active': False}, synchronize_session=False)
         db.session.add(assignment)
         db.session.commit()
     except (TypeError, ValueError) as exc:
@@ -309,13 +316,8 @@ def _scope_payload(scope_type, scope_id):
     components = {}
     for role in sorted(CONFIGURABLE_COMPONENTS):
         try:
-            selected = resolver.component(role, report_id=report_id, empresa_id=empresa_id)
-            components[role] = {
-                'strategy': selected.strategy,
-                'model_key': selected.model.model_key if selected.model else None,
-                'source_scope': selected.source_scope,
-                'source_scope_id': selected.source_scope_id,
-            }
+            components[role] = catalog_service.describe_component(
+                resolver.component(role, report_id=report_id, empresa_id=empresa_id))
         except Exception as exc:
             components[role] = {'strategy': 'unavailable', 'model_key': None,
                                 'source_scope': 'fallback', 'error': str(exc)}
@@ -330,6 +332,10 @@ def _scope_payload(scope_type, scope_id):
             'thinking_mode': direct.thinking_mode,
             'service_tier': direct.service_tier,
         }
+    # Defaults + capabilities per selectable model, so the UI can adapt to a model
+    # the admin has just picked (before saving) without knowing any provider/profile.
+    models = {record.model_key: catalog_service.model_role_meta(record)
+              for record in AIModelConfig.query.filter_by(enabled=True).all()}
     effective_grants = catalog_service._effective_grants(report_id=report_id, empresa_id=empresa_id)
     return {
         'scope_type': scope_type, 'scope_id': normalized_id,
@@ -343,6 +349,7 @@ def _scope_payload(scope_type, scope_id):
             'is_default': grant.is_default, 'client_selectable': grant.client_selectable,
         } for grant in direct_grants],
         'components': components,
+        'models': models,
     }
 
 
@@ -393,25 +400,14 @@ def replace_scope():
             model = AIModelConfig.query.filter_by(model_key=item.get('model_key')).first() if strategy == 'model' else None
             if strategy == 'model' and (model is None or not model.enabled):
                 raise ValueError(f'Enabled model required for {role}')
-            if item.get('thinking_mode') == 'off' and item.get('reasoning_effort'):
-                raise ValueError(f'{role}: reasoning_effort requires thinking_mode=on')
+            overrides = catalog_service.role_overrides_from_payload(item) if strategy == 'model' else {}
             assignment = AIModelRoleAssignment(
                 model_id=model.id if model else None, role=role, strategy=strategy,
-                scope_type=scope_type, scope_id=normalized_id, is_active=True,
-                max_output_tokens=int(item['max_output_tokens']) if item.get('max_output_tokens') else None,
-                reasoning_effort=item.get('reasoning_effort') or None,
-                thinking_mode=item.get('thinking_mode') or None,
-                service_tier=item.get('service_tier') or None,
+                scope_type=scope_type, scope_id=normalized_id, is_active=True, **overrides,
                 provider_options_json=_validate_provider_options(item.get('provider_options')),
             )
-            if model is not None and model.family_key:
-                profile = PROFILES.get(model.family_key)
-                if profile is None:
-                    raise ValueError(f'Unknown family_key for {role}')
-                configured = catalog_service.to_model_config(model, assignment=assignment)
-                profile.validate(configured)
-                if role == 'query_rewriter':
-                    profile.validate_off_override(configured)
+            if model is not None:
+                catalog_service.validate_role_assignment(role, model, assignment)
             db.session.add(assignment)
         db.session.commit()
         return jsonify(_scope_payload(scope_type, normalized_id))
@@ -529,6 +525,11 @@ def catalog_edit(model_key):
 def components_page():
     return render_template(
         'admin/ai_models/components.html',
+        component_defs=[{
+            'role': role, 'label': meta['label'],
+            'strategies': [{'value': value, 'label': STRATEGY_LABELS[value]} for value in meta['strategies']
+                           if value != 'model'],
+        } for role, meta in COMPONENT_REGISTRY.items()],
         models=AIModelConfig.query.order_by(AIModelConfig.display_name.asc()).all(),
         companies=Empresa.query.order_by(Empresa.nombre.asc()).all(),
         reports=Report.query.order_by(Report.name.asc()).all(),

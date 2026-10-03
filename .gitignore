@@ -55,3 +55,5 @@ agent_core_debug.txt
 # MCP build artifacts
 services/mcp_aklara/lib/
 Microsoft.AnalysisServices*.zip
+# Local Pi runtime state
+.atl/

@@ -22,12 +22,24 @@
     </tbody></table></div>
   </div>
 
-  <div class="card"><div class="card-header"><h5 class="mb-1">Componentes internos</h5><div class="text-muted small">Heredar no crea un registro en este alcance.</div></div><div class="card-body"><div class="row g-3">
-    <div class="col-lg-4"><label class="form-label" for="role-query_rewriter">Reescritor de consultas</label><select class="form-select component-select" id="role-query_rewriter" data-role="query_rewriter"><option value="inherit">Heredar</option><option value="disabled">Deshabilitado</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
-    <div class="col-lg-4"><label class="form-label" for="role-skill_selector">Selector de skills</label><select class="form-select component-select" id="role-skill_selector" data-role="skill_selector"><option value="inherit">Heredar</option><option value="embeddings">Solo embeddings</option><option value="jev">Jev</option><option value="jev_with_llm_fallback">Jev con fallback al selector actual</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
-    <div class="col-lg-4"><label class="form-label" for="role-complexity_classifier">Clasificador de complejidad</label><select class="form-select component-select" id="role-complexity_classifier" data-role="complexity_classifier"><option value="inherit">Heredar</option><option value="disabled">Deshabilitado</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
-    <div class="col-lg-4"><label class="form-label" for="role-report_writer">Redactor de informes (Reporting)</label><select class="form-select component-select" id="role-report_writer" data-role="report_writer"><option value="inherit">Heredar</option><option value="disabled">Deshabilitado</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
-    <div class="col-lg-4"><label class="form-label" for="role-report_coordinator">Coordinador de informes (Reporting V1.1)</label><select class="form-select component-select" id="role-report_coordinator" data-role="report_coordinator"><option value="inherit">Heredar</option><option value="disabled">Deshabilitado</option>{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select><div class="form-text component-effective"></div></div>
+  <div class="card"><div class="card-header"><h5 class="mb-1">Componentes internos</h5><div class="text-muted small">Heredar no crea un registro en este alcance. Con estrategia «Modelo» se pueden definir overrides de ejecución por rol; lo que quede en «Heredar» usa los valores del modelo.</div></div><div class="card-body"><div class="row g-3">
+    {% for c in component_defs %}
+    <div class="col-lg-6"><div class="component-card border rounded p-3 h-100" data-role="{{ c.role }}">
+      <label class="form-label fw-semibold" for="role-{{ c.role }}">{{ c.label }}</label>
+      <select class="form-select component-select" id="role-{{ c.role }}" data-role="{{ c.role }}"><option value="inherit">Heredar</option>{% for st in c.strategies %}<option value="{{ st.value }}">{{ st.label }}</option>{% endfor %}{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select>
+      <details class="role-advanced mt-2" hidden>
+        <summary class="small text-primary" style="cursor:pointer">Configuración avanzada <span class="badge bg-secondary role-override-count"></span></summary>
+        <div class="row g-2 mt-1">
+          <div class="col-sm-6"><label class="form-label small mb-1">Thinking</label><select class="form-select form-select-sm" data-field="thinking_mode"></select></div>
+          <div class="col-sm-6"><label class="form-label small mb-1">Reasoning effort</label><select class="form-select form-select-sm" data-field="reasoning_effort"></select></div>
+          <div class="col-sm-6"><label class="form-label small mb-1">Max output tokens</label><input class="form-control form-control-sm" type="number" min="1" step="1" data-field="max_output_tokens"></div>
+          <div class="col-sm-6"><label class="form-label small mb-1">Service tier</label><select class="form-select form-select-sm" data-field="service_tier"></select></div>
+        </div>
+        <div class="form-text role-hint"></div>
+      </details>
+      <div class="form-text component-effective mt-2"></div>
+    </div></div>
+    {% endfor %}
   </div></div></div>
 </div>
 {% endblock %}
@@ -45,6 +57,69 @@
     document.getElementById('report-wrap').hidden = scopeType.value !== 'report';
     document.getElementById('scope-note').textContent = scopeType.value === 'global' ? 'Los valores globales son el fallback del sistema.' : 'Sin override se utiliza la configuración heredada.';
   }
+  // ---- Generic per-role override section (all data comes from /effective: no provider logic here) ----
+  let modelsMeta = {};
+  const FIELDS = [['thinking_mode', 'Thinking'], ['reasoning_effort', 'Reasoning'], ['max_output_tokens', 'Max output'], ['service_tier', 'Service tier']];
+  const SCOPE_LABEL = {report: 'reporte', empresa: 'empresa', global: 'global', fallback: 'valor por defecto del sistema'};
+  const field = (card, name) => card.querySelector(`[data-field="${name}"]`);
+  const selectedModelKey = card => { const v = card.querySelector('.component-select').value; return v.startsWith('model:') ? v.slice(6) : null; };
+  const show = value => (value === null || value === undefined || value === '') ? '—' : value;
+  function fillSelect(el, inheritLabel, values, wanted) {
+    el.innerHTML = `<option value="">${escapeHtml(inheritLabel)}</option>` + values.map(v => `<option value="${escapeHtml(v[0])}">${escapeHtml(v[1])}</option>`).join('');
+    el.value = values.some(v => v[0] === wanted) ? wanted : '';   // unsupported value for this model -> inherit
+  }
+  function readAdvanced(card) {
+    const tokens = field(card, 'max_output_tokens').value.trim();
+    return {
+      thinking_mode: field(card, 'thinking_mode').value || null,
+      reasoning_effort: field(card, 'reasoning_effort').value || null,
+      max_output_tokens: tokens ? parseInt(tokens, 10) : null,
+      service_tier: field(card, 'service_tier').value || null,
+    };
+  }
+  // values = current/explicit overrides to show. Capabilities and defaults come from the backend.
+  function renderAdvanced(card, values) {
+    const box = card.querySelector('.role-advanced'); const key = selectedModelKey(card);
+    box.hidden = !key; if (!key) return;
+    const meta = modelsMeta[key]; if (!meta) { box.hidden = true; return; }
+    const caps = meta.capabilities, defs = meta.defaults;
+    const thinking = field(card, 'thinking_mode'), effort = field(card, 'reasoning_effort'), tokens = field(card, 'max_output_tokens'), tier = field(card, 'service_tier');
+    tokens.value = values.max_output_tokens || '';
+    fillSelect(thinking, `Heredar del modelo (${show(defs.thinking_mode)})`, caps.thinking_modes.map(m => [m, m === 'on' ? 'On' : 'Off']), values.thinking_mode);
+    thinking.disabled = caps.thinking_modes.length === 0;
+    // Reasoning only makes sense when thinking is (explicitly or by inheritance) on and the model exposes levels.
+    const gated = thinking.value || defs.thinking_mode;
+    const effortOk = caps.reasoning_levels.length > 0 && gated === 'on';
+    fillSelect(effort, `Heredar del modelo (${show(defs.reasoning_effort)})`, caps.reasoning_levels.map(l => [l, l]), values.reasoning_effort);
+    if (!effortOk) effort.value = '';
+    effort.disabled = !effortOk;
+    tokens.placeholder = `Heredar del modelo (${show(defs.max_output_tokens)})`;
+    if (caps.max_output_tokens_limit) tokens.max = caps.max_output_tokens_limit; else tokens.removeAttribute('max');
+    fillSelect(tier, `Heredar del modelo (${defs.service_tier || 'estándar'})`, caps.service_tiers.map(t => [t, t]), values.service_tier);
+    tier.disabled = caps.service_tiers.length === 0;
+    const hints = [];
+    if (caps.thinking_modes.length === 0) hints.push('Este modelo no expone thinking configurable.');
+    else if (gated !== 'on' && caps.reasoning_levels.length) hints.push('Reasoning effort requiere thinking On.');
+    card.querySelector('.role-hint').textContent = hints.join(' ');
+    const count = Object.values(readAdvanced(card)).filter(v => v !== null).length;
+    card.querySelector('.role-override-count').textContent = count ? `${count} override${count > 1 ? 's' : ''}` : '';
+  }
+  function renderEffective(card, item) {
+    const target = card.querySelector('.component-effective');
+    const origin = SCOPE_LABEL[item.source_scope] || item.source_scope;
+    if (!item.effective) { target.textContent = `Efectivo: ${item.strategy} · origen ${origin}${item.error ? ' · ' + item.error : ''}`; return; }
+    const rows = FIELDS.map(([name, label]) => {
+      const value = name === 'service_tier' && !item.effective[name] ? 'estándar' : show(item.effective[name]);
+      const src = item.effective_sources[name] === 'role' ? 'override del rol' : 'heredado del modelo';
+      return `${label}: <strong>${escapeHtml(value)}</strong> <span class="badge ${item.effective_sources[name] === 'role' ? 'bg-primary' : 'bg-light text-dark border'}">${src}</span>`;
+    });
+    target.innerHTML = `<div>Efectivo (guardado): <strong>${escapeHtml(item.display_name)}</strong> · origen ${escapeHtml(origin)}</div><div>${rows.join(' · ')}</div>`;
+  }
+  document.querySelectorAll('.component-card').forEach(card => {
+    const markDirty = () => { const t = card.querySelector('.component-effective'); if (!card.dataset.dirty) { card.dataset.dirty = '1'; t.insertAdjacentHTML('beforeend', ' <span class="badge bg-warning text-dark">cambios sin guardar</span>'); } };
+    card.querySelector('.component-select').addEventListener('change', () => { renderAdvanced(card, readAdvanced(card)); markDirty(); });
+    card.querySelector('.role-advanced').addEventListener('change', () => { renderAdvanced(card, readAdvanced(card)); markDirty(); });
+  });
   function setGrantDisabled() { document.querySelectorAll('.grant-allowed,.grant-selectable,.grant-default').forEach(el => el.disabled = inherit.checked); }
   async function loadScope() {
     toggleTargets(); message.innerHTML = '';
@@ -60,10 +135,16 @@
       row.querySelector('.grant-default').checked = !!(grant && grant.is_default);
     });
     setGrantDisabled();
-    document.querySelectorAll('.component-select').forEach(select => {
-      const item = data.components[select.dataset.role]; const direct = item.direct;
-      select.value = direct ? (direct.strategy === 'model' ? `model:${direct.model_key}` : direct.strategy) : 'inherit';
-      select.parentElement.querySelector('.component-effective').textContent = `Efectivo: ${item.strategy}${item.model_key ? ' · ' + item.model_key : ''} · origen ${item.source_scope}`;
+    modelsMeta = data.models || {};
+    document.querySelectorAll('.component-card').forEach(card => {
+      const select = card.querySelector('.component-select');
+      const item = data.components[card.dataset.role]; const direct = item.direct;
+      const wanted = direct ? (direct.strategy === 'model' ? `model:${direct.model_key}` : direct.strategy) : 'inherit';
+      select.value = wanted;
+      if (select.value !== wanted) select.value = 'inherit';   // model no longer enabled
+      renderAdvanced(card, direct || {});
+      card.dataset.dirty = '';
+      renderEffective(card, item);
     });
   }
   async function saveScope() {
@@ -75,8 +156,15 @@
       });
     }
     const roles = {};
-    document.querySelectorAll('.component-select').forEach(select => {
-      const [strategy, modelKey] = select.value.split(':'); roles[select.dataset.role] = {strategy}; if (modelKey) roles[select.dataset.role].model_key = modelKey;
+    document.querySelectorAll('.component-card').forEach(card => {
+      const [strategy, modelKey] = card.querySelector('.component-select').value.split(':');
+      const entry = {strategy};
+      if (modelKey) {
+        entry.model_key = modelKey;
+        const v = readAdvanced(card);   // explicit nulls = inherit from the model
+        Object.assign(entry, v);
+      }
+      roles[card.dataset.role] = entry;
     });
     const body = {scope_type: scopeType.value, grants, roles}; if (scopeId()) body.scope_id = scopeId();
     const response = await fetch(`{{ url_for('model_catalog.replace_scope') }}`, {method:'PUT', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify(body)});
