@@ -13,6 +13,7 @@ from typing import Any
 from app.services.semantic_notes import normalize_semantic_notes
 
 from .contracts import ReportSection
+from .evidence_extractor import extract_evidence
 
 
 def skill_routing_summary(result, requested_keys: list[str]) -> dict[str, Any]:
@@ -66,6 +67,8 @@ def section_from_result(
         semantic_notes=normalize_semantic_notes(result.semantic_notes),
         skill_routing=skill_routing_summary(result, list(requested_skill_keys)),
         origin=origin, purpose=purpose, related_section_keys=tuple(related_section_keys),
+        # A failed analysis contributes no evidence: its rows (if any) are not trustworthy.
+        evidence=None if result.had_error else extract_evidence(getattr(result, "dax_results", None)),
     )
 
 

@@ -53,6 +53,9 @@ class AnalyticsResult:
     tool_rounds: int = 0
     tools_called: list[dict[str, Any]] = field(default_factory=list)
     dax_query: str | None = None
+    # Raw rows of the successful DAX executions behind ``answer`` (bounded): ``[{"rows", "total_rows",
+    # "truncated"}]``. Plain data, no interpretation; consumers (e.g. report evidence) decide what to do with it.
+    dax_results: list[dict[str, Any]] = field(default_factory=list)
     model_key: str | None = None
     model: str | None = None
     provider: str | None = None

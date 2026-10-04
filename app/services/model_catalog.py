@@ -405,6 +405,9 @@ def build_catalog_resolver(settings, *, report_id=None, empresa_id=None, selecti
             # block a report (CoordinationRunner treats this as a safe, contained
             # CoordinatorConfigurationError and falls back to "fixed" behaviour).
             "report_coordinator": "disabled",
+            # V1.3: optional too. Unassigned => compiling a structure_prompt degrades to the
+            # default structure (never blocks saving a definition or running a report).
+            "structure_planner": "disabled",
         },
     )
 

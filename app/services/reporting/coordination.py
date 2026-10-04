@@ -23,6 +23,7 @@ from app.services.analytics import AnalyticsExecutor
 
 from .contracts import ReportDefinition, ReportDraft, ReportSection
 from .coordinator import CoordinatorAttempt, CoordinatorError, ReportCoordinator, build_coordinator_input
+from .progress import ReportProgress, notify_section
 from .coordinator_contracts import MAX_EXTRA_ANALYSES, CoordinatorDecision
 from .extra_analysis import run_analysis
 
@@ -68,7 +69,8 @@ class CoordinationRunner:
         self.record_coordinator_usage = record_coordinator_usage
         self.record_extra_usage = record_extra_usage
 
-    async def run(self, draft: ReportDraft, definition: ReportDefinition) -> CoordinationOutcome:
+    async def run(self, draft: ReportDraft, definition: ReportDefinition,
+                  *, progress: ReportProgress | None = None) -> CoordinationOutcome:
         outcome = CoordinationOutcome(draft=draft)
 
         try:
@@ -114,6 +116,7 @@ class CoordinationRunner:
             )
             enriched_sections.append(section)
             outcome.extra_sections.append(section)
+            await notify_section(progress, section)
             if self.record_extra_usage and section.ai_usage_events:
                 try:
                     recorded = self.record_extra_usage(section)

@@ -247,6 +247,33 @@ def _sort_schema_rows(
     return sorted(_dedupe_schema_rows(rows), key=_rank)
 
 
+MAX_CAPTURED_DAX_RESULTS = 4
+MAX_CAPTURED_DAX_ROWS = 50
+
+
+def _captured_dax_result(output: Any) -> Optional[Dict[str, Any]]:
+    """Raw rows of a SUCCESSFUL ``execute_dax_query`` output, bounded, for structured report evidence.
+
+    Pure data capture: no interpretation, no formatting. Returns ``None`` for anything that is not a JSON row
+    list (an error string, a scalar), so a failed query never contributes evidence.
+    """
+    try:
+        parsed = json.loads(str(output or ""))
+    except (TypeError, ValueError):
+        return None
+    total: Optional[int] = None
+    truncated = False
+    if isinstance(parsed, dict) and isinstance(parsed.get("rows"), list):
+        total = parsed.get("total_rows") if isinstance(parsed.get("total_rows"), int) else None
+        truncated = bool(parsed.get("truncated"))
+        parsed = parsed["rows"]
+    if not isinstance(parsed, list) or not parsed or not all(isinstance(row, dict) for row in parsed):
+        return None
+    rows = parsed[:MAX_CAPTURED_DAX_ROWS]
+    total = max(total or 0, len(parsed))
+    return {"rows": rows, "total_rows": total, "truncated": truncated or total > len(rows)}
+
+
 def _compact_tool_result_for_model(output: Any) -> str:
     text = str(output or "")
     if not _tool_output_is_error(text) or len(text) <= TOOL_ERROR_RESULT_MAX_CHARS:
@@ -1662,6 +1689,7 @@ class AgentOrchestrator:
         tool_rounds = 0
         tools_called: List[Dict[str, Any]] = []
         dax_query_used: Optional[str] = None
+        dax_results: List[Dict[str, Any]] = []
         last_dax_attempt: Optional[str] = None
         dax_error_attempts = 0
         actual_model_used = self.model.physical_model
@@ -1706,6 +1734,8 @@ class AgentOrchestrator:
                 # Prefer the last successful execution; retain the last attempted
                 # query only when no DAX execution succeeded in this turn.
                 "dax_query": dax_query_used or last_dax_attempt,
+                # Raw rows of the successful DAX executions (bounded); consumed by report evidence only.
+                "dax_results": list(dax_results),
                 "ai_usage_events": ai_usage_events,
                 "route_metadata_json": route_decision.to_metadata() if route_decision is not None else None,
                 "semantic_notes": route_decision.semantic_notes() if route_decision is not None else [],
@@ -2013,6 +2043,9 @@ class AgentOrchestrator:
                             record_recoverable_error(reason, "DAX query execution failed")
                     else:
                         dax_query_used = str(dax_query)
+                        if (captured := _captured_dax_result(tool_output)) is not None:
+                            dax_results.append(captured)
+                            del dax_results[:-MAX_CAPTURED_DAX_RESULTS]
 
                     _debug_print(
                         "tool:execute_dax_query:response",

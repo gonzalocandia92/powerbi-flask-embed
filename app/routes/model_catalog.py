@@ -19,7 +19,8 @@ bp = Blueprint('model_catalog', __name__, url_prefix='/admin/ai-models')
 PROVIDERS = {'anthropic', 'openai', 'deepseek'}
 GATEWAYS = {'direct', 'openrouter'}
 SCOPES = {'global', 'empresa', 'report'}
-ROLES = {'main_agent', 'query_rewriter', 'skill_selector', 'complexity_classifier', 'report_writer', 'report_coordinator'}
+ROLES = {'main_agent', 'query_rewriter', 'skill_selector', 'complexity_classifier', 'report_writer', 'report_coordinator',
+         'structure_planner'}
 STRATEGY_LABELS = {
     'model': 'Modelo', 'disabled': 'Deshabilitado', 'embeddings': 'Solo embeddings',
     'jev': 'Jev', 'jev_with_llm_fallback': 'Jev con fallback al selector actual',
@@ -34,6 +35,8 @@ COMPONENT_REGISTRY = {
     'complexity_classifier': {'label': 'Clasificador de complejidad', 'strategies': ('disabled', 'model')},
     'report_writer': {'label': 'Redactor de informes (Reporting)', 'strategies': ('disabled', 'model')},
     'report_coordinator': {'label': 'Coordinador de informes (Reporting V1.1)', 'strategies': ('disabled', 'model')},
+    'structure_planner': {'label': 'Planificador de estructura de informes (Reporting V1.3)',
+                          'strategies': ('disabled', 'model')},
 }
 CONFIGURABLE_COMPONENTS = set(COMPONENT_REGISTRY)
 COMPONENT_STRATEGIES = {role: set(meta['strategies']) for role, meta in COMPONENT_REGISTRY.items()}

@@ -81,6 +81,7 @@ class KlaraAnalyticsEngine:
             tool_rounds=int(payload.get("tool_rounds") or 0),
             tools_called=list(payload.get("tools_called") or []),
             dax_query=payload.get("dax_query"),
+            dax_results=[item for item in payload.get("dax_results") or [] if isinstance(item, dict)],
             model_key=payload.get("model_key"),
             model=payload.get("model"),
             provider=payload.get("provider"),

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import uuid
 from pathlib import Path
 
 import click
@@ -68,7 +69,7 @@ def register_reporting_command(app) -> None:
             async def record_usage(section: ReportSection) -> None:
                 await asyncio.to_thread(_record_section_usage, report_id, section)
 
-            draft = asyncio.run(ReportGenerator(analytics, record_usage=record_usage).generate(definition))
+            draft = asyncio.run(ReportGenerator(analytics, record_usage=record_usage).generate(definition, report_run_id=uuid.uuid4().hex))
         except (AnalyticsError, ValueError, TypeError, json.JSONDecodeError) as exc:
             raise click.ClickException(str(exc)) from exc
         click.echo(render_markdown(draft), nl=False)

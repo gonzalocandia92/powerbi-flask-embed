@@ -1,8 +1,9 @@
-"""Resolve the ``report_writer`` model role into a ready ``LLMReportWriter``.
+"""Resolve the ``report_writer`` model role into a ready writer.
 
-Kept apart from ``writer.py`` so the writer itself has no database/Flask
-dependency. Model selection uses the persisted catalog (report > empresa > global
-scope); nothing here names a provider or a physical model.
+Kept apart from ``writer.py`` / ``structured_writer.py`` so the writers themselves have no database/Flask
+dependency. Model selection uses the persisted catalog (report > empresa > global scope); nothing here names a
+provider or a physical model. Both writers (legacy 1.1 and structured 1.2) use the SAME ``report_writer`` role,
+the same preflight and the same billing gate; only the class they instantiate differs.
 """
 from __future__ import annotations
 
@@ -16,17 +17,15 @@ from app.services.llm import LiteLLMRuntime
 from app.services.llm.contracts import report_cache_scope
 from app.services.llm.profiles import PROFILES
 
+from .structured_writer import LLMStructuredReportWriter
+from .structured_writer_v13 import LLMStructuredReportWriterV13
 from .writer import (
     WRITER_ROLE, LLMReportWriter, ReportWriterConfigurationError,
 )
 
 
-def resolve_report_writer(config: dict[str, Any], report_id: int, *, runtime=None) -> LLMReportWriter:
-    """Preflight and build the writer for ``report_id`` (synchronous: touches the DB).
-
-    Raises ``ReportWriterConfigurationError`` when the role is unassigned or its model
-    cannot run, and lets ``ai_billing.BillingLimitExceeded`` propagate untouched.
-    """
+def _resolve_writer_model(config: dict[str, Any], report_id: int):
+    """Preflight of the ``report_writer`` role: ``(report, model, empresa_id)`` or a configuration error."""
     report = db.session.get(Report, report_id)
     if report is None:
         raise ReportWriterConfigurationError(f"Report no encontrado: {report_id}")
@@ -53,5 +52,31 @@ def resolve_report_writer(config: dict[str, Any], report_id: int, *, runtime=Non
     except (ai_billing.BillingConfigurationError, ValueError) as exc:
         raise ReportWriterConfigurationError(f"El modelo report_writer no puede ejecutarse: {exc}") from exc
     ai_billing.enforce_limit_for_report(report)
+    return report, model, billing_context.empresa_id
+
+
+def resolve_report_writer(config: dict[str, Any], report_id: int, *, runtime=None) -> LLMReportWriter:
+    """Preflight and build the LEGACY writer (``FinalReport`` 1.1) for ``report_id`` (synchronous: touches the DB).
+
+    Raises ``ReportWriterConfigurationError`` when the role is unassigned or its model cannot run, and lets
+    ``ai_billing.BillingLimitExceeded`` propagate untouched.
+    """
+    report, model, empresa_id = _resolve_writer_model(config, report_id)
     runtime = runtime or LiteLLMRuntime(cost_resolver=ai_billing.generation_cost_details)
-    return LLMReportWriter(runtime, model, cache_scope=report_cache_scope(billing_context.empresa_id, report.id))
+    return LLMReportWriter(runtime, model, cache_scope=report_cache_scope(empresa_id, report.id))
+
+
+def resolve_structured_report_writer(config: dict[str, Any], report_id: int, *,
+                                     runtime=None) -> LLMStructuredReportWriter:
+    """Same preflight, building the 1.2 STRUCTURED writer (kept for runs / tests that still target 1.2)."""
+    report, model, empresa_id = _resolve_writer_model(config, report_id)
+    runtime = runtime or LiteLLMRuntime(cost_resolver=ai_billing.generation_cost_details)
+    return LLMStructuredReportWriter(runtime, model, cache_scope=report_cache_scope(empresa_id, report.id))
+
+
+def resolve_structured_report_writer_v13(config: dict[str, Any], report_id: int, *,
+                                         runtime=None) -> LLMStructuredReportWriterV13:
+    """Same preflight and role, building the 1.3 (data story) STRUCTURED writer."""
+    report, model, empresa_id = _resolve_writer_model(config, report_id)
+    runtime = runtime or LiteLLMRuntime(cost_resolver=ai_billing.generation_cost_details)
+    return LLMStructuredReportWriterV13(runtime, model, cache_scope=report_cache_scope(empresa_id, report.id))

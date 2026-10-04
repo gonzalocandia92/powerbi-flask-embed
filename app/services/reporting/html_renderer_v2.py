@@ -1,17 +1,23 @@
-"""Deterministic HTML rendering of a ``FinalReport``.
+"""Deterministic HTML rendering of a ``FinalReportV12`` (renderer ``html-v2``).
 
-Consumes only ``FinalReport``: no LLM, no ``ReportDraft``, no Power BI, no skills.
-All model-authored text is HTML-escaped; CSS classes come from fixed semantic
-maps, never from report content. The document ships a restrictive CSP and no JS.
+Consumes only ``FinalReportV12``: no LLM, no ``ComposedReportInput``, no ``ReportDraft``, no structure spec.
+The order of ``report.items`` is the order of the document: this renderer takes NO editorial decisions (it never
+hoists KPIs, never forces a summary first, never groups sections). All model-authored text is HTML-escaped; CSS
+classes come from fixed semantic maps, never from report content; restrictive CSP, no JS.
+
+Visual design is the one of ``html-v1`` (so reports look the same), duplicated here on purpose: ``html-v1`` is
+frozen for historical reports and must never be coupled to the evolution of this renderer.
 """
 from __future__ import annotations
 
 from html import escape
 
-from .final_report import (
-    BulletListBlock, CalloutBlock, FinalReport, ParagraphBlock, ReportBlock, TableBlock,
+from .final_report_v12 import (
+    AttentionPointsItem12, ExecutiveSummaryItem12, FinalReportV12, KpiGridItem12, MethodologyNotesItem12,
+    NotesItem12, ReportItem12, SectionItem12,
 )
-from .versions import FINAL_REPORT_SCHEMA_1_1, HTML_RENDERER_V1
+from .report_content import BulletListBlock, CalloutBlock, ParagraphBlock, ReportBlock, TableBlock
+from .versions import FINAL_REPORT_SCHEMA_1_2, HTML_RENDERER_V2
 
 # trend controls direction only (glyph + accessible label); it never implies a
 # color. impact controls the color/semantic style; it never implies a direction.
@@ -97,21 +103,22 @@ def _paragraphs(text: str) -> str:
     return "".join(f"<p>{_e(part).replace(chr(10), '<br>')}</p>" for part in parts)
 
 
-class HtmlReportRenderer:
-    """``FinalReport`` -> standalone HTML document (string).
+class HtmlReportRendererV2:
+    """``FinalReportV12`` -> standalone HTML document (string). Deterministic and DB-free.
 
-    Deterministic and DB-free. Its identity is persisted next to every HTML it produces
-    (``renderer_version``): changing the markup or CSS in a way that alters existing output
-    means a NEW renderer class/version, never an edit of this one in place.
+    Its identity is persisted next to every HTML it produces (``renderer_version``): a change that alters
+    existing output means a NEW renderer version, never an edit of this one in place.
     """
 
-    renderer_version = HTML_RENDERER_V1
-    supported_schema_versions = (FINAL_REPORT_SCHEMA_1_1,)
+    renderer_version = HTML_RENDERER_V2
+    supported_schema_versions = (FINAL_REPORT_SCHEMA_1_2,)
 
-    def render(self, report: FinalReport) -> str:
-        body = [self._header(report), self._summary(report), self._kpis(report),
-                self._sections(report), self._attention(report), self._notes(report),
-                "<footer>Informe generado automáticamente por KLARA a partir de datos analíticos verificados.</footer>"]
+    def render(self, report: FinalReportV12) -> str:
+        section_numbers = iter(range(1, len(report.items) + 1))
+        body = [self._header(report)]
+        for item in report.items:  # the JSON order is the authority
+            body.append(self._item(item, section_numbers))
+        body.append("<footer>Informe generado automáticamente por KLARA a partir de datos analíticos verificados.</footer>")
         return (
             "<!DOCTYPE html>\n<html lang=\"es\"><head><meta charset=\"utf-8\">"
             "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
@@ -120,8 +127,24 @@ class HtmlReportRenderer:
             f"<body><main class=\"doc\">{''.join(body)}</main></body></html>\n"
         )
 
+    # -- dispatch: one renderer per item type; nothing here reorders or filters items -------------------
+    def _item(self, item: ReportItem12, section_numbers) -> str:
+        if isinstance(item, ExecutiveSummaryItem12):
+            return self._executive_summary(item)
+        if isinstance(item, KpiGridItem12):
+            return self._kpi_grid(item)
+        if isinstance(item, SectionItem12):
+            return self._section(item, next(section_numbers))
+        if isinstance(item, AttentionPointsItem12):
+            return self._attention_points(item)
+        if isinstance(item, NotesItem12):
+            return self._notes(item)
+        if isinstance(item, MethodologyNotesItem12):
+            return self._methodology_notes(item)
+        return ""  # unknown item types are never rendered
+
     # -- parts -----------------------------------------------------------------
-    def _header(self, report: FinalReport) -> str:
+    def _header(self, report: FinalReportV12) -> str:
         period = report.period
         bits = []
         if period.label:
@@ -134,38 +157,36 @@ class HtmlReportRenderer:
         period_html = f"<div class=\"period\">{''.join(bits)}</div>" if bits else ""
         return f"<header><h1>{_e(report.title)}</h1>{subtitle}{period_html}</header>"
 
-    def _summary(self, report: FinalReport) -> str:
-        summary = report.executive_summary
+    def _executive_summary(self, summary: ExecutiveSummaryItem12) -> str:
         # Provenance (source_section_keys) is admin/debug data, kept out of the client HTML.
         items = "".join(f"<li>{_e(item.text)}</li>" for item in summary.highlights)
         listing = f"<ul>{items}</ul>" if items else ""
         return f"<section><h2>Resumen ejecutivo</h2><p class=\"headline\">{_e(summary.headline)}</p>{listing}</section>"
 
-    def _kpis(self, report: FinalReport) -> str:
-        if not report.kpis:
+    def _kpi_grid(self, grid: KpiGridItem12) -> str:
+        if not grid.kpis:
             return ""
         cards = []
-        for kpi in report.kpis:
+        for kpi in grid.kpis:
             secondary = f"<div class=\"kpi-secondary\">{_e(kpi.secondary_value)}</div>" if kpi.secondary_value else ""
             trend = ""
             if kpi.trend:
                 glyph, direction_label = _TREND_GLYPH[kpi.trend]
-                # Impact stays purely visual (color, via impact_css): the word
-                # "favorable"/"desfavorable" is deliberately not shown as text.
                 impact_css, _impact_label = _IMPACT_STYLE[kpi.impact or "neutral"]
                 trend = (f"<span class=\"trend {impact_css}\" title=\"{_e(direction_label)}\">"
-                        f"<span aria-hidden=\"true\">{glyph}</span> {_e(direction_label)}</span>")
+                         f"<span aria-hidden=\"true\">{glyph}</span> {_e(direction_label)}</span>")
             cards.append(f"<div class=\"kpi\"><div class=\"kpi-label\">{_e(kpi.label)}</div>"
                          f"<div class=\"kpi-value\">{_e(kpi.value)}</div>{secondary}{trend}</div>")
         return f"<section class=\"kpis\" aria-label=\"Indicadores destacados\">{''.join(cards)}</section>"
 
-    def _sections(self, report: FinalReport) -> str:
-        out = []
-        for index, section in enumerate(report.sections, start=1):
-            blocks = "".join(self._block(block) for block in section.blocks)
-            out.append(f"<section id=\"section-{index}\"><h2>{_e(section.title)}</h2>"
-                       f"<div class=\"section-summary\">{_paragraphs(section.summary)}</div>{blocks}</section>")
-        return "".join(out)
+    def _section(self, section: SectionItem12, number: int) -> str:
+        if section.status == "unavailable":
+            return (f"<section id=\"section-{number}\"><h2>{_e(section.title)}</h2>"
+                    f"<div class=\"callout callout-info\" role=\"note\">"
+                    f"<div class=\"callout-title\">Análisis no disponible</div>{_paragraphs(section.summary)}</div></section>")
+        blocks = "".join(self._block(block) for block in section.blocks)
+        return (f"<section id=\"section-{number}\"><h2>{_e(section.title)}</h2>"
+                f"<div class=\"section-summary\">{_paragraphs(section.summary)}</div>{blocks}</section>")
 
     def _block(self, block: ReportBlock) -> str:
         if isinstance(block, ParagraphBlock):
@@ -185,18 +206,23 @@ class HtmlReportRenderer:
                     f"<div class=\"callout-title\">{_e(block.title)}</div>{_paragraphs(block.text)}</div>")
         return ""  # unknown block types are never rendered
 
-    def _attention(self, report: FinalReport) -> str:
-        if not report.attention_points:
-            return ""
-        items = []
-        for point in report.attention_points:
+    def _attention_points(self, item: AttentionPointsItem12) -> str:
+        if not item.points:
+            return ("<section><h2>Puntos de atención</h2>"
+                    "<p>No se identificaron puntos que requieran atención especial.</p></section>")
+        points = []
+        for point in item.points:
             css, label = _ATTENTION[point.severity]
-            items.append(f"<div class=\"attention {css}\"><div class=\"badge\">Prioridad {label}</div>"
-                         f"<h3>{_e(point.title)}</h3>{_paragraphs(point.text)}</div>")
-        return f"<section><h2>Puntos de atención</h2>{''.join(items)}</section>"
+            points.append(f"<div class=\"attention {css}\"><div class=\"badge\">Prioridad {label}</div>"
+                          f"<h3>{_e(point.title)}</h3>{_paragraphs(point.text)}</div>")
+        return f"<section><h2>Puntos de atención</h2>{''.join(points)}</section>"
 
-    def _notes(self, report: FinalReport) -> str:
-        if not report.notes:
+    def _notes(self, item: NotesItem12) -> str:
+        return f"<section class=\"notes\"><h2>Notas</h2>{_paragraphs(item.text)}</section>"
+
+    def _methodology_notes(self, item: MethodologyNotesItem12) -> str:
+        if not item.notes:
             return ""
-        items = "".join(f"<li><strong>{_e(_NOTE_TITLES[note.kind])}:</strong> {_e(note.text)}</li>" for note in report.notes)
+        items = "".join(
+            f"<li><strong>{_e(_NOTE_TITLES[note.kind])}:</strong> {_e(note.text)}</li>" for note in item.notes)
         return f"<section class=\"notes\"><h2>Notas y metodología</h2><ul>{items}</ul></section>"

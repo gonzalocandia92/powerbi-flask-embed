@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from .evidence import ReportEvidence
+
 
 @dataclass(frozen=True)
 class ReportQuestion:
@@ -40,6 +42,11 @@ class ReportDefinition:
     # "coordinated" inserts one bounded ReportCoordinator round between the
     # initial ReportDraft and ReportWriter (see ``coordination.CoordinationRunner``).
     coordination_enabled: bool = False
+    # User-typed layout intent. Carried through snapshots; nothing interprets it yet.
+    structure_prompt: str | None = None
+    # V1.3.1: the run's FROZEN structure (``structure_contracts.FrozenStructure``), taken from its
+    # snapshot. ``None`` = no frozen structure (runs predating V1.3, inline pipelines/tests).
+    structure: Any = None
 
     def __post_init__(self) -> None:
         if isinstance(self.report_id, bool) or not isinstance(self.report_id, int) or self.report_id <= 0:
@@ -94,6 +101,9 @@ class ReportSection:
     purpose: str | None = None
     # Which original section(s) motivated this coordinator-requested analysis.
     related_section_keys: tuple[str, ...] = ()
+    # V1.5: the structured result rows behind ``answer`` (facts / series / tables). ``None`` when the analysis
+    # produced none (failed, or its answer did not come from a tabular DAX result). Never layout.
+    evidence: ReportEvidence | None = None
 
 
 @dataclass

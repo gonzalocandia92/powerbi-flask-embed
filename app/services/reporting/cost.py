@@ -35,8 +35,9 @@ from typing import Any, Callable, Iterable, Mapping
 
 from app.services import ai_billing
 
-STAGE_ORDER = ("analysis", "coordination", "extra_analysis", "writing")
+STAGE_ORDER = ("structure_planning", "analysis", "coordination", "extra_analysis", "writing")
 STAGE_LABELS = {
+    "structure_planning": "Interpretación de estructura",
     "analysis": "Análisis inicial",
     "coordination": "Coordinación",
     "extra_analysis": "Análisis adicionales",
@@ -51,6 +52,7 @@ COMPONENT_LABELS = {
     "complexity_classifier": "Complexity classifier",
     "schema_retrieval": "Schema retrieval",
     "report_coordinator": "Report coordinator",
+    "structure_planner": "Structure planner",
     "report_writer": "Report writer",
 }
 STATUS_VERIFIED = "verified"

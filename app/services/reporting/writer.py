@@ -96,7 +96,7 @@ class WriterAttempt:
 WriterAttemptHook = Callable[[WriterAttempt], Awaitable[None] | None]
 
 
-class ReportWriter(Protocol):
+class ReportWriter(Protocol):  # legacy: ReportDraft -> FinalReport 1.1 (see structured_writer for 1.2)
     async def write(self, draft: ReportDraft, *,
                     on_attempt: WriterAttemptHook | None = None) -> FinalReport: ...
 

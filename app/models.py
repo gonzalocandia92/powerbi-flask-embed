@@ -914,6 +914,215 @@ class ModelEvaluationCase(db.Model):
     )
 
 
+class AnalyticalReportDefinition(db.Model):
+    """Saved configuration of an analytical report (Reporting domain).
+
+    Not the Power BI ``Report``: it only references it. Editing a definition never
+    rewrites history, because every ``ReportRun`` keeps its own snapshot.
+    """
+
+    __tablename__ = 'analytical_report_definitions'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False, index=True)
+    strategy = db.Column(db.String(30), nullable=False, default='fixed')  # fixed | coordinated
+    analysis_model_key = db.Column(db.String(120), nullable=True)
+    analysis_service_tier = db.Column(db.String(50), nullable=True)  # None = the model's configured tier
+    # Free text typed by the user.
+    structure_prompt = db.Column(db.Text, nullable=True)
+    # V1.3: the CURRENT interpretation of ``structure_prompt`` (ReportStructureSpec). Written together
+    # and atomically by an explicit compile; stale when ``structure_input_hash`` no longer matches the
+    # prompt + questions. Execution details of the planner stay in the AI usage ledger, not here.
+    structure_spec_json = db.Column(db.JSON, nullable=True)
+    structure_schema_version = db.Column(db.String(20), nullable=True)
+    structure_input_hash = db.Column(db.String(64), nullable=True)
+    structure_compiled_at = db.Column(db.DateTime, nullable=True)
+    # {"source": interpreted|fallback, "warnings": [...], "planner": {model_key,...}, "error": {...}|None}
+    structure_compile_json = db.Column(db.JSON, nullable=True)
+    # Room for future settings so new options do not need a column each.
+    config_json = db.Column(db.JSON, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    report = db.relationship('Report')
+    questions = db.relationship(
+        'AnalyticalReportQuestion', back_populates='definition', lazy='select',
+        cascade='all, delete-orphan', order_by='AnalyticalReportQuestion.position',
+    )
+
+
+class AnalyticalReportQuestion(db.Model):
+    """One question of a definition. ``key`` is its identity; ``position`` is only its order."""
+
+    __tablename__ = 'analytical_report_questions'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    definition_id = db.Column(
+        db.BigInteger, db.ForeignKey('analytical_report_definitions.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    key = db.Column(db.String(80), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    question = db.Column(db.Text, nullable=False)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    required_skill_keys_json = db.Column(db.JSON, nullable=False, default=list)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    definition = db.relationship('AnalyticalReportDefinition', back_populates='questions')
+
+    __table_args__ = (
+        db.UniqueConstraint('definition_id', 'key', name='uq_analytical_report_question_key'),
+    )
+
+
+class ReportRun(db.Model):
+    """One durable execution of a definition.
+
+    ``id`` IS the ``report_run_id`` used by the pipeline, ``AIUsageEvent.metadata_json``
+    and ``ReportCostService``: it is created here, before executing, and injected down.
+    ``definition_snapshot_json`` freezes what was actually run.
+    """
+
+    __tablename__ = 'report_runs'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    definition_id = db.Column(
+        db.BigInteger, db.ForeignKey('analytical_report_definitions.id', ondelete='SET NULL'),
+        nullable=True, index=True)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False, index=True)
+    requested_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    # queued | running | completed | completed_with_errors | failed | cancel_requested | cancelled
+    status = db.Column(db.String(30), nullable=False, default='queued', index=True)
+    # preflight | analysis | coordination | writing | rendering (independent of status)
+    current_stage = db.Column(db.String(30), nullable=True)
+    progress_current = db.Column(db.Integer, nullable=False, default=0)
+    progress_total = db.Column(db.Integer, nullable=False, default=0)
+    snapshot_schema_version = db.Column(db.Integer, nullable=False, default=1)
+    definition_snapshot_json = db.Column(db.JSON, nullable=False)
+    # Outcome that is not a section: writer status, coordination debug and (DEPRECATED, legacy
+    # fallback only) a mirror of the FinalReport; the source of truth is ReportRunArtifact.
+    result_json = db.Column(db.JSON, nullable=True)
+    error_code = db.Column(db.String(80), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    worker_id = db.Column(db.String(120), nullable=True, index=True)
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    cancel_requested_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    definition = db.relationship('AnalyticalReportDefinition')
+    report = db.relationship('Report')
+    requested_by = db.relationship('User', foreign_keys=[requested_by_user_id])
+    sections = db.relationship(
+        'ReportRunSection', back_populates='run', lazy='select',
+        cascade='all, delete-orphan', order_by='ReportRunSection.position, ReportRunSection.sequence',
+    )
+    artifacts = db.relationship(
+        'ReportRunArtifact', back_populates='run', lazy='select',
+        cascade='all, delete-orphan', passive_deletes=True, order_by='ReportRunArtifact.id',
+    )
+
+    __table_args__ = (
+        db.Index('ix_report_runs_status_created', 'status', 'created_at'),
+    )
+
+
+class ReportRunSection(db.Model):
+    """Result of one analysis of a run, written as soon as it finishes.
+
+    Tokens/costs live in ``AIUsageEvent`` (source of truth); only descriptive
+    model info is copied here for display.
+    """
+
+    __tablename__ = 'report_run_sections'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    run_id = db.Column(db.String(36), db.ForeignKey('report_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    question_key = db.Column(db.String(80), nullable=False)
+    sequence = db.Column(db.Integer, nullable=False, default=0)  # order of COMPLETION within the run (not display order)
+    title = db.Column(db.String(300), nullable=False)
+    question = db.Column(db.Text, nullable=False)
+    position = db.Column(db.Integer, nullable=False, default=0)  # logical/display order in this run (definition snapshot)
+    origin = db.Column(db.String(20), nullable=False, default='definition')  # definition | coordinator
+    status = db.Column(db.String(20), nullable=False)  # completed | failed
+    answer = db.Column(db.Text, nullable=True)
+    failure_reason = db.Column(db.String(120), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    recovered_errors_json = db.Column(db.JSON, nullable=True)
+    dax_query = db.Column(db.Text, nullable=True)
+    tools_called_json = db.Column(db.JSON, nullable=True)
+    model_key = db.Column(db.String(120), nullable=True)
+    model = db.Column(db.String(200), nullable=True)
+    provider = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    actual_service_tier = db.Column(db.String(50), nullable=True)
+    input_tokens = db.Column(db.Integer, nullable=True)
+    output_tokens = db.Column(db.Integer, nullable=True)
+    latency_by_component_ms = db.Column(db.JSON, nullable=True)
+    trace_id = db.Column(db.String(120), nullable=True)
+    semantic_notes_json = db.Column(db.JSON, nullable=True)
+    skill_routing_json = db.Column(db.JSON, nullable=True)
+    purpose = db.Column(db.Text, nullable=True)
+    related_section_keys_json = db.Column(db.JSON, nullable=True)
+    # V1.5 structured evidence (facts/series/tables of the DAX result behind ``answer``) as ONE JSON document,
+    # plus the version of its own schema so an old payload is never read under a newer contract.
+    evidence_json = db.Column(db.JSON, nullable=True)
+    evidence_schema_version = db.Column(db.String(10), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    run = db.relationship('ReportRun', back_populates='sections')
+
+    __table_args__ = (
+        db.UniqueConstraint('run_id', 'question_key', name='uq_report_run_section_key'),
+    )
+
+
+class ReportRunArtifact(db.Model):
+    """Immutable output derived from a ``ReportRun`` (FinalReport JSON, HTML, later PDF...).
+
+    One table for every kind: ``artifact_type`` + the version columns say which contract
+    produced the content. Rows are insert-only; a regeneration (e.g. a newer HTML
+    renderer over the same FinalReport) is a NEW row with the next ``revision`` so the
+    original keeps existing. Identity = ``(report_run_id, artifact_type, revision)``;
+    ``revision`` counts generations per run and type, which avoids NULL-bearing unique
+    keys (``renderer_version`` is NULL for a FinalReport).
+
+    Text content (JSON is stored as canonical JSON text, not as a JSON column, so the
+    stored bytes are exactly what ``sha256`` covers) goes in ``content_text``; binary
+    content (PDF) in ``content_bytes``. Exactly one is set.
+    """
+
+    __tablename__ = 'report_run_artifacts'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    report_run_id = db.Column(
+        db.String(36), db.ForeignKey('report_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    artifact_type = db.Column(db.String(40), nullable=False)       # final_report | html | (pdf | markdown ...)
+    revision = db.Column(db.Integer, nullable=False, default=1)
+    schema_version = db.Column(db.String(20), nullable=True)       # FinalReport schema the content follows
+    renderer_version = db.Column(db.String(40), nullable=True)     # e.g. html-v1 (derived artifacts only)
+    content_type = db.Column(db.String(100), nullable=False)
+    content_text = db.Column(db.Text, nullable=True)
+    content_bytes = db.Column(db.LargeBinary, nullable=True)
+    sha256 = db.Column(db.String(64), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False)
+    metadata_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    run = db.relationship('ReportRun', back_populates='artifacts')
+
+    __table_args__ = (
+        db.UniqueConstraint('report_run_id', 'artifact_type', 'revision', name='uq_report_run_artifact_revision'),
+        db.Index('ix_report_run_artifacts_run_type', 'report_run_id', 'artifact_type'),
+    )
+
+
 class WhatsAppAuthorizedNumber(db.Model):
     """Admin-granted access: a phone number authorized to query a given report."""
 

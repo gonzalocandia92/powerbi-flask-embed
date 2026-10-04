@@ -50,11 +50,20 @@
           </div>
           <p class="form-text mb-0">Coordinated permite al modelo report_coordinator pedir hasta 2 análisis adicionales antes de redactar (V1.1). Fixed reproduce exactamente el comportamiento V1.</p>
         </div>
-        <div class="alert alert-warning small">La generación consume tokens reales. Incluye el análisis y la redacción con el modelo asignado al rol report_writer (y, en modo Coordinated, el rol report_coordinator). Mantené esta pestaña abierta hasta recibir el resultado; esta versión no guarda el informe.</div>
+        <div class="mb-3">
+          <label class="form-label" for="reporting-structure-prompt">Estructura deseada (opcional)</label>
+          <textarea class="form-control" id="reporting-structure-prompt" rows="2" maxlength="4000" placeholder="Ej.: priorizar ventas y cerrar con puntos de atención"></textarea>
+          <p class="form-text mb-2">Se guarda con la definición. Todavía no modifica la redacción del informe.</p>
+          <button class="btn btn-outline-secondary btn-sm" id="reporting-structure-compile" type="button">Guardar e interpretar estructura</button>
+          <span class="form-text ms-2">Consume tokens (rol structure_planner).</span>
+          <div id="reporting-structure-preview" class="small mt-2 d-none" aria-live="polite"></div>
+        </div>
+        <div class="alert alert-warning small">La generación consume tokens reales. Incluye el análisis y la redacción con el modelo asignado al rol report_writer (y, en modo Coordinated, el rol report_coordinator). El informe se genera en segundo plano: podés cerrar esta pestaña y volver a abrirlo con el enlace de la barra de direcciones (<code>?run_id=…</code>).</div>
         <button class="btn btn-primary w-100" id="reporting-generate" type="button" {% if not models or not reports %}disabled{% endif %}><span id="reporting-spinner" class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span>Generar informe</button>
       </div></div>
     </div>
   </div>
+  <div id="reporting-run-panel" class="mt-4 d-none" aria-live="polite"></div>
   <section id="reporting-result" class="mt-4 d-none" aria-live="polite">
     <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h3 class="mb-0" id="reporting-result-title"></h3><div class="text-muted small font-monospace" id="reporting-run-id"></div></div><div class="d-flex gap-2"><button class="btn btn-outline-primary btn-sm" id="reporting-download-html" type="button">Descargar HTML</button><button class="btn btn-outline-primary btn-sm" id="reporting-download-pdf" type="button">Descargar PDF</button><button class="btn btn-outline-primary btn-sm" id="reporting-download-json" type="button">Descargar JSON</button></div></div>
     <div id="reporting-writer-alert" class="alert d-none" role="alert"></div>
@@ -82,12 +91,13 @@
   </section>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_pdf.js') }}"></script><script>
+{% block scripts %}{{ super() }}<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_pdf.js') }}"></script><script src="{{ url_for('static', filename='js/klara_reporting_api.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_run_controller.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_run_view.js') }}"></script><script>
 (() => {
   const models = {{ models|tojson }};
   const defaultModelKey = {{ default_model_key|tojson }};
   const maxQuestions = {{ max_questions }};
-  const endpoint = {{ url_for('ai_reporting.generate')|tojson }};
+  const runEndpoints = {{ run_endpoints|tojson }};
+  const initialRunId = {{ initial_run_id|tojson }};
   const importEndpoint = {{ url_for('ai_reporting.import_questions')|tojson }};
   const skillsEndpoint = {{ url_for('ai_reporting.skills')|tojson }};
   const pdfEndpoint = {{ url_for('ai_reporting.render_pdf')|tojson }};
@@ -116,13 +126,14 @@
     byId('reporting-count').textContent = questions.children.length;
     byId('reporting-add').disabled = questions.children.length >= maxQuestions;
   }
-  function addQuestion(title='', text='') {
+  function addQuestion(title='', text='', key='') {
     if (questions.children.length >= maxQuestions) return;
     const row = document.createElement('div');
     row.className = 'row g-2 align-items-start mb-3 reporting-row';
     row.innerHTML = '<div class="col-auto pt-2 text-muted reporting-index"></div><div class="col-md-4"><input class="form-control reporting-title" maxlength="100" placeholder="Título (opcional)"></div><div class="col"><textarea class="form-control reporting-question" maxlength="1000" rows="2" placeholder="Pregunta analítica" required></textarea></div><div class="col-auto"><button class="btn btn-outline-danger reporting-remove" type="button" aria-label="Eliminar pregunta"><i class="bi bi-trash"></i></button></div><div class="col-12 ps-4"><details class="reporting-skills small"><summary><span class="reporting-skill-badge badge text-bg-secondary">Automático</span> Skills fijadas (opcional)</summary><div class="reporting-skill-list mt-2"></div></details></div>';
     row.querySelector('.reporting-title').value = title;
     row.querySelector('.reporting-question').value = text;
+    if (key) row.dataset.key = key;
     questions.append(row);
     renderSkillList(row, []);
     updateRows();
@@ -211,6 +222,7 @@
   function renderWriterDebug(writer) {
     const box = byId('reporting-writer-debug');
     box.replaceChildren();
+    if (!writer) { box.textContent = 'La redacción no se ejecutó en esta ejecución.'; return; }
     const status = document.createElement('div');
     status.className = writer.status === 'ok' ? 'text-success' : 'text-danger';
     status.textContent = writer.status === 'ok' ? 'Redacción correcta' : `Falló la redacción · ${writer.error ? writer.error.code : 'desconocido'}`;
@@ -410,7 +422,7 @@
     box.append(details);
   }
   function renderFinalReport(data) {
-    const writer = data.writer || {status: 'failed', error: null};
+    const writer = data.writer; // null when the run ended before the writer ran
     reportHtml = data.html || null;
     finalReportJson = data.final_report ? JSON.stringify(data.final_report, null, 2) : null;
     finalReportData = data.final_report || null;
@@ -424,7 +436,10 @@
     byId('reporting-download-json').disabled = !finalReportJson;
     byId('reporting-download-pdf').disabled = !finalReportData;
     const alert = byId('reporting-writer-alert');
-    if (writer.status === 'ok' && !writer.render_error) { alert.className = 'alert d-none'; alert.textContent = ''; }
+    if (!writer) {
+      alert.className = 'alert alert-secondary';
+      alert.textContent = 'La ejecución terminó antes de redactar el informe. El análisis completado se conserva en “ReportDraft / Debug”.';
+    } else if (writer.status === 'ok' && !writer.render_error) { alert.className = 'alert d-none'; alert.textContent = ''; }
     else {
       alert.className = 'alert alert-warning';
       alert.textContent = writer.status === 'ok'
@@ -562,31 +577,100 @@
     if (!name.dataset.edited) name.value = `Informe semanal — ${event.target.selectedOptions[0]?.textContent || ''}`;
   });
   byId('reporting-name').addEventListener('input', event => { event.target.dataset.edited = 'true'; });
-  byId('reporting-generate').addEventListener('click', async () => {
-    clearMessage();
-    result.classList.add('d-none');
-    const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim(), required_skill_keys:selectedSkills(row)}));
+  // ---- Run lifecycle: ReportingApi (transport) -> controller (polling/cancel) -> view (panel + result).
+  const api = KlaraReportingApi.createReportingApi({endpoints: runEndpoints, csrf});
+  const generateButton = byId('reporting-generate');
+  const canGenerate = !generateButton.disabled;
+  let definitionId = null;
+  let shownResultKey = null;
+  const runPanel = KlaraReportRunView.createRunPanel({
+    root: byId('reporting-run-panel'), doc: document,
+    handlers: {onCancel: () => controller.cancel(), onRetry: () => controller.track(controller.getState().runId)},
+  });
+  function setBusy(busy) {
+    generateButton.disabled = busy || !canGenerate;
+    byId('reporting-spinner').classList.toggle('d-none', !busy);
+  }
+  function onRunChange(state) {
+    runPanel.render(state);
+    const run = state.run;
+    if (!run && state.error) showMessage(state.error.message);
+    setBusy(!!run && !KlaraReportRunController.isTerminal(run.status) && state.phase !== 'stopped');
+    // The result renderer only sees a normalized payload, whatever produced it.
+    const payload = KlaraReportRunView.toResultPayload(run);
+    const key = payload ? `${run.run_id}:${run.status}` : null;
+    if (key === shownResultKey) return;
+    shownResultKey = key;
+    if (payload) renderResult(payload); else result.classList.add('d-none');
+  }
+  const controller = KlaraReportRunController.createReportRunController({api, onChange: onRunChange});
+  // After saving, every row learns its stable key so later saves edit instead of recreating questions.
+  function adoptQuestionKeys(saved) {
+    const active = saved.questions.filter(item => item.is_active).sort((a, b) => a.order - b.order);
+    [...questions.querySelectorAll('.reporting-row')].forEach((row, index) => { if (active[index]) row.dataset.key = active[index].key; });
+  }
+  function readDefinitionPayload() {
+    const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({key:row.dataset.key || undefined, title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim(), required_skill_keys:selectedSkills(row)}));
     if (!rows.length || rows.some(row => !row.question)) return showMessage('Ingresá al menos una pregunta y completá todas las filas.');
     if (!model.value || !tier.value) return showMessage('Elegí un modelo y tier disponibles.');
     const strategy = document.querySelector('input[name="reporting-strategy"]:checked').value;
-    const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows, strategy};
+    const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows, strategy, structure_prompt:byId('reporting-structure-prompt').value.trim()};
     if (!payload.name) return showMessage('Ingresá un nombre para el informe.');
-    const button = byId('reporting-generate');
+    return payload;
+  }
+  function renderStructurePreview(data) {
+    const box = byId('reporting-structure-preview');
+    box.replaceChildren();
+    const add = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text; if (cls) el.className = cls; box.appendChild(el); return el; };
+    const labels = {interpreted: 'Interpretada por KLARA', fallback: 'No se pudo interpretar: se usa la estructura estándar', stale: 'Desactualizada: recompilá', not_compiled: 'Sin interpretar', not_required: 'Sin prompt: estructura estándar'};
+    add('div', `Estructura — ${labels[data.status] || data.status}`, 'fw-semibold');
+    const list = document.createElement('ol');
+    list.className = 'mb-1 ps-3';
+    data.preview.forEach(item => {
+      const li = document.createElement('li');
+      li.textContent = item.text ? `${item.label}: ${item.text}` : item.label;
+      if (item.questions.length) { const sub = document.createElement('div'); sub.className = 'text-muted'; sub.textContent = item.questions.map(q => q.title).join(' · '); li.appendChild(sub); }
+      list.appendChild(li);
+    });
+    box.appendChild(list);
+    data.warnings.forEach(w => add('div', `${w.severity === 'info' ? 'ℹ' : '⚠'} ${w.message}`, w.severity === 'info' ? 'text-muted' : 'text-warning-emphasis'));
+    box.classList.remove('d-none');
+  }
+  byId('reporting-structure-compile').addEventListener('click', async event => {
+    clearMessage();
+    const payload = readDefinitionPayload();
+    if (!payload) return;
+    const button = event.currentTarget;
     button.disabled = true;
-    byId('reporting-spinner').classList.remove('d-none');
     try {
-      const response = await fetch(endpoint, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify(payload)});
-      const data = await response.json();
-      if (!response.ok) return showMessage(data.error || 'No se pudo generar el informe.');
-      renderResult(data);
-      if (data.sections.some(section => section.had_error)) showMessage('El informe se generó con algunas secciones fallidas.', 'warning');
-    } catch (_) {
-      showMessage('Se perdió la conexión. La generación pudo continuar y consumir tokens, pero el informe no se guarda en esta versión.');
-    } finally {
-      button.disabled = false;
-      byId('reporting-spinner').classList.add('d-none');
+      const saved = await api.saveDefinition({definitionId, payload});
+      definitionId = saved.id;
+      adoptQuestionKeys(saved);
+      renderStructurePreview(await api.compileStructure({definitionId}));
+    } catch (error) {
+      showMessage(error.message || 'No se pudo interpretar la estructura.');
+    } finally { button.disabled = false; }
+  });
+  generateButton.addEventListener('click', async () => {
+    clearMessage();
+    const payload = readDefinitionPayload();
+    if (!payload) return;
+    setBusy(true);
+    try {
+      // Save the definition (create or update) and queue a run of it; the request returns at once (HTTP 202).
+      await controller.launch(async () => {
+        const saved = await api.saveDefinition({definitionId, payload});
+        definitionId = saved.id;
+        adoptQuestionKeys(saved);
+        return api.createRun({definitionId});
+      });
+      history.replaceState(null, '', `?run_id=${encodeURIComponent(controller.getState().runId)}`);
+    } catch (error) {
+      showMessage(error.message || 'No se pudo crear la ejecución.');
+      setBusy(false);
     }
   });
+  window.addEventListener('pagehide', () => controller.dispose());
   byId('reporting-download-html').addEventListener('click', () => { if (reportHtml) downloadText(reportHtml, 'informe-klara.html', 'text/html;charset=utf-8'); });
   byId('reporting-download-pdf').addEventListener('click', async () => {
     // Reuses the FinalReport already on screen: no LLM, analysis, coordinator or writer call.
@@ -624,5 +708,7 @@
   addQuestion();
   updateTier();
   refreshSkills();
+  // Reopen a persisted run (reload, shared link, or one created elsewhere): the backend is the source of truth.
+  if (initialRunId) controller.track(initialRunId);
 })();
 </script>{% endblock %}
