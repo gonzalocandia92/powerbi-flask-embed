@@ -257,6 +257,7 @@ def create_app():
             from apscheduler.schedulers.background import BackgroundScheduler
             from app.services.refresh_monitor import poll_all_reports
             from app.services.evaluation_worker import poll_evaluation_queue
+            from app.services.reporting.run_worker import poll_report_run_queue
 
             interval_hours = int(os.getenv('REFRESH_POLL_INTERVAL_HOURS', 12))
             scheduler = BackgroundScheduler(daemon=True)
@@ -278,6 +279,19 @@ def create_app():
                 max_instances=1,
                 coalesce=True,
             )
+            # Logical report worker. Set REPORT_RUN_WORKER_ENABLED=0 in the web process
+            # once the same poller runs in a dedicated report-worker process.
+            if os.getenv('REPORT_RUN_WORKER_ENABLED', '1').lower() not in ('0', 'false', 'no'):
+                scheduler.add_job(
+                    func=poll_report_run_queue,
+                    args=[app],
+                    trigger='interval',
+                    seconds=max(1, int(os.getenv('REPORT_RUN_POLL_SECONDS', '3'))),
+                    id='report_run_worker',
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                )
             scheduler.start()
             atexit.register(lambda: scheduler.shutdown(wait=False))
             logging.info(

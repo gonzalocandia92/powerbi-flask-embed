@@ -7,7 +7,7 @@ from typing import Any
 
 from app.models import AIModelConfig, AIModelGrant, AIModelRoleAssignment, ChatSession
 from app.services.llm import ModelCapabilities, ModelConfig
-from app.services.llm.profiles import PROFILES
+from app.services.llm.profiles import PROFILES, profile_for
 
 
 MODEL_API_KEY_ENV = {
@@ -37,6 +37,9 @@ class ComponentSelection:
     model: ModelConfig | None
     source_scope: str
     source_scope_id: str | None
+    # Winning DB assignment (None when the role fell back to code defaults).
+    # Only used to *describe* the selection (admin UI); consumers use ``model``.
+    assignment: AIModelRoleAssignment | None = None
 
 
 def _scope_chain(*, report_id: int | None, empresa_id: int | None):
@@ -217,6 +220,120 @@ def session_model_key(conversation_id: str | None, *, report_id: int | None) -> 
     return session.last_model_key
 
 
+# ---------------------------------------------------------------------------
+# Role overrides: parsing, validation, capabilities and effective description.
+# Everything the admin UI needs lives here so that no inheritance/capability
+# logic is duplicated in JavaScript.
+# ---------------------------------------------------------------------------
+
+THINKING_MODES = ("on", "off")
+# Roles whose consumer requires a model able to run with thinking off.
+THINKING_OFF_CAPABLE_ROLES = frozenset({"query_rewriter"})
+
+
+def role_overrides_from_payload(item: dict[str, Any] | None) -> dict[str, Any]:
+    """Normalize explicit role overrides. Empty/None means "inherit" (stored as NULL)."""
+    item = item or {}
+    thinking = item.get("thinking_mode") or None
+    if thinking is not None and thinking not in THINKING_MODES:
+        raise ValueError("thinking_mode must be on, off or empty (inherit)")
+    raw_tokens = item.get("max_output_tokens")
+    tokens = None
+    if raw_tokens not in (None, ""):
+        try:
+            tokens = int(raw_tokens)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("max_output_tokens must be a positive integer") from exc
+        if tokens < 1:
+            raise ValueError("max_output_tokens must be a positive integer")
+    return {
+        "thinking_mode": thinking,
+        "reasoning_effort": item.get("reasoning_effort") or None,
+        "max_output_tokens": tokens,
+        "service_tier": item.get("service_tier") or None,
+    }
+
+
+def validate_role_assignment(role: str, record: AIModelConfig, assignment: AIModelRoleAssignment) -> None:
+    """Validate the *resolved* config (model defaults + role overrides) against its family profile."""
+    if assignment.thinking_mode == "off" and assignment.reasoning_effort:
+        raise ValueError(f"{role}: reasoning_effort requires thinking_mode=on")
+    if not record.family_key:
+        return
+    profile = PROFILES.get(record.family_key)
+    if profile is None:
+        raise ValueError(f"Unknown family_key for {role}")
+    configured = to_model_config(record, assignment=assignment)
+    profile.validate(configured)
+    if role in THINKING_OFF_CAPABLE_ROLES:
+        profile.validate_off_override(configured)
+
+
+def model_role_defaults(record: AIModelConfig) -> dict[str, Any]:
+    """Model-level defaults a role inherits when it does not override them."""
+    return {
+        "thinking_mode": record.thinking_mode,
+        "reasoning_effort": record.default_reasoning_effort,
+        "max_output_tokens": record.max_output_tokens,
+        "service_tier": record.default_service_tier,
+    }
+
+
+def model_role_capabilities(record: AIModelConfig) -> dict[str, Any]:
+    """Which role overrides make sense for this model, derived from its family profile."""
+    profile = profile_for(record.family_key, record.provider, record.physical_model, record.gateway)
+    thinking = profile.supports_thinking if profile else bool(record.supports_reasoning)
+    levels = list(profile.reasoning_levels(record.physical_model)) if profile and thinking else []
+    flex = bool(record.supports_flex and (profile is None or profile.supports_flex))
+    return {
+        "thinking_modes": list(THINKING_MODES) if thinking else [],
+        "reasoning_levels": levels,
+        "service_tiers": ["flex"] if flex else [],
+        "max_output_tokens_limit": getattr(profile, "max_model_output_tokens", None) if profile else None,
+    }
+
+
+def model_role_meta(record: AIModelConfig) -> dict[str, Any]:
+    return {"display_name": record.display_name, "defaults": model_role_defaults(record),
+            "capabilities": model_role_capabilities(record)}
+
+
+def _override_sources(assignment: AIModelRoleAssignment | None) -> dict[str, str]:
+    """Mirror of the precedence rules in ``to_model_config`` (single place that knows them)."""
+    a = assignment
+    return {
+        "thinking_mode": "role" if a and a.thinking_mode is not None else "model",
+        "reasoning_effort": "role" if a and (a.thinking_mode == "off" or a.reasoning_effort is not None) else "model",
+        "max_output_tokens": "role" if a and a.max_output_tokens else "model",
+        "service_tier": "role" if a and a.service_tier is not None else "model",
+    }
+
+
+def describe_component(selection: ComponentSelection) -> dict[str, Any]:
+    """Serializable view of a resolved component: effective, direct and origin of each value."""
+    assignment = selection.assignment
+    model = selection.model
+    item: dict[str, Any] = {
+        "strategy": selection.strategy,
+        "model_key": model.model_key if model else None,
+        "display_name": None,
+        "source_scope": selection.source_scope,
+        "source_scope_id": selection.source_scope_id,
+        "effective": None,
+        "effective_sources": None,
+        "direct": None,
+    }
+    if model is not None:
+        record = AIModelConfig.query.filter_by(model_key=model.model_key).first()
+        item["display_name"] = record.display_name if record else model.model_key
+        item["effective"] = {
+            "thinking_mode": model.thinking_mode, "reasoning_effort": model.reasoning_effort,
+            "max_output_tokens": model.max_output_tokens, "service_tier": model.service_tier,
+        }
+        item["effective_sources"] = _override_sources(assignment)
+    return item
+
+
 class CatalogModelRoleResolver:
     """Database assignments layered over the typed V1 resolver."""
 
@@ -253,6 +370,7 @@ class CatalogModelRoleResolver:
             return ComponentSelection(
                 role=role, strategy=assignment.strategy, model=model,
                 source_scope=assignment.scope_type, source_scope_id=assignment.scope_id,
+                assignment=assignment,
             )
         fallback_strategy = self.fallback_strategies.get(role, "model")
         if fallback_strategy != "model":
@@ -287,6 +405,9 @@ def build_catalog_resolver(settings, *, report_id=None, empresa_id=None, selecti
             # block a report (CoordinationRunner treats this as a safe, contained
             # CoordinatorConfigurationError and falls back to "fixed" behaviour).
             "report_coordinator": "disabled",
+            # V1.3: optional too. Unassigned => compiling a structure_prompt degrades to the
+            # default structure (never blocks saving a definition or running a report).
+            "structure_planner": "disabled",
         },
     )
 

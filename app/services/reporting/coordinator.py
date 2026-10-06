@@ -303,7 +303,8 @@ def _stage_observation(coordinator_input: CoordinatorInput):
 
 
 def _usage_event(model: ModelConfig, response: LLMResponse, *, coordinator_input: CoordinatorInput,
-                 attempt: int, repair: bool, decision: CoordinatorDecision | None) -> dict[str, Any]:
+                 attempt: int, repair: bool, decision: CoordinatorDecision | None,
+                 latency_ms: int | None = None) -> dict[str, Any]:
     ledger = response.usage.ledger_fields()
     return {
         "provider": model.provider, "model": model.physical_model, "event_type": "generation",
@@ -316,7 +317,7 @@ def _usage_event(model: ModelConfig, response: LLMResponse, *, coordinator_input
         "metadata_json": {
             "component": COORDINATOR_COMPONENT, "report_stage": COORDINATOR_STAGE,
             "report_run_id": coordinator_input.report_run_id, "repair_retry": repair, "attempt": attempt,
-            "output_valid": decision is not None,
+            "latency_ms": latency_ms, "output_valid": decision is not None,
             "action": decision.action if decision is not None else None,
             "requested_analyses_count": len(decision.analyses) if decision is not None else None,
             "normalized_usage": response.usage.metadata(), **model.metadata(),
@@ -368,7 +369,8 @@ class LLMReportCoordinator:
                     attempt=attempt, repair=repair, valid=decision is not None, model=self.model,
                     response=response, latency_ms=latency_ms, validation_errors=list(errors), decision=decision,
                     usage_event=_usage_event(self.model, response, coordinator_input=coordinator_input,
-                                             attempt=attempt, repair=repair, decision=decision),
+                                             attempt=attempt, repair=repair, decision=decision,
+                                             latency_ms=latency_ms),
                 )
                 if on_attempt is not None:
                     hooked = on_attempt(info)

@@ -11,6 +11,7 @@ from html import escape
 from .final_report import (
     BulletListBlock, CalloutBlock, FinalReport, ParagraphBlock, ReportBlock, TableBlock,
 )
+from .versions import FINAL_REPORT_SCHEMA_1_1, HTML_RENDERER_V1
 
 # trend controls direction only (glyph + accessible label); it never implies a
 # color. impact controls the color/semantic style; it never implies a direction.
@@ -27,6 +28,7 @@ _IMPACT_STYLE = {
 }
 _ATTENTION = {"high": ("attn-high", "Alta"), "medium": ("attn-medium", "Media"), "low": ("attn-low", "Baja")}
 _CALLOUT = {"info": "callout-info", "warning": "callout-warning", "critical": "callout-critical"}
+_SHORT_TABLE_ROWS = 15  # print only: tables up to this many rows are kept on one page
 _NOTE_TITLES = {"methodology": "Metodología", "data_quality": "Calidad de datos", "general": "Nota"}
 
 _CSS = """
@@ -72,7 +74,17 @@ tbody tr:nth-child(even){background:#fafbfc}
 .notes{font-size:.9rem;color:var(--muted)}.notes h2{color:var(--ink)}
 footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);font-size:.8rem;color:var(--muted)}
 @media (max-width:720px){.doc{margin:0;border:0;border-radius:0;padding:28px 20px}h1{font-size:1.5rem}}
-@media print{body{background:#fff}.doc{margin:0;border:0;padding:0}}
+@page{size:A4;margin:15mm}
+@media print{
+body{background:#fff;font-size:11pt;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+.doc{max-width:none;margin:0;border:0;border-radius:0;padding:0}
+h1{font-size:2rem}
+h2,h3,caption{break-after:avoid}
+.table-wrap{overflow:visible}
+/* Short tables stay whole; long ones may split between rows (header repeats) instead of leaving a page gap. */
+.kpi,.attention,.callout,.table-short,tr{break-inside:avoid}
+thead{display:table-header-group}
+footer{break-inside:avoid}}
 """
 
 
@@ -86,7 +98,15 @@ def _paragraphs(text: str) -> str:
 
 
 class HtmlReportRenderer:
-    """``FinalReport`` -> standalone HTML document (string)."""
+    """``FinalReport`` -> standalone HTML document (string).
+
+    Deterministic and DB-free. Its identity is persisted next to every HTML it produces
+    (``renderer_version``): changing the markup or CSS in a way that alters existing output
+    means a NEW renderer class/version, never an edit of this one in place.
+    """
+
+    renderer_version = HTML_RENDERER_V1
+    supported_schema_versions = (FINAL_REPORT_SCHEMA_1_1,)
 
     def render(self, report: FinalReport) -> str:
         body = [self._header(report), self._summary(report), self._kpis(report),
@@ -158,7 +178,8 @@ class HtmlReportRenderer:
                 "<tr>" + "".join(f"<td>{_e(row.get(column.key, '—'))}</td>" for column in block.columns) + "</tr>"
                 for row in block.rows)
             caption = f"<caption>{_e(block.caption)}</caption>" if block.caption else ""
-            return f"<div class=\"table-wrap\"><table>{caption}<thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
+            wrap = "table-wrap table-short" if len(block.rows) <= _SHORT_TABLE_ROWS else "table-wrap"
+            return f"<div class=\"{wrap}\"><table>{caption}<thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
         if isinstance(block, CalloutBlock):
             return (f"<div class=\"callout {_CALLOUT[block.severity]}\" role=\"note\">"
                     f"<div class=\"callout-title\">{_e(block.title)}</div>{_paragraphs(block.text)}</div>")
