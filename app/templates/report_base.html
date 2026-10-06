@@ -1419,7 +1419,20 @@
         });
     })();
     </script>
+<script>
+window.addEventListener('message', function (event) {
+    var allowedOrigins = [
+        'https://aklara.io',
+        'https://www.aklara.io'
+    ];
 
+    if (!allowedOrigins.includes(event.origin)) return;
+
+    if (event.data?.type === 'klara:open') {
+        document.querySelector('.klara-minimal-button')?.click();
+    }
+});
+</script>
     {% endif %}{# chatbot_enabled #}
 
     <!-- Bootstrap JS -->
