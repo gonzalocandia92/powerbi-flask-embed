@@ -199,6 +199,29 @@ def openapi_spec():
                                             "workspaceId": {
                                                 "type": "string",
                                                 "description": "ID del workspace de Power BI"
+                                            },
+                                            "settings": {
+                                                "type": "object",
+                                                "description": "Valores para mezclar en 'settings' de la configuración de embed de powerbi-client. persistentFiltersEnabled solo puede definirse al cargar el reporte.",
+                                                "properties": {
+                                                    "persistentFiltersEnabled": {
+                                                        "type": "boolean"
+                                                    }
+                                                }
+                                            },
+                                            "actions": {
+                                                "type": "object",
+                                                "description": "Acciones que el cliente puede ofrecer al usuario. Se ejecutan en el navegador con el SDK de Power BI.",
+                                                "properties": {
+                                                    "resetToDefault": {
+                                                        "type": "boolean",
+                                                        "description": "Permite restablecer filtros, segmentaciones y cambios de vista con report.resetPersistentFilters()"
+                                                    },
+                                                    "refreshVisuals": {
+                                                        "type": "boolean",
+                                                        "description": "Permite actualizar los objetos visuales con report.refresh(). Según Microsoft, solo actualiza datos en modelos DirectQuery"
+                                                    }
+                                                }
                                             }
                                         }
                                     }

@@ -183,12 +183,58 @@
   "embedUrl": "https://app.powerbi.com/reportEmbed?reportId=...",
   "reportId": "abc-123",
   "accessToken": "eyJ0eXAi...",
-  "workspaceId": "xyz-789"
+  "workspaceId": "xyz-789",
+  "settings": {
+    "persistentFiltersEnabled": true
+  },
+  "actions": {
+    "resetToDefault": true,
+    "refreshVisuals": false
+  }
 }</code></pre>
                 </div>
               </div>
             </div>
           </div>
+
+          <h6 class="mt-3">Acciones de usuario</h6>
+          <p>
+            <code>actions</code> indica qué botones puede ofrecer el cliente. Ambas acciones se ejecutan en el navegador
+            con el SDK <code>powerbi-client</code>; no hay endpoints adicionales.
+          </p>
+          <ul>
+            <li>
+              <code>resetToDefault</code>: <code>report.resetPersistentFilters()</code> devuelve filtros, segmentaciones y
+              cambios de vista al estado por defecto. Requiere embeber con <code>settings.persistentFiltersEnabled: true</code>
+              (no puede cambiarse después de cargar el reporte) y <code>tokenType: Aad</code>.
+            </li>
+            <li>
+              <code>refreshVisuals</code>: <code>report.refresh()</code> actualiza los objetos visuales sin perder filtros
+              ni interacciones. Según la documentación de Microsoft solo funciona en modelos DirectQuery.
+            </li>
+          </ul>
+
+          <h6 class="mt-3">Ejemplo de cliente</h6>
+          <pre class="bg-dark text-light p-3 rounded"><code>const cfg = await fetch('{{ request.url_root }}private/report-config?report_id=1', {
+  headers: { Authorization: 'Bearer ' + accessToken }
+}).then(r => r.json());
+
+const models = window['powerbi-client'].models;
+const report = powerbi.embed(container, {
+  type: 'report',
+  tokenType: models.TokenType.Aad,
+  accessToken: cfg.accessToken,
+  embedUrl: cfg.embedUrl,
+  id: cfg.reportId,
+  settings: { ...cfg.settings }
+});
+
+if (cfg.actions.resetToDefault) {
+  resetButton.onclick = () => report.resetPersistentFilters();
+}
+if (cfg.actions.refreshVisuals) {
+  refreshButton.onclick = () => report.refresh();
+}</code></pre>
 
           <h6 class="mt-3">Ejemplo cURL</h6>
           <pre class="bg-dark text-light p-3 rounded"><code>curl -X GET "{{ request.url_root }}private/report-config?report_id=1" \

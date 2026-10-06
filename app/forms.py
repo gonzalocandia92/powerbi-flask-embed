@@ -78,6 +78,10 @@ class ReportForm(FlaskForm):
     es_privado = BooleanField("Es Privado (requiere autenticación de empresa)")
     chatbot_enabled = BooleanField("Habilitar chatbot KLARA en links públicos")
     show_dax_query = BooleanField("Mostrar consultas DAX en el chat")
+    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
+    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
+    allow_refresh_visuals = BooleanField('Permitir actualizar objetos visuales', default=False)
+    requires_login = BooleanField('Requiere login para abrir los links públicos', default=False)
     empresas = SelectMultipleField("Empresas Asociadas", coerce=int, validators=[])
     empresa_facturadora_id = SelectField(
         "Empresa facturadora AI",
@@ -115,8 +119,6 @@ class PublicLinkForm(FlaskForm):
         "Nombre personalizado para el link",
         validators=[DataRequired(), Length(max=120)]
     )
-    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
-    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
     submit = SubmitField("Crear Link")
 
 
@@ -145,6 +147,9 @@ class PublicUrlReportForm(FlaskForm):
     usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])
     es_publico = BooleanField("Es Público", default=True)
     es_privado = BooleanField("Es Privado", default=False)
+    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
+    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
+    allow_refresh_visuals = BooleanField('Permitir actualizar objetos visuales', default=False)
     submit = SubmitField("Continuar")
 
 
@@ -155,8 +160,6 @@ class PublicUrlLinkForm(FlaskForm):
         "Nombre del Link Público",
         validators=[DataRequired(), Length(max=120)]
     )
-    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
-    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
     submit = SubmitField("Crear Link Público")
 
 
