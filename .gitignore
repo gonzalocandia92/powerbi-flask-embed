@@ -54,3 +54,7 @@ agent_core_debug.txt
 # MCP build artifacts
 services/mcp_aklara/lib/
 Microsoft.AnalysisServices*.zip
+
+# Database backups (contain production data)
+backups/
+*.dump
