@@ -676,14 +676,30 @@ function showInfo(message) {
 </script>
 {% block scripts %}{% endblock %}
   <script>
-    document.querySelectorAll('form').forEach(function (form) {
-      if ((form.method || '').toLowerCase() !== 'post' || form.querySelector('input[name="csrf_token"]')) return;
-      const input = document.createElement('input');
-      input.type = 'hidden';
-      input.name = 'csrf_token';
-      input.value = document.querySelector('meta[name="csrf-token"]').content;
-      form.appendChild(input);
-    });
+    (function () {
+      const meta = document.querySelector('meta[name="csrf-token"]');
+      if (!meta) return;
+
+      function ensureCsrfToken(form) {
+        if ((form.method || '').toLowerCase() !== 'post' || form.querySelector('input[name="csrf_token"]')) return;
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'csrf_token';
+        input.value = meta.content;
+        form.appendChild(input);
+      }
+
+      document.querySelectorAll('form').forEach(ensureCsrfToken);
+
+      // Delete/confirm buttons build a <form> on the fly and call form.submit(),
+      // which fires no submit event and runs after the loop above, so those
+      // forms would be posted without a token and rejected with 400.
+      const nativeSubmit = HTMLFormElement.prototype.submit;
+      HTMLFormElement.prototype.submit = function () {
+        ensureCsrfToken(this);
+        return nativeSubmit.call(this);
+      };
+    })();
   </script>
 </body>
 </html>
