@@ -2,6 +2,11 @@
 {% block title %}Informes KLARA - Sudata PBI{% endblock %}
 {% block body %}
 <style>
+  /* The card-header ::before glow covers its children: lift the actions above it and keep them legible on the gradient. */
+  .reporting-header-actions { position: relative; z-index: 1; }
+  .reporting-header-actions .btn-light { background: #fff; color: #4c51bf; border: 2px solid #fff; font-weight: 600; box-shadow: 0 2px 6px rgba(0,0,0,.15); }
+  .reporting-header-actions .btn-light:hover, .reporting-header-actions .btn-light:focus-within { background: #eef0ff; color: #3c366b; border-color: #eef0ff; }
+  .reporting-header-actions .btn-light:disabled, .reporting-header-actions .btn-light.disabled { opacity: .6; }
   .klara-md > :last-child { margin-bottom: 0; }
   .klara-md h1, .klara-md h2, .klara-md h3, .klara-md h4, .klara-md h5, .klara-md h6 { font-size: 1.05em; font-weight: 700; margin: .75rem 0 .4rem; }
   .klara-md ul, .klara-md ol { padding-left: 1.4rem; }
@@ -33,7 +38,7 @@
         </div>
       </div>
       <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center gap-2"><h5 class="mb-0">Preguntas</h5><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ai_reporting.questions_template') }}">Descargar plantilla</a><label class="btn btn-sm btn-outline-primary mb-0">Importar CSV<input id="reporting-csv" type="file" accept=".csv,text/csv" hidden></label><button class="btn btn-sm btn-outline-primary" id="reporting-add" type="button"><i class="bi bi-plus-lg me-1"></i>Agregar pregunta</button></div></div>
+        <div class="card-header d-flex justify-content-between align-items-center gap-2"><h5 class="mb-0">Preguntas</h5><div class="d-flex flex-wrap gap-2 reporting-header-actions"><a class="btn btn-sm btn-light" href="{{ url_for('ai_reporting.questions_template') }}"><i class="bi bi-download me-1"></i>Descargar plantilla</a><label class="btn btn-sm btn-light mb-0"><i class="bi bi-upload me-1"></i>Importar CSV<input id="reporting-csv" type="file" accept=".csv,text/csv" hidden></label><button class="btn btn-sm btn-light" id="reporting-add" type="button"><i class="bi bi-plus-lg me-1"></i>Agregar pregunta</button></div></div>
         <div class="card-body"><div id="reporting-csv-message" class="mb-2"></div><div id="reporting-questions"></div><p class="text-muted small mb-0">Cada pregunta se ejecuta por separado, en el orden mostrado. Máximo {{ max_questions }} preguntas.</p></div>
       </div>
     </div>
@@ -45,7 +50,7 @@
           <label class="form-label" for="reporting-structure-prompt">Estructura deseada (opcional)</label>
           <textarea class="form-control" id="reporting-structure-prompt" rows="2" maxlength="4000" placeholder="Ej.: priorizar ventas y cerrar con puntos de atención"></textarea>
           <p class="form-text mb-2">Si la escribís, se tiene en cuenta al generar el informe: se interpreta automáticamente si todavía no lo hiciste. Podés usar "Interpretar estructura" para previsualizarla antes.</p>
-          <button class="btn btn-outline-secondary btn-sm" id="reporting-structure-compile" type="button">Interpretar estructura</button>
+          <button class="btn btn-outline-primary btn-sm" id="reporting-structure-compile" type="button">Interpretar estructura</button>
           <span class="form-text ms-2">Consume tokens (rol structure_planner).</span>
           <div id="reporting-structure-preview" class="small mt-2 d-none" aria-live="polite"></div>
           <details class="small mt-2" open id="reporting-default-structure"><summary class="fw-semibold">Estructura estándar</summary><p class="text-muted mb-1">Es la que se usa si no escribís nada arriba.</p><ol class="mb-0 ps-3" id="reporting-default-structure-list"></ol></details>
