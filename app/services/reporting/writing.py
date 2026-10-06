@@ -20,13 +20,22 @@ from .composer import CompositionError, ReportComposer
 from .contracts import ReportDraft
 from .structure_contracts import FrozenStructure
 from .structured_writer import StructuredReportWriter
-from .writer import ReportWriter, ReportWriterExecutionError, WriterAttemptHook
+from .fallback_report import FallbackReportBuilder, FallbackUnavailableError
+from .writer import (
+    ReportWriter, ReportWriterError, ReportWriterExecutionError, ReportWriterInvalidOutputError, WriterAttemptHook,
+)
+
+MODE_WRITER = "writer"
+MODE_FALLBACK = "fallback"
 
 
 @dataclass
 class WritingOutcome:
     report: BaseModel                       # FinalReport (1.1) or FinalReportV12; carries its own schema_version
     composed: ComposedReportInput | None = None   # None in the legacy flow
+    mode: str = MODE_WRITER                        # "writer" | "fallback" (a repaired writer output is still "writer")
+    # Set only with mode == "fallback": the editorial failure the deterministic fallback covered.
+    writer_error: ReportWriterError | None = None
 
 
 class WritingStrategy(Protocol):
@@ -43,9 +52,12 @@ class LegacyWriting:
 
 
 class StructuredWriting:
-    def __init__(self, writer: StructuredReportWriter, composer: ReportComposer | None = None):
+    def __init__(self, writer: StructuredReportWriter, composer: ReportComposer | None = None,
+                 fallback: FallbackReportBuilder | None = None):
         self.writer = writer
         self.composer = composer or ReportComposer()
+        # Deterministic, model-free safety net for an INVALID editorial output only (see ``write``).
+        self.fallback = fallback
 
     async def write(self, draft, structure=None, *, on_attempt=None) -> WritingOutcome:
         try:
@@ -53,5 +65,16 @@ class StructuredWriting:
         except CompositionError as exc:
             # Never "fixed" by a model; surfaces as a writer failure so the persisted analyses are kept.
             raise ReportWriterExecutionError(str(exc), code=exc.code) from exc
-        report = await self.writer.write(composed, report_run_id=draft.report_run_id, on_attempt=on_attempt)
+        try:
+            report = await self.writer.write(composed, report_run_id=draft.report_run_id, on_attempt=on_attempt)
+        except ReportWriterInvalidOutputError as failure:
+            # The writer (and its one repair) could not satisfy the contract. Provider/config failures, a failed
+            # composition or a report with no successful evidence are NOT editorial failures and never get here.
+            if self.fallback is None:
+                raise
+            try:
+                report = self.fallback.build(composed)
+            except FallbackUnavailableError:
+                raise failure from None
+            return WritingOutcome(report=report, composed=composed, mode=MODE_FALLBACK, writer_error=failure)
         return WritingOutcome(report=report, composed=composed)

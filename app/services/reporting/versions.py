@@ -13,16 +13,17 @@ from __future__ import annotations
 FINAL_REPORT_SCHEMA_1_1 = "1.1"
 FINAL_REPORT_SCHEMA_1_2 = "1.2"
 FINAL_REPORT_SCHEMA_1_3 = "1.3"
+FINAL_REPORT_SCHEMA_1_3_1 = "1.3.1"
 
 # HTML renderer identities (``report_run_artifacts.renderer_version``).
 HTML_RENDERER_V1 = "html-v1"
 HTML_RENDERER_V2 = "html-v2"
 HTML_RENDERER_V3 = "html-v3"
 
-# New persisted runs (ReportRun) produce 1.3 / html-v3 (V1.5). 1.1 / html-v1 and 1.2 / html-v2 stay readable and
+# New persisted runs (ReportRun) produce 1.3.1 / html-v3 (V1.5.1; html-v3 presents both 1.3 and 1.3.1). 1.1 / html-v1 and 1.2 / html-v2 stay readable and
 # renderable forever. The legacy synchronous ``/generate`` path keeps 1.1 / html-v1 on purpose (debug/comparison
 # path); it does not read these constants.
-CURRENT_FINAL_REPORT_SCHEMA = FINAL_REPORT_SCHEMA_1_3
+CURRENT_FINAL_REPORT_SCHEMA = FINAL_REPORT_SCHEMA_1_3_1
 CURRENT_HTML_RENDERER = HTML_RENDERER_V3
 
 # ``report_run_artifacts.artifact_type``. Only the first two are persisted today;

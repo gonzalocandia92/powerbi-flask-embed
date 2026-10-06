@@ -40,25 +40,17 @@
     <div class="col-xl-4">
       <div class="card"><div class="card-header"><h5 class="mb-0">Generación</h5></div><div class="card-body">
         <p class="mb-2"><span id="reporting-count">1</span> pregunta(s) · ejecución secuencial</p>
-        <div class="mb-3">
-          <label class="form-label d-block mb-1">Estrategia</label>
-          <div class="btn-group w-100" role="group" aria-label="Estrategia de generación" id="reporting-strategy-group">
-            <input type="radio" class="btn-check" name="reporting-strategy" id="reporting-strategy-fixed" value="fixed" checked>
-            <label class="btn btn-outline-secondary" for="reporting-strategy-fixed">Fixed</label>
-            <input type="radio" class="btn-check" name="reporting-strategy" id="reporting-strategy-coordinated" value="coordinated">
-            <label class="btn btn-outline-secondary" for="reporting-strategy-coordinated">Coordinated</label>
-          </div>
-          <p class="form-text mb-0">Coordinated permite al modelo report_coordinator pedir hasta 2 análisis adicionales antes de redactar (V1.1). Fixed reproduce exactamente el comportamiento V1.</p>
-        </div>
+        <p class="text-muted small mb-3">Estrategia coordinada: el modelo report_coordinator puede pedir hasta 2 análisis adicionales antes de redactar (V1.1).</p>
         <div class="mb-3">
           <label class="form-label" for="reporting-structure-prompt">Estructura deseada (opcional)</label>
           <textarea class="form-control" id="reporting-structure-prompt" rows="2" maxlength="4000" placeholder="Ej.: priorizar ventas y cerrar con puntos de atención"></textarea>
-          <p class="form-text mb-2">Se guarda con la definición. Todavía no modifica la redacción del informe.</p>
-          <button class="btn btn-outline-secondary btn-sm" id="reporting-structure-compile" type="button">Guardar e interpretar estructura</button>
+          <p class="form-text mb-2">Si la escribís, se tiene en cuenta al generar el informe: se interpreta automáticamente si todavía no lo hiciste. Podés usar "Interpretar estructura" para previsualizarla antes.</p>
+          <button class="btn btn-outline-secondary btn-sm" id="reporting-structure-compile" type="button">Interpretar estructura</button>
           <span class="form-text ms-2">Consume tokens (rol structure_planner).</span>
           <div id="reporting-structure-preview" class="small mt-2 d-none" aria-live="polite"></div>
+          <details class="small mt-2" open id="reporting-default-structure"><summary class="fw-semibold">Estructura estándar</summary><p class="text-muted mb-1">Es la que se usa si no escribís nada arriba.</p><ol class="mb-0 ps-3" id="reporting-default-structure-list"></ol></details>
         </div>
-        <div class="alert alert-warning small">La generación consume tokens reales. Incluye el análisis y la redacción con el modelo asignado al rol report_writer (y, en modo Coordinated, el rol report_coordinator). El informe se genera en segundo plano: podés cerrar esta pestaña y volver a abrirlo con el enlace de la barra de direcciones (<code>?run_id=…</code>).</div>
+        <div class="alert alert-warning small">La generación consume tokens reales. Incluye el análisis y la redacción con el modelo asignado al rol report_writer y la coordinación con el rol report_coordinator. El informe se genera en segundo plano: podés cerrar esta pestaña y volver a abrirlo con el enlace de la barra de direcciones (<code>?run_id=…</code>).</div>
         <button class="btn btn-primary w-100" id="reporting-generate" type="button" {% if not models or not reports %}disabled{% endif %}><span id="reporting-spinner" class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span>Generar informe</button>
       </div></div>
     </div>
@@ -121,10 +113,36 @@
     message.textContent = text;
   }
   function clearMessage() { message.className = 'alert d-none'; message.textContent = ''; }
+  // Standard structure of the questions on screen, from the server (single source of truth), debounced.
+  let defaultStructureTimer = null, defaultStructureSeq = 0;
+  function refreshDefaultStructure() {
+    clearTimeout(defaultStructureTimer);
+    defaultStructureTimer = setTimeout(async () => {
+      const seq = ++defaultStructureSeq;
+      const titles = [...questions.querySelectorAll('.reporting-row')].map(row => row.querySelector('.reporting-title').value.trim());
+      const list = byId('reporting-default-structure-list');
+      try {
+        const data = await api.defaultStructure(titles);
+        if (seq !== defaultStructureSeq) return;
+        list.replaceChildren(...data.preview.map(item => {
+          const li = document.createElement('li');
+          li.textContent = item.label;
+          if (item.questions.length && item.type !== 'section') {
+            const sub = document.createElement('div'); sub.className = 'text-muted';
+            sub.textContent = `${item.questions.length} pregunta(s) disponibles`; li.appendChild(sub);
+          }
+          return li;
+        }));
+      } catch (error) {
+        if (seq === defaultStructureSeq) list.replaceChildren();
+      }
+    }, 400);
+  }
   function updateRows() {
     [...questions.children].forEach((row, index) => row.querySelector('.reporting-index').textContent = index + 1);
     byId('reporting-count').textContent = questions.children.length;
     byId('reporting-add').disabled = questions.children.length >= maxQuestions;
+    refreshDefaultStructure();
   }
   function addQuestion(title='', text='', key='') {
     if (questions.children.length >= maxQuestions) return;
@@ -564,6 +582,7 @@
     }
   });
   byId('reporting-add').addEventListener('click', () => addQuestion());
+  questions.addEventListener('input', event => { if (event.target.classList.contains('reporting-title')) refreshDefaultStructure(); });
   questions.addEventListener('click', event => {
     if (event.target.closest('.reporting-remove')) {
       event.target.closest('.reporting-row').remove();
@@ -613,7 +632,7 @@
     const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({key:row.dataset.key || undefined, title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim(), required_skill_keys:selectedSkills(row)}));
     if (!rows.length || rows.some(row => !row.question)) return showMessage('Ingresá al menos una pregunta y completá todas las filas.');
     if (!model.value || !tier.value) return showMessage('Elegí un modelo y tier disponibles.');
-    const strategy = document.querySelector('input[name="reporting-strategy"]:checked').value;
+    const strategy = 'coordinated';
     const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows, strategy, structure_prompt:byId('reporting-structure-prompt').value.trim()};
     if (!payload.name) return showMessage('Ingresá un nombre para el informe.');
     return payload;
@@ -662,6 +681,10 @@
         const saved = await api.saveDefinition({definitionId, payload});
         definitionId = saved.id;
         adoptQuestionKeys(saved);
+        // A written structure always applies: interpret it now if it is not up to date (idempotent: no model call
+        // when the saved interpretation already matches the prompt and questions). A planner failure comes back as
+        // status "fallback" (standard structure + warning), not as an error, so the run still goes ahead.
+        if (payload.structure_prompt) renderStructurePreview(await api.compileStructure({definitionId}));
         return api.createRun({definitionId});
       });
       history.replaceState(null, '', `?run_id=${encodeURIComponent(controller.getState().runId)}`);

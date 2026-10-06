@@ -36,17 +36,18 @@ LOG = logging.getLogger(__name__)
 PipelineBuilder = Callable[[dict, ReportDefinition], ReportPipeline]
 
 
-def report_observability(final_report, renderer_version: str | None) -> dict | None:
+def report_observability(final_report, renderer_version: str | None, generation_mode: str | None = None) -> dict | None:
     """Schema / renderer / visual-component counts of a produced report (``None`` when there is none)."""
     if final_report is None:
         return None
-    info = {"final_report_schema": getattr(final_report, "schema_version", None), "renderer": renderer_version}
+    info = {"final_report_schema": getattr(final_report, "schema_version", None), "renderer": renderer_version,
+            "generation_mode": generation_mode}
     for name in ("visual_component_count", "chart_count"):
         counter = getattr(final_report, name, None)
         if callable(counter):
             info[name] = counter()
-    LOG.info("[ReportRun] final_report_schema=%s renderer=%s visual_component_count=%s chart_count=%s",
-             info["final_report_schema"], renderer_version, info.get("visual_component_count"),
+    LOG.info("[ReportRun] final_report_schema=%s renderer=%s generation_mode=%s visual_component_count=%s chart_count=%s",
+             info["final_report_schema"], renderer_version, generation_mode, info.get("visual_component_count"),
              info.get("chart_count"))
     return info
 
@@ -152,7 +153,8 @@ class ReportRunExecutor:
             "final_report": result.final_report.model_dump(mode="json") if result.final_report else None,
             "artifact_errors": artifact_errors,
             # Operational facts about WHAT was produced (never its content): schema, renderer, visual counts.
-            "report": report_observability(result.final_report, observed.get("renderer_version")),
+            "report": report_observability(result.final_report, observed.get("renderer_version"),
+                                           result.generation_mode),
             "coordination": coordination_payload(result.coordination),
             "usage_record_failures": result.usage_record_failures
             + (result.coordination.extra_usage_record_failures if result.coordination else 0),
@@ -216,12 +218,15 @@ class ReportRunExecutor:
             return []
         errors: list[str] = []
         source = None
+        # Only the non-default way of producing a report is recorded on the artifacts (no special artifact type).
+        extra = {"generation_mode": result.generation_mode} if result.generation_mode == "fallback" else None
         try:
-            source = self.artifacts.save_final_report(run_id, result.final_report)
+            source = self.artifacts.save_final_report(run_id, result.final_report, extra_metadata=extra)
         except ArtifactPersistenceError:
             errors.append("final_report_artifact_failed")  # result_json still carries the report
         try:
-            html = self.artifacts.render_and_save_html(run_id, result.final_report, source=source)
+            html = self.artifacts.render_and_save_html(run_id, result.final_report, source=source,
+                                                       extra_metadata=extra)
             if observed is not None:
                 observed["renderer_version"] = html.renderer_version
         except ArtifactRenderError:

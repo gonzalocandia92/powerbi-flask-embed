@@ -23,12 +23,13 @@ from pydantic import BaseModel
 from .final_report import FinalReport
 from .final_report_v12 import FinalReportV12
 from .final_report_v13 import FinalReportV13
+from .final_report_v131 import FinalReportV131
 from .html_renderer import HtmlReportRenderer
 from .html_renderer_v2 import HtmlReportRendererV2
 from .html_renderer_v3 import HtmlReportRendererV3
 from .versions import (
-    FINAL_REPORT_SCHEMA_1_1, FINAL_REPORT_SCHEMA_1_2, FINAL_REPORT_SCHEMA_1_3, HTML_RENDERER_V1, HTML_RENDERER_V2,
-    HTML_RENDERER_V3,
+    FINAL_REPORT_SCHEMA_1_1, FINAL_REPORT_SCHEMA_1_2, FINAL_REPORT_SCHEMA_1_3, FINAL_REPORT_SCHEMA_1_3_1,
+    HTML_RENDERER_V1, HTML_RENDERER_V2, HTML_RENDERER_V3,
 )
 
 
@@ -171,6 +172,7 @@ def build_default_final_report_schemas() -> FinalReportSchemaRegistry:
     registry.register(FINAL_REPORT_SCHEMA_1_1, FinalReport)
     registry.register(FINAL_REPORT_SCHEMA_1_2, FinalReportV12)  # independent contract: 1.1 is untouched
     registry.register(FINAL_REPORT_SCHEMA_1_3, FinalReportV13)  # independent contract: 1.1 / 1.2 are untouched
+    registry.register(FINAL_REPORT_SCHEMA_1_3_1, FinalReportV131)  # typed evidence refs; 1.3 stays frozen
     return registry
 
 
@@ -183,10 +185,11 @@ def build_default_html_renderers() -> HtmlRendererRegistry:
     registry.register(HTML_RENDERER_V2, HtmlReportRendererV2,
                       schema_versions=(FINAL_REPORT_SCHEMA_1_2,), default_for=(FINAL_REPORT_SCHEMA_1_2,),
                       original_for=(FINAL_REPORT_SCHEMA_1_2,))
-    # html-v3 presents 1.3 only (original AND default); 1.1 / 1.2 keep html-v1 / html-v2 untouched.
-    registry.register(HTML_RENDERER_V3, HtmlReportRendererV3,
-                      schema_versions=(FINAL_REPORT_SCHEMA_1_3,), default_for=(FINAL_REPORT_SCHEMA_1_3,),
-                      original_for=(FINAL_REPORT_SCHEMA_1_3,))
+    # html-v3 presents 1.3 AND 1.3.1 (it reads only materialized fields; refs are provenance it never looks at), as
+    # original and default of both. 1.1 / 1.2 keep html-v1 / html-v2 untouched.
+    both = (FINAL_REPORT_SCHEMA_1_3, FINAL_REPORT_SCHEMA_1_3_1)
+    registry.register(HTML_RENDERER_V3, HtmlReportRendererV3, schema_versions=both, default_for=both,
+                      original_for=both)
     return registry
 
 

@@ -49,8 +49,14 @@ def planned_sections(snapshot: dict | None) -> list[dict]:
 
 def writer_payload(result) -> dict:
     error = result.writer_error
+    mode = getattr(result, "generation_mode", None)
     return {
-        "status": "ok" if result.writer_ok else "failed",
+        "status": ("fallback" if mode == "fallback" else "ok") if result.writer_ok else "failed",
+        # writer | repair | fallback | None. The fallback is a deterministic report (0 model calls) built after the
+        # writer failed twice: the run is then completed_with_errors and ``error`` keeps the writer's failure.
+        "generation_mode": mode,
+        "writer_fallback_used": mode == "fallback",
+        "writer_attempt_errors": [list(errors) for errors in getattr(result, "writer_attempt_errors", ())],
         "error": None if error is None else {
             "code": error.code, "message": str(error),
             "validation_errors": list(error.errors) if isinstance(error, ReportWriterInvalidOutputError) else [],

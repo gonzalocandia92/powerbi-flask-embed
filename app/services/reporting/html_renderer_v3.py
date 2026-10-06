@@ -10,19 +10,17 @@ The renderer owns ALL markup, CSS and visuals:
 * evidence refs and ``source_section_keys`` are internal provenance and are never printed;
 * restrictive CSP (``default-src 'none'``), print rules for PDF (``break-inside``, ``print-color-adjust``).
 
+It dispatches on each item's / block's ``type`` and reads only MATERIALIZED fields, so it presents FinalReport 1.3 and
+1.3.1 alike: evidence references (typed or not) are provenance it never looks at.
+
 ``html-v1`` and ``html-v2`` are frozen for historical reports and share nothing with this module.
 """
 from __future__ import annotations
 
 from html import escape
 
-from .final_report_v13 import (
-    AttentionGridItem, FinalReportV13, HeroItem, MetricStripItem, MethodologyNotesItem13, NotesItem13, SectionItem13,
-)
-from .report_content import BulletListBlock, CalloutBlock, ParagraphBlock, TableBlock
 from .report_theme import ReportTheme, get_theme
-from .versions import FINAL_REPORT_SCHEMA_1_3, HTML_RENDERER_V3
-from .visual_content import AnnotationBlock, BarChartBlock, MetricCard, MetricCardsBlock, PullQuoteBlock
+from .versions import FINAL_REPORT_SCHEMA_1_3, FINAL_REPORT_SCHEMA_1_3_1, HTML_RENDERER_V3
 
 _TREND_GLYPH = {"up": ("▲", "en alza"), "down": ("▼", "en baja"), "stable": ("▬", "estable"),
                 "neutral": ("●", "sin tendencia")}
@@ -183,12 +181,12 @@ class HtmlReportRendererV3:
     """
 
     renderer_version = HTML_RENDERER_V3
-    supported_schema_versions = (FINAL_REPORT_SCHEMA_1_3,)
+    supported_schema_versions = (FINAL_REPORT_SCHEMA_1_3, FINAL_REPORT_SCHEMA_1_3_1)
 
     def __init__(self, theme: ReportTheme | None = None):
         self.theme = theme if theme is not None else get_theme()
 
-    def render(self, report: FinalReportV13, theme: ReportTheme | None = None) -> str:
+    def render(self, report, theme: ReportTheme | None = None) -> str:
         theme = theme if theme is not None else self.theme
         numbers = iter(range(1, len(report.items) + 1))
         body = [self._masthead(report)]
@@ -206,22 +204,23 @@ class HtmlReportRendererV3:
 
     # -- dispatch ---------------------------------------------------------------------------
     def _item(self, item, numbers) -> str:
-        if isinstance(item, HeroItem):
+        kind = getattr(item, "type", None)
+        if kind == "hero":
             return self._hero(item)
-        if isinstance(item, MetricStripItem):
+        if kind == "metric_strip":
             return self._metric_strip(item)
-        if isinstance(item, SectionItem13):
+        if kind == "section":
             return self._section(item, next(numbers))
-        if isinstance(item, AttentionGridItem):
+        if kind == "attention_grid":
             return self._attention_grid(item)
-        if isinstance(item, NotesItem13):
+        if kind == "notes":
             return f"<section class=\"plain notes\"><h2>Notas</h2>{_paragraphs(item.text)}</section>"
-        if isinstance(item, MethodologyNotesItem13):
+        if kind == "methodology_notes":
             return self._methodology(item)
         return ""  # unknown item types are never rendered
 
     # -- parts ------------------------------------------------------------------------------
-    def _masthead(self, report: FinalReportV13) -> str:
+    def _masthead(self, report) -> str:
         period = report.period
         bits = []
         if period.label:
@@ -234,7 +233,7 @@ class HtmlReportRendererV3:
         period_html = f"<div class=\"period\">{''.join(bits)}</div>" if bits else ""
         return f"<header class=\"masthead\"><h1>{_e(report.title)}</h1>{subtitle}{period_html}</header>"
 
-    def _hero(self, hero: HeroItem) -> str:
+    def _hero(self, hero) -> str:
         deck = f"<p class=\"hero-deck\">{_e(hero.deck)}</p>" if hero.deck else ""
         chips = "".join(f"<li class=\"chip\">{_e(text)}</li>" for text in hero.metadata)
         chips = f"<ul class=\"chips\">{chips}</ul>" if chips else ""
@@ -250,26 +249,26 @@ class HtmlReportRendererV3:
                 f"{stat}</section>{bullets}")
 
     @staticmethod
-    def _trend(card: MetricCard) -> str:
+    def _trend(card) -> str:
         if not card.trend:
             return ""
         glyph, label = _TREND_GLYPH[card.trend]
         css = _IMPACT_CLASS[card.impact or "neutral"]
         return f"<span class=\"trend {css}\"><span aria-hidden=\"true\">{glyph}</span> {_e(label)}</span>"
 
-    def _card(self, card: MetricCard, kind: str) -> str:
+    def _card(self, card, kind: str) -> str:
         secondary = f"<div class=\"{kind}-secondary\">{_e(card.secondary_value)}</div>" if card.secondary_value else ""
         text = f"<div class=\"card-text\">{_e(card.supporting_text)}</div>" if card.supporting_text else ""
         return (f"<div class=\"{kind}\"><div class=\"{kind}-label\">{_e(card.label)}</div>"
                 f"<div class=\"{kind}-value\">{_e(card.value)}</div>{secondary}{text}{self._trend(card)}</div>")
 
-    def _metric_strip(self, strip: MetricStripItem) -> str:
+    def _metric_strip(self, strip) -> str:
         if not strip.metrics:
             return ""
         cards = "".join(self._card(metric, "metric") for metric in strip.metrics)
         return f"<section class=\"strip\" aria-label=\"Indicadores destacados\">{cards}</section>"
 
-    def _section(self, section: SectionItem13, number: int) -> str:
+    def _section(self, section, number: int) -> str:
         head = (f"<div class=\"sec-head\"><span class=\"sec-number\">{number:02d}</span>"
                 f"<h2>{_e(section.title)}</h2></div>")
         if section.status == "unavailable":
@@ -287,27 +286,28 @@ class HtmlReportRendererV3:
         return f"<section class=\"sec\" id=\"section-{number}\">{head}{lede}{content}</section>"
 
     def _block(self, block) -> str:
-        if isinstance(block, ParagraphBlock):
+        kind = getattr(block, "type", None)
+        if kind == "paragraph":
             return _paragraphs(block.text)
-        if isinstance(block, BulletListBlock):
+        if kind == "bullet_list":
             return "<ul class=\"list\">" + "".join(f"<li>{_e(item)}</li>" for item in block.items) + "</ul>"
-        if isinstance(block, TableBlock):
+        if kind == "table":
             return self._table(block)
-        if isinstance(block, CalloutBlock):
+        if kind == "callout":
             return (f"<div class=\"callout {_CALLOUT[block.severity]}\" role=\"note\">"
                     f"<div class=\"callout-title\">{_e(block.title)}</div>{_paragraphs(block.text)}</div>")
-        if isinstance(block, PullQuoteBlock):
+        if kind == "pull_quote":
             return self._pull_quote(block)
-        if isinstance(block, AnnotationBlock):
+        if kind == "annotation":
             return f"<p class=\"annotation\">{_e(block.text)}</p>"
-        if isinstance(block, MetricCardsBlock):
+        if kind == "metric_cards":
             return "<div class=\"cards\">" + "".join(self._card(card, "card") for card in block.cards) + "</div>"
-        if isinstance(block, BarChartBlock):
+        if kind == "bar_chart":
             return self._bar_chart(block)
         return ""  # unknown block types are never rendered
 
     @staticmethod
-    def _table(block: TableBlock) -> str:
+    def _table(block) -> str:
         head = "".join(f"<th scope=\"col\">{_e(column.label)}</th>" for column in block.columns)
         rows = "".join(
             "<tr>" + "".join(f"<td>{_e(row.get(column.key, '—'))}</td>" for column in block.columns) + "</tr>"
@@ -317,7 +317,7 @@ class HtmlReportRendererV3:
                 f"<tbody>{rows}</tbody></table></div>")
 
     @staticmethod
-    def _pull_quote(block: PullQuoteBlock) -> str:
+    def _pull_quote(block) -> str:
         stat = ""
         if block.stat is not None:
             stat = (f"<div class=\"pull-stat\"><span class=\"pull-stat-value\">{_e(block.stat.value)}</span>"
@@ -325,7 +325,7 @@ class HtmlReportRendererV3:
         return f"<blockquote class=\"pull\"><p>{_e(block.text)}</p>{stat}</blockquote>"
 
     @staticmethod
-    def _bar_chart(chart: BarChartBlock) -> str:
+    def _bar_chart(chart) -> str:
         if chart.variant == "distribution":
             scale = sum(max(item.value, 0) for item in chart.items)
         else:
@@ -346,7 +346,7 @@ class HtmlReportRendererV3:
         return (f"<figure class=\"chart chart-{chart.variant}\"><figcaption class=\"chart-title\">{_e(chart.title)}</figcaption>"
                 f"<ol class=\"bars\">{''.join(rows)}</ol></figure>")
 
-    def _attention_grid(self, grid: AttentionGridItem) -> str:
+    def _attention_grid(self, grid) -> str:
         if not grid.points:
             return ("<section class=\"plain\"><h2>Puntos de atención</h2>"
                     "<p>No se identificaron puntos que requieran atención especial.</p></section>")
@@ -358,7 +358,7 @@ class HtmlReportRendererV3:
         return f"<section class=\"plain\"><h2>Puntos de atención</h2><div class=\"attn-grid\">{''.join(cards)}</div></section>"
 
     @staticmethod
-    def _methodology(item: MethodologyNotesItem13) -> str:
+    def _methodology(item) -> str:
         if not item.notes:
             return ""
         entries = "".join(f"<li><strong>{_e(_NOTE_TITLES[note.kind])}:</strong> {_e(note.text)}</li>"

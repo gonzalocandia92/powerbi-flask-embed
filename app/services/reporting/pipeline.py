@@ -52,6 +52,12 @@ class ReportPipelineResult:
     render_error: str | None = None
     # JSON-safe per-attempt summaries (provider, model, tokens, latency, cost, repair).
     writer_attempts: list[dict[str, Any]] = field(default_factory=list)
+    # How the report was produced: "writer" (first attempt valid), "repair" (valid after the repair retry),
+    # "fallback" (deterministic report after the writer failed twice; ``writer_error`` then keeps that failure and the
+    # run ends completed_with_errors). ``None``: no report was produced.
+    generation_mode: str | None = None
+    # Validation errors of every failed writer attempt (diagnostics; never part of the report).
+    writer_attempt_errors: list[list[str]] = field(default_factory=list)
     # Attempts whose ledger event could not be persisted (kept visible for admins).
     usage_record_failures: int = 0
     # None in "fixed" mode (or when no CoordinationRunner was supplied); otherwise
@@ -98,6 +104,8 @@ class ReportPipeline:
 
         async def on_attempt(attempt: WriterAttempt) -> None:
             result.writer_attempts.append(attempt.summary())
+            if not attempt.valid:
+                result.writer_attempt_errors.append(list(attempt.validation_errors))
             if self.record_writer_usage is None:
                 return
             try:
@@ -115,6 +123,11 @@ class ReportPipeline:
             outcome = await self.writing.write(
                 draft, getattr(definition, "structure", None), on_attempt=on_attempt)
             result.final_report, result.composed = outcome.report, outcome.composed
+            if outcome.mode == "fallback":
+                result.generation_mode, result.writer_error = "fallback", outcome.writer_error
+            else:
+                repaired = any(a.get("repair") and a.get("valid") for a in result.writer_attempts)
+                result.generation_mode = "repair" if repaired else "writer"
         except ReportWriterError as exc:
             result.writer_error = exc
             return result

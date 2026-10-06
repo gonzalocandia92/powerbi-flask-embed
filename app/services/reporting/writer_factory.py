@@ -19,6 +19,7 @@ from app.services.llm.profiles import PROFILES
 
 from .structured_writer import LLMStructuredReportWriter
 from .structured_writer_v13 import LLMStructuredReportWriterV13
+from .structured_writer_v131 import LLMStructuredReportWriterV131
 from .writer import (
     WRITER_ROLE, LLMReportWriter, ReportWriterConfigurationError,
 )
@@ -80,3 +81,11 @@ def resolve_structured_report_writer_v13(config: dict[str, Any], report_id: int,
     report, model, empresa_id = _resolve_writer_model(config, report_id)
     runtime = runtime or LiteLLMRuntime(cost_resolver=ai_billing.generation_cost_details)
     return LLMStructuredReportWriterV13(runtime, model, cache_scope=report_cache_scope(empresa_id, report.id))
+
+
+def resolve_structured_report_writer_v131(config: dict[str, Any], report_id: int, *,
+                                          runtime=None) -> LLMStructuredReportWriterV131:
+    """Same preflight and role, building the 1.3.1 (typed evidence references) STRUCTURED writer."""
+    report, model, empresa_id = _resolve_writer_model(config, report_id)
+    runtime = runtime or LiteLLMRuntime(cost_resolver=ai_billing.generation_cost_details)
+    return LLMStructuredReportWriterV131(runtime, model, cache_scope=report_cache_scope(empresa_id, report.id))

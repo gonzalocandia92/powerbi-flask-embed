@@ -34,9 +34,13 @@ from .html_renderer_v3 import HtmlReportRendererV3
 from .generator import ReportGenerator
 from .pipeline import ReportPipeline
 from .usage import record_coordinator_usage, record_extra_analysis_usage, record_section_usage, record_writer_usage
-from .versions import CURRENT_FINAL_REPORT_SCHEMA, FINAL_REPORT_SCHEMA_1_2, FINAL_REPORT_SCHEMA_1_3
+from .versions import (
+    CURRENT_FINAL_REPORT_SCHEMA, FINAL_REPORT_SCHEMA_1_2, FINAL_REPORT_SCHEMA_1_3, FINAL_REPORT_SCHEMA_1_3_1,
+)
+from .fallback_report import FallbackReportBuilder
 from .writer_factory import (
     resolve_report_writer, resolve_structured_report_writer, resolve_structured_report_writer_v13,
+    resolve_structured_report_writer_v131,
 )
 from .writing import StructuredWriting
 
@@ -55,8 +59,10 @@ class _StructuredFlow:
     """What a structured FinalReport schema needs: its writer resolver, whether its composer carries structured
     evidence (ComposedReportInput v2), and its renderer."""
 
-    def __init__(self, resolve_writer, structured_evidence: bool, renderer):
+    def __init__(self, resolve_writer, structured_evidence: bool, renderer, fallback=None):
         self.resolve_writer, self.structured_evidence, self.renderer = resolve_writer, structured_evidence, renderer
+        # Builder of the deterministic report used when the writer fails its contract twice (None = no fallback).
+        self.fallback = fallback
 
 
 _STRUCTURED_FLOWS = {
@@ -65,6 +71,9 @@ _STRUCTURED_FLOWS = {
         lambda config, report_id: resolve_structured_report_writer(config, report_id), False, HtmlReportRendererV2),
     FINAL_REPORT_SCHEMA_1_3: _StructuredFlow(
         lambda config, report_id: resolve_structured_report_writer_v13(config, report_id), True, HtmlReportRendererV3),
+    FINAL_REPORT_SCHEMA_1_3_1: _StructuredFlow(
+        lambda config, report_id: resolve_structured_report_writer_v131(config, report_id), True,
+        HtmlReportRendererV3, fallback=FallbackReportBuilder),
 }
 
 
@@ -83,7 +92,9 @@ def build_structured_report_pipeline(config: dict, definition: ReportDefinition,
         raise ValueError(f"No structured pipeline for FinalReport schema {report_schema!r}") from None
     writer = writer if writer is not None else flow.resolve_writer(config, definition.report_id)
     return _assemble(config, definition, writer=writer,
-                     writing=StructuredWriting(writer, ReportComposer(structured_evidence=flow.structured_evidence)),
+                     writing=StructuredWriting(
+                         writer, ReportComposer(structured_evidence=flow.structured_evidence),
+                         fallback=flow.fallback() if flow.fallback else None),
                      renderer=flow.renderer() if render_html else None, analytics_engine=analytics_engine,
                      analysis_concurrency=analysis_concurrency)
 

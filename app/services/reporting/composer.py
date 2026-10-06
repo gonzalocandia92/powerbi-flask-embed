@@ -132,7 +132,11 @@ class ReportComposer:
                 composed_items.append(NotesInput(text=item.text))
             elif item.type == "methodology_notes":
                 register(pool)
-                composed_items.append(MethodologyNotesInput(evidence_keys=[
+                # v2 (V1.5.1): the whole pool may back a methodology note, because caveats about bases, periods or
+                # comparability often live in an ``answer`` and not in ``semantic_notes``. Provenance stays
+                # deterministic (notes can only cite this pool); WHAT is worth saying stays the writer's call.
+                # v1 keeps the original, narrower rule (1.2 writer inputs do not change).
+                composed_items.append(MethodologyNotesInput(evidence_keys=list(pool) if self.structured_evidence else [
                     key for key in pool if records[key].status != "ok" or records[key].semantic_notes]))
             else:  # a spec version this composer does not know: refuse, never improvise
                 raise CompositionError(f"Unsupported structure item type: {item.type!r}")

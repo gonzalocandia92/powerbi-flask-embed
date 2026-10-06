@@ -95,7 +95,8 @@ class ArtifactService:
 
     # ── writes ────────────────────────────────────────────────────────────
 
-    def save_final_report(self, report_run_id: str, report: BaseModel) -> ArtifactRecord:
+    def save_final_report(self, report_run_id: str, report: BaseModel, *,
+                          extra_metadata: Mapping[str, Any] | None = None) -> ArtifactRecord:
         """Persist the FinalReport exactly as validated, under the schema version it declares."""
         schema_version = getattr(report, "schema_version", None)
         try:
@@ -105,10 +106,11 @@ class ArtifactService:
             self._log("final_report", report_run_id, schema_version, None, ok=False)
             raise ArtifactPersistenceError(f"FinalReport cannot be serialized: {exc}") from exc
         return self._add(report_run_id, ARTIFACT_FINAL_REPORT, content, CONTENT_TYPE_JSON,
-                         schema_version=schema_version, metadata=self._metadata())
+                         schema_version=schema_version, metadata={**self._metadata(), **(extra_metadata or {})})
 
     def render_and_save_html(self, report_run_id: str, report: BaseModel, *, renderer_version: str | None = None,
-                             source: ArtifactRecord | None = None) -> ArtifactRecord:
+                             source: ArtifactRecord | None = None,
+                             extra_metadata: Mapping[str, Any] | None = None) -> ArtifactRecord:
         """Render ``report`` with a registered renderer and APPEND the result as a new HTML artifact.
 
         ``renderer_version=None`` uses the schema's default renderer. An existing HTML
@@ -123,7 +125,7 @@ class ArtifactService:
             self._log("html", report_run_id, schema_version, renderer_version, ok=False)
             LOG.exception("[ReportArtifact] HTML render failed run=%s", report_run_id)
             raise ArtifactRenderError("HTML rendering failed") from exc
-        metadata = self._metadata()
+        metadata = {**self._metadata(), **(extra_metadata or {})}
         if source is not None:
             metadata["source_artifact_id"] = source.id
         return self._add(report_run_id, ARTIFACT_HTML, html, CONTENT_TYPE_HTML,

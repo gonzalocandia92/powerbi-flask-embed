@@ -10,8 +10,11 @@ import uuid
 from io import StringIO
 from dataclasses import replace
 
+from datetime import datetime
+
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, url_for
 from flask_login import current_user, login_required
+from sqlalchemy.orm import joinedload
 
 from app import db
 from app.models import AIModelConfig, AnalyticalReportDefinition, Report, ReportRun
@@ -40,7 +43,9 @@ from app.services.reporting.run_store import (
 )
 from app.services.reporting.structure_compiler import StructureCompiler
 from app.services.reporting.structure_factory import resolve_structure_planner
-from app.services.reporting.structure_preview import structure_payload
+from app.services.reporting.structure_contracts import StructureQuestion
+from app.services.reporting.structure_preview import spec_preview, structure_payload
+from app.services.reporting.structure_validation import default_structure_spec
 from app.services.reporting.structure_service import StructureDefinitionNotFoundError, StructureService
 from app.services.reporting.structure_store import StructureChangedDuringCompileError, StructureStore
 from app.services.reporting.writer_factory import resolve_report_writer
@@ -199,6 +204,7 @@ def _run_endpoints() -> dict:
         "createRun": url_for("ai_reporting.create_report_run"),
         "getRun": url_for("ai_reporting.get_report_run", run_id="RUNID")[:-len("RUNID")] + "{id}",
         "cancelRun": url_for("ai_reporting.cancel_report_run", run_id="RUNID")[:-len("RUNID/cancel")] + "{id}/cancel",
+        "structureDefault": url_for("ai_reporting.default_structure_preview"),
         "structure": url_for("ai_reporting.get_definition_structure", definition_id=0)[:-len("0/structure")]
         + "{id}/structure",
         "compileStructure": url_for("ai_reporting.compile_definition_structure", definition_id=0)[
@@ -476,6 +482,31 @@ def get_definition_structure(definition_id: int):
     return response
 
 
+@bp.route("/structure-default", methods=["POST"])
+@login_required
+@admin_required
+def default_structure_preview():
+    """Standard structure for the questions on screen. Pure (code, no LLM, no DB, nothing saved).
+
+    Body: ``{"questions": [{"title": "..."}]}`` in screen order; a blank title shows as ``Pregunta N``.
+    """
+    data = request.get_json(silent=True)
+    rows = data.get("questions") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or len(rows) > MAX_QUESTIONS or any(not isinstance(row, dict) for row in rows):
+        return jsonify({"error": f"Se requiere una lista de hasta {MAX_QUESTIONS} preguntas."}), 400
+    questions, used_keys = [], set()
+    for index, row in enumerate(rows, start=1):
+        title = row.get("title")
+        title = title.strip()[:MAX_TITLE_CHARS] if isinstance(title, str) else ""
+        key = allocate_question_key(used_keys)
+        used_keys.add(key)
+        questions.append(StructureQuestion(key=key, title=title or f"Pregunta {index}", question="", position=index))
+    spec = default_structure_spec(questions)
+    response = jsonify({"preview": spec_preview(spec, {q.key: q.title for q in questions})})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @bp.route("/definitions/<int:definition_id>/compile-structure", methods=["POST"])
 @login_required
 @admin_required
@@ -501,6 +532,97 @@ def compile_definition_structure(definition_id: int):
     payload = structure_payload(outcome.state, compiled=outcome.compiled)
     payload["reused"] = outcome.reused
     response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+HISTORY_PER_PAGE_DEFAULT = 20
+HISTORY_PER_PAGE_MAX = 100
+_HISTORY_ACTIVE_STATUSES = ("queued", "running", "cancel_requested")
+
+
+@bp.route("/history", methods=["GET"])
+@login_required
+@admin_required
+def history_page():
+    return render_template(
+        "admin/ai_reporting_history.html",
+        reports=Report.query.order_by(Report.name.asc()).all(),
+        statuses=sorted(_HISTORY_ACTIVE_STATUSES + TERMINAL_STATUSES),
+        history_endpoint=url_for("ai_reporting.list_report_runs"),
+        run_url=url_for("ai_reporting.page"),
+        cancel_url=url_for("ai_reporting.cancel_report_run", run_id="RUNID")[:-len("RUNID/cancel")] + "{id}/cancel",
+    )
+
+
+def _int_arg(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
+    try:
+        value = int(request.args.get(name, default))
+    except (TypeError, ValueError):
+        return default
+    value = max(minimum, value)
+    return min(value, maximum) if maximum else value
+
+
+def _date_arg(name: str, *, end_of_day: bool = False) -> datetime | None:
+    raw = (request.args.get(name) or "").strip()
+    if not raw:
+        return None
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m-%d")
+    except ValueError:
+        return None
+    return parsed.replace(hour=23, minute=59, second=59, microsecond=999999) if end_of_day else parsed
+
+
+def _history_row(run: ReportRun) -> dict:
+    started, finished = run.started_at, run.completed_at
+    return {
+        "run_id": run.id,
+        "name": (run.definition_snapshot_json or {}).get("name"),
+        "report_id": run.report_id_fk,
+        "report_name": run.report.name if run.report else None,
+        "status": run.status,
+        "current_stage": run.current_stage,
+        "progress": {"current": run.progress_current, "total": run.progress_total},
+        "requested_by": run.requested_by.username if run.requested_by else None,
+        "created_at": run.created_at.isoformat() if run.created_at else None,
+        "duration_seconds": int((finished - started).total_seconds()) if started and finished else None,
+        "error_message": run.error_message,
+        "is_terminal": run.status in TERMINAL_STATUSES,
+    }
+
+
+@bp.route("/report-runs", methods=["GET"])
+@login_required
+@admin_required
+def list_report_runs():
+    """Paginated, lightweight run history (no sections/artifacts: those load per run on demand)."""
+    query = ReportRun.query.options(joinedload(ReportRun.report), joinedload(ReportRun.requested_by))
+    status = (request.args.get("status") or "").strip()
+    if status:
+        query = query.filter(ReportRun.status == status)
+    report_id = request.args.get("report_id", type=int)
+    if report_id:
+        query = query.filter(ReportRun.report_id_fk == report_id)
+    user_id = request.args.get("user_id", type=int)
+    if user_id:
+        query = query.filter(ReportRun.requested_by_user_id == user_id)
+    date_from, date_to = _date_arg("date_from"), _date_arg("date_to", end_of_day=True)
+    if date_from:
+        query = query.filter(ReportRun.created_at >= date_from)
+    if date_to:
+        query = query.filter(ReportRun.created_at <= date_to)
+    per_page = _int_arg("per_page", HISTORY_PER_PAGE_DEFAULT, maximum=HISTORY_PER_PAGE_MAX)
+    page = _int_arg("page", 1)
+    total = query.order_by(None).count()
+    rows = (query.order_by(ReportRun.created_at.desc(), ReportRun.id.desc())
+            .offset((page - 1) * per_page).limit(per_page).all())
+    response = jsonify({
+        "items": [_history_row(run) for run in rows],
+        "page": page, "per_page": per_page, "total": total,
+        "pages": max(1, -(-total // per_page)),
+    })
     response.headers["Cache-Control"] = "no-store"
     return response
 

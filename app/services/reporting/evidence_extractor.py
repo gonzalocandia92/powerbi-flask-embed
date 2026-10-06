@@ -204,3 +204,8 @@ def extract_evidence(dax_results: Iterable[dict[str, Any]] | None) -> ReportEvid
         else:
             builder.add_rows(rows, max(total, len(rows)))
     return builder.build(used, seen)
+
+
+def is_comparison_label(label: str) -> bool:
+    """Whether a column / series label reads as a variation (its sign is meaningful). Same rule as ``kind``."""
+    return bool(_COMPARISON_HINT.search(label or ""))

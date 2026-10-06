@@ -42,7 +42,7 @@
   }
 
   // endpoints: {definitions, definition: '/x/{id}', createRun, getRun: '/x/{id}', cancelRun: '/x/{id}/cancel',
-  //            structure: '/x/{id}/structure', compileStructure: '/x/{id}/compile-structure'}
+  //            structureDefault: '/x', structure: '/x/{id}/structure', compileStructure: '/x/{id}/compile-structure'}
   function createReportingApi({endpoints, csrf, fetchImpl}) {
     const doFetch = fetchImpl || ((...args) => fetch(...args));
     const withId = (template, id) => template.replace('{id}', encodeURIComponent(id));
@@ -88,6 +88,10 @@
       },
       cancelRun(runId) {
         return request('POST', withId(endpoints.cancelRun, runId));
+      },
+      // POST: standard structure for the titles on screen (pure code: no model, no DB, nothing saved).
+      defaultStructure(titles) {
+        return request('POST', endpoints.structureDefault, {body: {questions: titles.map(title => ({title}))}});
       },
       // GET: how KLARA currently understands the structure prompt (never calls the model).
       getStructure(definitionId) {
