@@ -796,7 +796,7 @@ def render_pdf():
     A run with stored artifacts is authoritative: its stored HTML (and the schema/renderer
     versions it was produced with) is used. Otherwise the ``FinalReport`` JSON is validated
     with the model of its declared version and rendered by that schema's registered renderer
-    (``ArtifactService.export_source``) before Chromium sees it. No LLM, analytics,
+    (``ArtifactService.export_source``) before the PDF engine sees it. No LLM, analytics,
     coordinator or writer is involved, and nothing is stored.
     """
     if (request.content_length or 0) > MAX_PDF_PAYLOAD_BYTES:

@@ -18,4 +18,4 @@ langfuse
 voyageai
 pgvector
 email_validator
-playwright>=1.49,<2
+weasyprint==70.0
