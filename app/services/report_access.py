@@ -58,16 +58,22 @@ def active_link_report(slug):
     """Report behind an active public link slug, or None."""
     if not slug:
         return None
-    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
-    return link.report if link else None
+    try:
+        link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
+        return link.report if link else None
+    except Exception:
+        return None
 
 
 def login_required_slugs():
     """Slugs (active or not) of every public link whose report requires a login."""
-    rows = (
-        db.session.query(PublicLink.custom_slug)
-        .join(Report, Report.id == PublicLink.report_id_fk)
-        .filter(Report.requires_login.is_(True))
-        .all()
-    )
-    return {slug for (slug,) in rows if slug}
+    try:
+        rows = (
+            db.session.query(PublicLink.custom_slug)
+            .join(Report, Report.id == PublicLink.report_id_fk)
+            .filter(Report.requires_login.is_(True))
+            .all()
+        )
+        return {slug for (slug,) in rows if slug}
+    except Exception:
+        return set()

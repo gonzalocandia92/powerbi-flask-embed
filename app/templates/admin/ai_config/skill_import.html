@@ -1,24 +1,23 @@
-{% extends "layout.html" %}
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
 
-{% block title %}Importar skills - Sudata PBI{% endblock %}
+{% set active_section = 'skills' %}
+{% set page_title = 'Importar skills' %}
+{% set page_subtitle = 'Sube un CSV completo exportado o un CSV parcial tipo patch por ID para actualizar skills analíticas' %}
 
-{% block body %}
-<div class="container-fluid">
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-    <div>
-      <h2 class="fw-bold mb-1"><i class="bi bi-upload text-primary me-2"></i>Importar skills</h2>
-      <p class="text-muted mb-0">Sube un CSV completo exportado o un CSV parcial tipo patch por id.</p>
-    </div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='skills') }}">
-      <i class="bi bi-arrow-left me-1"></i>Volver
-    </a>
-  </div>
+{% block header_actions %}
+<a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='skills') }}">
+  <i class="bi bi-arrow-left me-1"></i>Volver a skills
+</a>
+{% endblock %}
 
-  <div class="card mb-4">
-    <div class="card-header">
+{% block ai_content %}
+
+  <div class="ai-card mb-4">
+    <div class="ai-card-header">
       <h5 class="mb-0"><i class="bi bi-filetype-csv me-2"></i>Archivo CSV</h5>
     </div>
-    <div class="card-body">
+    <div class="ai-card-body">
       <form method="post" action="{{ url_for('ai_config.skill_import_preview') }}" enctype="multipart/form-data">
         <div class="row g-3 align-items-end">
           <div class="col-lg-7">
@@ -50,8 +49,8 @@
   </div>
 
   {% if preview %}
-  <div class="card">
-    <div class="card-header">
+  <div class="ai-card">
+    <div class="ai-card-header">
       <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
         <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Vista previa</h5>
         {% if import_token %}
@@ -68,7 +67,7 @@
         {% endif %}
       </div>
     </div>
-    <div class="card-body">
+    <div class="ai-card-body">
       {% if preview.errors %}
       <div class="alert alert-danger">
         {% for error in preview.errors %}
@@ -175,5 +174,4 @@
     </div>
   </div>
   {% endif %}
-</div>
 {% endblock %}

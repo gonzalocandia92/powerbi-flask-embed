@@ -1,25 +1,215 @@
-{% extends "layout.html" %}
-{% block title %}Catalogo de modelos - Sudata PBI{% endblock %}
-{% block body %}
-<div class="container-fluid py-2">
-  {% set active_ai_section = 'catalog' %}
-  {% include "admin/ai_config/_navigation.html" %}
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-    <div><h2 class="fw-bold mb-1">Catalogo de modelos</h2><p class="text-muted mb-0">Modelos disponibles, capacidades y estado operativo.</p></div>
-    <div class="d-flex gap-2"><a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.components_page') }}">Componentes del chat</a><a class="btn btn-primary" href="{{ url_for('model_catalog.catalog_new') }}"><i class="bi bi-plus-lg me-1"></i>Nuevo modelo</a></div>
+{% extends "admin/ai/shell.html" %}
+{% from "admin/ai/_macros.html" import page_header, kpi, badge, active_badge, empty_state %}
+
+{% block title %}Catálogo de modelos · Configuración AI{% endblock %}
+
+{% set active_ai_section = 'catalog' %}
+
+{% block ai_content %}
+{% call page_header(
+    'Catálogo de modelos',
+    'Modelos registrados, credenciales, pricing y estado de preparación operativa.',
+    'Gobierno'
+) %}
+  <a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.components_page') }}">
+    <i class="bi bi-sliders me-1"></i>Componentes del chat
+  </a>
+  <a class="btn btn-primary" href="{{ url_for('model_catalog.catalog_new') }}">
+    <i class="bi bi-plus-lg me-1"></i>Nuevo modelo
+  </a>
+{% endcall %}
+
+{% set kv = catalog_view.kpis %}
+<div class="ai-kpis">
+  {{ kpi('Total registrados', kv.total, 'En el catálogo', 'neutral') }}
+  {{ kpi('Listos para chat', kv.ready, 'Credencial + pricing + validado', 'success') }}
+  {{ kpi('Bloqueados', kv.blocked, 'Faltan credenciales, pricing o test', 'warning' if kv.blocked > 0 else 'neutral') }}
+  {{ kpi('Deshabilitados', kv.disabled, 'Desactivados administrativamente', 'neutral') }}
+</div>
+
+<div class="ai-card" data-ai-filter-scope>
+  <div class="ai-card-header">
+    <div>
+      <h3><i class="bi bi-cpu me-2"></i>Modelos disponibles</h3>
+      <span class="ai-sub">Los bloqueos operativos son derivados automáticamente de la configuración del sistema.</span>
+    </div>
+    <button class="btn btn-sm btn-outline-secondary" type="button" data-filter-reset>
+      <i class="bi bi-arrow-counterclockwise me-1"></i>Limpiar filtros
+    </button>
   </div>
-  <div class="card"><div class="table-responsive"><table class="table align-middle mb-0">
-    <thead><tr><th>Modelo</th><th>Proveedor</th><th>Modelo fisico</th><th>Estado</th><th>Credencial</th><th>Pricing</th><th>Chat</th><th class="text-end">Acciones</th></tr></thead>
-    <tbody>{% for model in models %}{% set ready = readiness[model.id] %}<tr>
-      <td><div class="fw-semibold">{{ model.display_name }}</div><code>{{ model.model_key }}</code></td>
-      <td>{{ model.provider }}{% if model.gateway != 'direct' %}<div class="small text-muted">{{ model.gateway }}</div>{% endif %}</td>
-      <td><code>{{ model.physical_model }}</code></td>
-      <td><span class="badge {{ 'bg-success' if model.validation_status == 'passed' else 'bg-warning text-dark' }}">{{ model.validation_status }}</span>{% if not model.enabled %}<span class="badge bg-secondary ms-1">deshabilitado</span>{% endif %}</td>
-      <td><span class="badge {{ 'bg-success-subtle text-success' if ready.credential_configured else 'bg-danger-subtle text-danger' }}">{{ 'Configurada' if ready.credential_configured else 'Faltante' }}</span></td>
-      <td><span class="badge {{ 'bg-success-subtle text-success' if ready.pricing_configured else 'bg-danger-subtle text-danger' }}">{{ 'Configurado' if ready.pricing_configured else 'Faltante' }}</span></td>
-      <td>{{ 'Disponible' if ready.ready_for_chat else 'No disponible' }}</td>
-      <td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('model_catalog.catalog_edit', model_key=model.model_key) }}"><i class="bi bi-pencil me-1"></i>Editar</a></td>
-    </tr>{% else %}<tr><td colspan="8" class="text-center text-muted py-5">No hay modelos registrados.</td></tr>{% endfor %}</tbody>
-  </table></div></div>
+
+  <div class="ai-toolbar">
+    <div class="ai-field grow">
+      <label class="form-label" for="f-model-search">Buscar modelo</label>
+      <input class="form-control" type="search" id="f-model-search" data-filter-search placeholder="Buscar por nombre, clave lógica o modelo físico…">
+    </div>
+    <div class="ai-field">
+      <label class="form-label" for="f-model-provider">Proveedor</label>
+      <select class="form-select" id="f-model-provider" data-filter="provider">
+        <option value="">Todos los proveedores</option>
+        {% for p in catalog_view.providers %}
+          <option value="{{ p }}">{{ p|capitalize }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="ai-field">
+      <label class="form-label" for="f-model-status">Estado operativo</label>
+      <select class="form-select" id="f-model-status" data-filter="status">
+        <option value="">Todos los estados</option>
+        <option value="ready">Listos para usar</option>
+        <option value="blocked">Bloqueados / Pendientes</option>
+        <option value="disabled">Deshabilitados</option>
+      </select>
+    </div>
+    <div class="ai-toolbar-count" data-filter-count></div>
+  </div>
+
+  <div class="ai-table-wrap">
+    <table class="ai-table">
+      <thead>
+        <tr>
+          <th style="width: 28px;"></th>
+          <th>Nombre lógico / Clave</th>
+          <th>Proveedor</th>
+          <th>Modelo físico</th>
+          <th>Estado operativo</th>
+          <th>Credencial</th>
+          <th>Pricing</th>
+          <th>Capacidades</th>
+          <th class="text-end">Acciones</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in catalog_view.rows %}
+        {% set m = row.model %}
+        {% set r = row.readiness %}
+        {% set st = row.status %}
+        <tr data-filter-row
+            data-provider="{{ m.provider }}"
+            data-status="{{ st.group }}"
+            data-search="{{ m.display_name }} {{ m.model_key }} {{ m.physical_model }} {{ m.provider }}"
+            id="model-row-{{ m.id }}">
+          <td>
+            <button class="ai-icon-btn" type="button" data-toggle-detail="model-detail-{{ m.id }}" title="Ver detalles y capacidades" aria-expanded="false">
+              <i class="bi bi-chevron-right"></i>
+            </button>
+          </td>
+          <td>
+            <div class="ai-cell-title">{{ m.display_name }}</div>
+            <code>{{ m.model_key }}</code>
+          </td>
+          <td>
+            <strong class="text-capitalize">{{ m.provider }}</strong>
+            {% if m.gateway != 'direct' %}
+              <div class="ai-cell-sub">{{ m.gateway }}</div>
+            {% endif %}
+          </td>
+          <td>
+            <code class="text-muted">{{ m.physical_model }}</code>
+          </td>
+          <td>
+            <span class="ai-badge tone-{{ st.tone }}">
+              <span class="ai-dot tone-{{ st.tone }}"></span>{{ st.label }}
+            </span>
+            {% if not m.enabled %}
+              <span class="ai-badge tone-neutral ms-1">off</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.credential_configured %}
+              <span class="ai-badge tone-success"><i class="bi bi-check2"></i>Configurada</span>
+            {% else %}
+              <span class="ai-badge tone-danger"><i class="bi bi-x"></i>Faltante</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if r.pricing_configured %}
+              <span class="ai-badge tone-success"><i class="bi bi-check2"></i>Configurado</span>
+            {% else %}
+              <span class="ai-badge tone-danger"><i class="bi bi-x"></i>Incompleto</span>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex flex-wrap gap-1">
+              {% if m.supports_tools %}
+                <span class="badge bg-light text-dark border" title="Soporte de Tools / Function Calling">tools</span>
+              {% endif %}
+              {% if m.supports_reasoning %}
+                <span class="badge bg-light text-primary border" title="Reasoning / Pensamiento analítico">reasoning</span>
+              {% endif %}
+              {% if m.supports_flex %}
+                <span class="badge bg-light text-success border" title="Soporte de Service Tier Flex">flex</span>
+              {% endif %}
+              {% if m.supports_cache_key %}
+                <span class="badge bg-light text-info border" title="Cache contextual">cache</span>
+              {% endif %}
+            </div>
+          </td>
+          <td class="text-end nowrap">
+            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('model_catalog.catalog_edit', model_key=m.model_key) }}">
+              <i class="bi bi-pencil me-1"></i>Editar
+            </a>
+          </td>
+        </tr>
+        {# Detalle expandible #}
+        <tr class="ai-detail-row" id="model-detail-{{ m.id }}" data-detail-for="model-row-{{ m.id }}" hidden>
+          <td></td>
+          <td colspan="8">
+            <div class="row g-3 py-1">
+              <div class="col-md-3">
+                <div class="ai-cell-sub">Validación</div>
+                <div>
+                  <span class="ai-badge tone-{{ 'success' if m.validation_status == 'passed' else 'warning' }}">
+                    {{ m.validation_status }}
+                  </span>
+                  {% if m.validated_at %}
+                    <div class="ai-cell-sub">{{ m.validated_at.strftime('%d/%m/%Y %H:%M') }}</div>
+                  {% endif %}
+                </div>
+              </div>
+              <div class="col-md-3">
+                <div class="ai-cell-sub">Ventana de contexto</div>
+                <div>{{ m.context_window|string }} tokens</div>
+                <div class="ai-cell-sub">Max output: {{ m.max_output_tokens|string }}</div>
+              </div>
+              <div class="col-md-3">
+                <div class="ai-cell-sub">Defaults configurados</div>
+                <div>Tier: {{ m.default_service_tier or 'estándar' }}</div>
+                <div class="ai-cell-sub">Thinking: {{ m.thinking_mode or '—' }} &middot; Effort: {{ m.default_reasoning_effort or '—' }}</div>
+              </div>
+              <div class="col-md-3">
+                <div class="ai-cell-sub">Disponibilidad en chat</div>
+                <div>
+                  {{ active_badge(m.client_selectable, 'Seleccionable por cliente', 'Solo uso interno') }}
+                </div>
+              </div>
+              {% if st.blockers %}
+              <div class="col-12">
+                <div class="ai-cell-sub mb-1">Bloqueos detectados:</div>
+                <div class="d-flex flex-wrap gap-1">
+                  {% for b in st.blockers %}
+                    <span class="ai-badge tone-{{ b.tone }}"><i class="bi bi-exclamation-circle me-1"></i>{{ b.label }}</span>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="9">
+            {{ empty_state('cpu', 'No hay modelos registrados en el catálogo.') }}
+          </td>
+        </tr>
+        {% endfor %}
+        <tr data-filter-empty hidden>
+          <td colspan="9">
+            {{ empty_state('search', 'No se encontraron modelos con los filtros seleccionados.') }}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}

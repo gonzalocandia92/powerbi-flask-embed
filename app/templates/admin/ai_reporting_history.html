@@ -1,34 +1,87 @@
-{% extends "layout.html" %}
-{% block title %}Historial de informes KLARA - Sudata PBI{% endblock %}
-{% block body %}
-<div class="container-fluid py-2" id="reporting-history-page">
-  {% set active_ai_section = 'reporting_history' %}
-  {% include "admin/ai_config/_navigation.html" %}
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-    <div>
-      <h2 class="fw-bold mb-1">Historial de informes</h2>
-      <p class="text-muted mb-0">Ejecuciones de informes analíticos KLARA, de la más reciente a la más antigua.</p>
-    </div>
-    <a class="btn btn-primary" href="{{ url_for('ai_reporting.page') }}"><i class="bi bi-plus-lg me-1"></i>Nuevo informe</a>
-  </div>
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
+
+{% set active_section = 'reporting_history' %}
+{% set page_title = 'Historial de informes KLARA' %}
+{% set page_subtitle = 'Registro cronológico de ejecuciones analíticas, seguimiento de estados y descarga de informes' %}
+
+{% block header_actions %}
+<a class="btn btn-primary" href="{{ url_for('ai_reporting.page') }}">
+  <i class="bi bi-plus-lg me-1"></i>Nuevo informe
+</a>
+{% endblock %}
+
+{% block ai_content %}
+<div id="reporting-history-page">
   <div id="history-message" class="alert alert-danger d-none" role="alert"></div>
-  <form id="history-filters" class="card card-body mb-3 row g-2 flex-row align-items-end">
-    <div class="col-md-3"><label class="form-label" for="f-report">Report</label>
-      <select class="form-select" id="f-report" name="report_id"><option value="">Todos</option>{% for report in reports %}<option value="{{ report.id }}">{{ report.name }}</option>{% endfor %}</select></div>
-    <div class="col-md-2"><label class="form-label" for="f-status">Estado</label>
-      <select class="form-select" id="f-status" name="status"><option value="">Todos</option>{% for status in statuses %}<option value="{{ status }}">{{ status }}</option>{% endfor %}</select></div>
-    <div class="col-md-2"><label class="form-label" for="f-from">Desde</label><input class="form-control" type="date" id="f-from" name="date_from"></div>
-    <div class="col-md-2"><label class="form-label" for="f-to">Hasta</label><input class="form-control" type="date" id="f-to" name="date_to"></div>
-    <div class="col-md-3 d-flex gap-2"><button class="btn btn-outline-primary" type="submit">Filtrar</button><button class="btn btn-outline-secondary" type="reset" id="f-reset">Limpiar</button></div>
-  </form>
-  <div class="card">
+
+  <!-- Filter Card -->
+  <div class="ai-card mb-4">
+    <div class="ai-card-body">
+      <form id="history-filters" class="row g-3 align-items-end">
+        <div class="col-md-4">
+          <label class="form-label fw-semibold" for="f-report">Reporte (con KLARA habilitada)</label>
+          <select class="form-select form-select-sm" id="f-report" name="report_id" data-searchable>
+            <option value="">Todos los reportes</option>
+            {% for report in reports %}
+              <option value="{{ report.id }}">{{ report.name }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-semibold" for="f-status">Estado</label>
+          <select class="form-select form-select-sm" id="f-status" name="status">
+            <option value="">Todos</option>
+            {% for status in statuses %}
+              <option value="{{ status }}">{{ status }}</option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-semibold" for="f-from">Desde</label>
+          <input class="form-control form-control-sm" type="date" id="f-from" name="date_from">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label fw-semibold" for="f-to">Hasta</label>
+          <input class="form-control form-control-sm" type="date" id="f-to" name="date_to">
+        </div>
+        <div class="col-md-2 d-flex gap-2">
+          <button class="btn btn-primary btn-sm w-100" type="submit">
+            <i class="bi bi-funnel me-1"></i>Filtrar
+          </button>
+          <button class="btn btn-outline-secondary btn-sm" type="reset" id="f-reset" title="Restablecer filtros">
+            Limpiar
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Results Card -->
+  <div class="ai-card">
     <div class="table-responsive">
-      <table class="table table-hover align-middle mb-0">
-        <thead><tr><th>Informe</th><th>Report</th><th>Estado</th><th>Solicitado por</th><th>Creado</th><th>Duración</th><th class="text-end">Acciones</th></tr></thead>
-        <tbody id="history-body"><tr><td colspan="7" class="text-center text-muted py-4">Cargando…</td></tr></tbody>
+      <table class="ai-table">
+        <thead>
+          <tr>
+            <th>Informe</th>
+            <th>Reporte</th>
+            <th>Estado</th>
+            <th>Solicitado por</th>
+            <th>Creado</th>
+            <th>Duración</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="history-body">
+          <tr>
+            <td colspan="7" class="text-center text-muted py-4">
+              <span class="spinner-border spinner-border-sm me-2" role="status"></span>Cargando historial…
+            </td>
+          </tr>
+        </tbody>
       </table>
     </div>
-    <div class="card-footer d-flex justify-content-between align-items-center">
+    <div class="ai-card-body d-flex justify-content-between align-items-center border-top">
       <small class="text-muted" id="history-summary"></small>
       <div class="btn-group btn-group-sm">
         <button class="btn btn-outline-secondary" id="history-prev" type="button">Anterior</button>
@@ -37,6 +90,10 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
 <script>
   window.KLARA_HISTORY = {
     endpoint: {{ history_endpoint|tojson }},

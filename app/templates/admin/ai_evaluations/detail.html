@@ -1,6 +1,10 @@
-{% extends "layout.html" %}
-{% block title %}{{ run.name }} - Evaluaciones AI{% endblock %}
-{% block body %}
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
+
+{% set active_section = 'evaluations' %}
+{% set active_statuses = ['queued', 'running', 'cancel_requested'] %}
+
+{% block extra_head %}
 <style>
   .evaluation-markdown p { margin: 0 0 .4rem; }
   .evaluation-markdown p:last-child { margin-bottom: 0; }
@@ -8,100 +12,454 @@
   .evaluation-markdown h4 { margin: .5rem 0 .25rem; font-size: 1em; font-weight: 700; }
   .evaluation-markdown ul, .evaluation-markdown ol { margin: .25rem 0 .4rem; padding-left: 1.2rem; }
   .evaluation-markdown li { margin-bottom: .125rem; }
-  .evaluation-markdown code { background: #e9ecef; border-radius: .25rem; padding: .05rem .3rem; font-size: .875em; }
-  .evaluation-markdown pre { background: #e9ecef; border-radius: .4rem; padding: .6rem; overflow-x: auto; margin: .4rem 0; }
+  .evaluation-markdown code { background: #f1f5f9; border-radius: .25rem; padding: .05rem .3rem; font-size: .875em; color: #0f172a; }
+  .evaluation-markdown pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: .4rem; padding: .6rem; overflow-x: auto; margin: .4rem 0; }
   .evaluation-markdown pre code { background: none; padding: 0; }
-  .evaluation-markdown blockquote { border-left: 3px solid #198754; margin: .4rem 0; padding-left: .6rem; color: #555; }
+  .evaluation-markdown blockquote { border-left: 3px solid #10b981; margin: .4rem 0; padding-left: .6rem; color: #475569; }
   .evaluation-markdown table { border-collapse: collapse; display: block; max-width: 100%; overflow-x: auto; margin: .5rem 0; }
-  .evaluation-markdown th, .evaluation-markdown td { border: 1px solid #ced4da; padding: .3rem .5rem; text-align: left; white-space: nowrap; }
-  .evaluation-markdown thead tr { background: #e8f5ee; }
+  .evaluation-markdown th, .evaluation-markdown td { border: 1px solid #cbd5e1; padding: .3rem .5rem; text-align: left; white-space: nowrap; }
+  .evaluation-markdown thead tr { background: #f1f5f9; }
 </style>
-{% set active_statuses = ['queued', 'running', 'cancel_requested'] %}
-{% set cases = run.cases.all() %}
-<div class="container-fluid py-2" id="evaluation-detail" data-run-id="{{ run.id }}" data-status="{{ run.status }}">
-  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+{% endblock %}
+
+{% block page_header %}
+<div class="ai-page-header mb-4" id="evaluation-detail" data-run-id="{{ run.id }}" data-status="{{ run.status }}">
+  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
     <div>
       <div class="d-flex align-items-center gap-2 mb-1">
-        <h2 class="fw-bold mb-0">{{ run.name }}</h2>
-        <span class="badge bg-secondary" id="run-status">{{ run.status }}</span>
+        <h1 class="ai-page-title mb-0">{{ run.name }}</h1>
+        <span class="badge {{ 'bg-success' if run.status == 'completed' else ('bg-danger' if run.status in ['failed', 'completed_with_errors'] else 'bg-info text-dark') }}" id="run-status">
+          {{ run.status }}
+        </span>
       </div>
-      <p class="text-muted mb-0">Evaluación #{{ run.id }} · {{ run.mode }} · caché {{ run.cache_mode }}</p>
+      <p class="ai-page-subtitle">
+        Evaluación <span class="font-monospace">#{{ run.id }}</span> · Reporte: <strong>{{ run.report.name if run.report else 'N/A' }}</strong> · Modo: {{ run.mode }} · Caché: {{ run.cache_mode }}
+      </p>
     </div>
     <div class="d-flex flex-wrap gap-2">
-      <a class="btn btn-outline-secondary" href="{{ url_for('evaluations.runs_page') }}">Volver</a>
-      <a class="btn btn-outline-primary" href="{{ url_for('evaluations.export_run', run_id=run.id) }}"><i class="bi bi-download me-1"></i>Exportar CSV</a>
-      {% if run.status in active_statuses %}<button class="btn btn-outline-danger" id="cancel-run" type="button">Cancelar</button>{% endif %}
-    </div>
-  </div>
-
-  <div id="page-message"></div>
-  <div class="row g-3 mb-4">
-    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Progreso</div><div class="fs-3 fw-bold"><span id="completed-cases">{{ run.completed_cases }}</span>/<span id="total-cases">{{ run.total_cases }}</span></div><div class="progress mt-2"><div class="progress-bar" id="progress-bar" style="width:{{ ((run.completed_cases or 0) * 100 / run.total_cases)|round if run.total_cases else 0 }}%"></div></div></div></div></div>
-    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Casos exitosos</div><div class="fs-3 fw-bold text-success">{{ cases|selectattr('status', 'equalto', 'success')|list|length }}</div></div></div></div>
-    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Revisados correctos</div><div class="fs-3 fw-bold text-primary">{{ cases|selectattr('review_status', 'equalto', 'correct')|list|length }}</div></div></div></div>
-    <div class="col-md-3"><div class="card h-100"><div class="card-body"><div class="text-muted small">Costo total</div><div class="fs-3 fw-bold">USD {{ '%.6f'|format(total_cost) }}</div></div></div></div>
-  </div>
-
-  {% if run.error_message %}<div class="alert alert-danger">{{ run.error_message }}</div>{% endif %}
-
-  <div class="card mb-4">
-    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-      <div><h5 class="mb-1">Promoción de modelos</h5><div class="text-muted small">Solo se puede promover un modelo cuando todos sus casos terminaron correctamente y fueron marcados como correctos.</div></div>
-    </div>
-    <div class="card-body d-flex flex-wrap gap-2">
-      {% for model_key in model_keys %}
-      {% set model_cases = cases|selectattr('model_key', 'equalto', model_key)|list %}
-      {% set successful = model_cases|selectattr('status', 'equalto', 'success')|list|length %}
-      {% set correct = model_cases|selectattr('review_status', 'equalto', 'correct')|list|length %}
-      <button class="btn btn-sm {{ 'btn-success' if successful == model_cases|length and correct == model_cases|length and model_cases|length else 'btn-outline-secondary' }} promote-model" type="button" data-model-key="{{ model_key }}" {% if run.status in active_statuses or successful != model_cases|length or correct != model_cases|length %}disabled{% endif %}>
-        Promover {{ model_key }} <span class="badge text-bg-light ms-1">{{ correct }}/{{ model_cases|length }}</span>
-      </button>
-      {% endfor %}
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
-      <div><h5 class="mb-1">Resultados y revisión manual</h5><div class="text-muted small">Guarda una decisión y una nota por cada respuesta.</div></div>
-      <div class="d-flex gap-2">
-        <select class="form-select form-select-sm" id="filter-model"><option value="">Todos los modelos</option>{% for key in model_keys %}<option value="{{ key }}">{{ key }}</option>{% endfor %}</select>
-        <select class="form-select form-select-sm" id="filter-review"><option value="">Todas las revisiones</option><option value="unreviewed">Sin revisar</option><option value="correct">Correcta</option><option value="partial">Parcial</option><option value="incorrect">Incorrecta</option></select>
-      </div>
-    </div>
-    <div class="table-responsive">
-      <table class="table align-middle mb-0" id="cases-table">
-        <thead><tr><th>#</th><th style="min-width:260px">Pregunta y respuesta</th><th>Modelo</th><th>Ejecución</th><th style="min-width:280px">Revisión</th></tr></thead>
-        <tbody>
-          {% for case in cases %}
-          <tr data-case-id="{{ case.id }}" data-model="{{ case.model_key }}" data-review="{{ case.review_status }}">
-            <td>{{ case.sequence_index }}</td>
-            <td>
-              <div class="fw-semibold mb-1">{{ case.question }}</div>
-              {% if case.expected_answer %}<div class="small text-muted mb-2"><strong>Esperada:</strong> {{ case.expected_answer }}</div>{% endif %}
-              {% if case.answer %}<div class="border rounded bg-light p-2 evaluation-markdown" data-markdown-response>{{ case.answer }}</div>{% elif case.error_message %}<div class="text-danger small">{{ case.error_message }}</div>{% else %}<div class="text-muted small">Pendiente de ejecución</div>{% endif %}
-              {% if case.dax_query or case.tools_called_json or case.trace_id %}<details class="small mt-2"><summary>Detalles técnicos</summary>{% if case.dax_query %}<pre class="mt-2 mb-1">{{ case.dax_query }}</pre>{% endif %}{% if case.tools_called_json %}<div><strong>Tools:</strong> {{ case.tools_called_json|tojson }}</div>{% endif %}{% if case.trace_id %}<div><strong>Trace:</strong> {{ case.trace_id }}</div>{% endif %}</details>{% endif %}
-            </td>
-            <td><div class="fw-semibold">{{ case.model_key }}</div><small class="text-muted">{{ case.actual_model or case.physical_model or '--' }} · {{ case.cache_mode }}</small></td>
-            <td><span class="badge {{ 'bg-success' if case.status == 'success' else ('bg-danger' if case.status in ['error', 'interrupted'] else 'bg-secondary') }}">{{ case.status }}</span><div class="small text-muted mt-1">{{ case.latency_ms or 0 }} ms · USD {{ '%.6f'|format(case.pipeline_total_cost or 0) }}</div><div class="small text-muted">{{ case.input_tokens or 0 }} in / {{ case.output_tokens or 0 }} out</div></td>
-            <td>
-              <select class="form-select form-select-sm review-status mb-2" {% if case.status != 'success' %}disabled{% endif %}>
-                <option value="unreviewed" {% if case.review_status == 'unreviewed' %}selected{% endif %}>Sin revisar</option>
-                <option value="correct" {% if case.review_status == 'correct' %}selected{% endif %}>Correcta</option>
-                <option value="partial" {% if case.review_status == 'partial' %}selected{% endif %}>Parcial</option>
-                <option value="incorrect" {% if case.review_status == 'incorrect' %}selected{% endif %}>Incorrecta</option>
-              </select>
-              <textarea class="form-control form-control-sm review-notes mb-2" rows="2" placeholder="Notas de revisión" {% if case.status != 'success' %}disabled{% endif %}>{{ case.review_notes or '' }}</textarea>
-              <button class="btn btn-sm btn-outline-primary save-review" type="button" {% if case.status != 'success' %}disabled{% endif %}>Guardar revisión</button>
-            </td>
-          </tr>
-          {% else %}<tr><td colspan="5" class="text-center text-muted py-5">No hay casos en esta evaluación.</td></tr>{% endfor %}
-        </tbody>
-      </table>
+      <a class="btn btn-outline-secondary" href="{{ url_for('evaluations.runs_page') }}">
+        <i class="bi bi-arrow-left me-1"></i>Volver
+      </a>
+      <a class="btn btn-outline-primary" href="{{ url_for('evaluations.export_run', run_id=run.id) }}">
+        <i class="bi bi-download me-1"></i>Exportar CSV
+      </a>
+      {% if run.status in active_statuses %}
+        <button class="btn btn-outline-danger" id="cancel-run" type="button">
+          <i class="bi bi-stop-circle me-1"></i>Cancelar
+        </button>
+      {% endif %}
     </div>
   </div>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script><script>
+
+{% block ai_content %}
+<div id="page-message"></div>
+{% if run.error_message %}
+  <div class="alert alert-danger mb-4">{{ run.error_message }}</div>
+{% endif %}
+
+<!-- KPIs Strip -->
+<div class="ai-kpi-grid mb-4">
+  <div class="ai-kpi-card">
+    <div class="ai-kpi-header">
+      <span class="ai-kpi-label">Progreso de ejecución</span>
+      <i class="bi bi-pie-chart text-muted"></i>
+    </div>
+    <div class="ai-kpi-value">
+      <span id="completed-cases">{{ run.completed_cases or 0 }}</span> / <span id="total-cases">{{ run.total_cases or 0 }}</span>
+    </div>
+    <div class="progress ai-progress mt-2">
+      <div class="progress-bar {{ 'bg-success' if run.status == 'completed' else 'bg-primary' }}" id="progress-bar" style="width: {{ ((run.completed_cases or 0) * 100 / run.total_cases)|round if run.total_cases else 0 }}%"></div>
+    </div>
+  </div>
+
+  {% set ok_cases = cases|selectattr('status', 'equalto', 'success')|list|length %}
+  {{ ui.kpi('Casos exitosos', ok_cases ~ ' / ' ~ cases|length, 'Inferencia sin errores técnicos', tone='success' if ok_cases == cases|length else 'warning', icon='bi-check2-circle') }}
+
+  {% set correct_cases = cases|selectattr('review_status', 'equalto', 'correct')|list|length %}
+  {{ ui.kpi('Revisados correctos', correct_cases ~ ' / ' ~ cases|length, 'Verificados por humano', tone='info', icon='bi-hand-thumbs-up') }}
+
+  {{ ui.kpi('Costo total', 'USD $' ~ '%.5f'|format(total_cost or 0), 'Consumo acumulado de inferencia', icon='bi-currency-dollar') }}
+</div>
+
+<!-- Model Promotion Card -->
+<div class="ai-card mb-4">
+  <div class="ai-card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div>
+      <h5 class="ai-card-title mb-0">
+        <i class="bi bi-patch-check me-2 text-primary"></i>Promoción de modelos evaluados
+      </h5>
+      <p class="ai-card-subtitle">
+        Para promover y validar un modelo en producción, el 100% de sus casos deben terminar con éxito y estar calificados como "Correcta".
+      </p>
+    </div>
+  </div>
+  <div class="ai-card-body d-flex flex-wrap gap-2">
+    {% for model_key in model_keys %}
+      {% set model_cases = cases|selectattr('model_key', 'equalto', model_key)|list %}
+      {% set successful = model_cases|selectattr('status', 'equalto', 'success')|list|length %}
+      {% set correct = model_cases|selectattr('review_status', 'equalto', 'correct')|list|length %}
+      {% set eligible = (run.status not in active_statuses and successful == model_cases|length and correct == model_cases|length and model_cases|length > 0) %}
+      <button class="btn btn-sm {{ 'btn-success' if eligible else 'btn-outline-secondary' }} promote-model" type="button" data-model-key="{{ model_key }}" {% if not eligible %}disabled{% endif %}>
+        <i class="bi bi-shield-check me-1"></i>Promover <strong>{{ model_key }}</strong>
+        <span class="badge text-bg-light ms-2">{{ correct }}/{{ model_cases|length }} correctos</span>
+      </button>
+    {% endfor %}
+  </div>
+</div>
+
+<!-- Tabs Navigation -->
+<ul class="nav nav-pills ai-tabs mb-4" id="evalDetailTabs" role="tablist">
+  <li class="nav-item" role="presentation">
+    <button class="nav-link active" id="tab-comparison-btn" data-bs-toggle="tab" data-bs-target="#tab-comparison" type="button" role="tab">
+      <i class="bi bi-bar-chart-steps me-1"></i>Matriz de comparación
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-problems-btn" data-bs-toggle="tab" data-bs-target="#tab-problems" type="button" role="tab">
+      <i class="bi bi-exclamation-triangle me-1"></i>Preguntas problemáticas / Fallos
+      {% set problem_count = question_matrix.rows|selectattr('has_problem', 'equalto', true)|list|length %}
+      {% if problem_count > 0 %}
+        <span class="badge bg-danger ms-1">{{ problem_count }}</span>
+      {% endif %}
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-cases-btn" data-bs-toggle="tab" data-bs-target="#tab-cases" type="button" role="tab">
+      <i class="bi bi-list-check me-1"></i>Casos y revisión manual
+      <span class="badge bg-secondary ms-1">{{ cases|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item" role="presentation">
+    <button class="nav-link" id="tab-traces-btn" data-bs-toggle="tab" data-bs-target="#tab-traces" type="button" role="tab">
+      <i class="bi bi-code-square me-1"></i>DAX / Tools / Trazas
+    </button>
+  </li>
+</ul>
+
+<!-- Tabs Content -->
+<div class="tab-content" id="evalDetailContent">
+  <!-- Tab 1: Comparison Matrix -->
+  <div class="tab-pane fade show active" id="tab-comparison" role="tabpanel">
+    <div class="ai-card">
+      <div class="ai-card-header">
+        <h5 class="ai-card-title mb-0">Rendimiento comparativo en esta ejecución</h5>
+        <p class="ai-card-subtitle">Comparación directa entre los modelos configurados en esta corrida.</p>
+      </div>
+      <div class="table-responsive">
+        <table class="ai-table">
+          <thead>
+            <tr>
+              <th>Modelo</th>
+              <th class="text-center">Casos</th>
+              <th class="text-center">Calidad</th>
+              <th class="text-center">Tasa éxito</th>
+              <th class="text-end">Costo prom. / caso</th>
+              <th class="text-end">Latencia prom.</th>
+              <th class="text-end">Cache hit</th>
+              <th class="text-end">Reasoning tokens</th>
+              <th class="text-center">Tool rounds</th>
+              <th class="text-center">Revisión</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for m in run_comparison %}
+            <tr>
+              <td>
+                <span class="fw-bold font-monospace text-dark">{{ m.model_key }}</span>
+                {% if m.best.quality and m.quality %}
+                  <span class="badge bg-success-subtle text-success border border-success-subtle ms-1">Mejor</span>
+                {% endif %}
+              </td>
+              <td class="text-center">{{ m.cases }}</td>
+              <td class="text-center">
+                {% if m.quality is not none %}
+                  {% set q = m.quality|round(1) %}
+                  <span class="badge {{ 'bg-success' if q >= 90 else ('bg-warning text-dark' if q >= 70 else 'bg-danger') }}">{{ q }}%</span>
+                {% else %}
+                  <span class="text-muted small">Sin revisar</span>
+                {% endif %}
+              </td>
+              <td class="text-center">
+                {% if m.success_rate is not none %}
+                  <span class="fw-semibold {{ 'text-success' if m.success_rate >= 95 else 'text-warning' }}">{{ m.success_rate|round(1) }}%</span>
+                {% else %}
+                  --
+                {% endif %}
+              </td>
+              <td class="text-end font-monospace">
+                {% if m.cost_per_case is not none %}
+                  <span class="{{ 'text-success fw-bold' if m.best.cost_per_case else 'text-dark' }}">${{ '%.5f'|format(m.cost_per_case) }}</span>
+                {% else %}
+                  --
+                {% endif %}
+              </td>
+              <td class="text-end font-monospace">
+                {% if m.latency_ms is not none %}
+                  <span class="{{ 'text-success fw-bold' if m.best.latency_ms else 'text-dark' }}">{{ m.latency_ms|round|int }} ms</span>
+                {% else %}
+                  --
+                {% endif %}
+              </td>
+              <td class="text-end font-monospace text-muted">
+                {{ '%.1f'|format(m.cache_ratio) if m.cache_ratio is not none else '0' }}%
+              </td>
+              <td class="text-end font-monospace text-muted">
+                {{ '{:,}'.format(m.reasoning_tokens) if m.reasoning_tokens else '0' }}
+              </td>
+              <td class="text-center font-monospace">
+                {{ '%.2f'|format(m.tool_rounds) if m.tool_rounds is not none else '--' }}
+              </td>
+              <td class="text-center">
+                <span class="text-success fw-semibold">{{ m.correct }}</span> /
+                <span class="text-warning">{{ m.partial }}</span> /
+                <span class="text-danger">{{ m.incorrect }}</span>
+                {% if m.pending_review > 0 %}
+                  <div class="ai-meta text-warning">{{ m.pending_review }} pendientes</div>
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="10" class="text-center text-muted py-4">No hay datos comparativos disponibles.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 2: Problematic Questions -->
+  <div class="tab-pane fade" id="tab-problems" role="tabpanel">
+    {% set problem_rows = question_matrix.rows|selectattr('has_problem', 'equalto', true)|list %}
+    {% if problem_rows %}
+      <div class="d-flex flex-column gap-3">
+        {% for q_item in problem_rows %}
+        <div class="ai-card border-danger-subtle">
+          <div class="ai-card-header bg-danger-subtle bg-opacity-10">
+            <div class="d-flex align-items-center gap-2">
+              <span class="badge bg-danger">#{{ q_item.index }}</span>
+              <strong class="text-dark">{{ q_item.question }}</strong>
+            </div>
+            {% if q_item.cost_spread > 0 %}
+              <span class="ai-meta">Dispersión de costo: ${{ '%.5f'|format(q_item.cost_spread) }}</span>
+            {% endif %}
+          </div>
+          <div class="ai-card-body">
+            <div class="row g-3">
+              {% for model_key in question_matrix.models %}
+                {% set cell_cases = q_item.cells.get(model_key, []) %}
+                <div class="col-md-{{ 12 // (question_matrix.models|length or 1) }}">
+                  <div class="p-3 border rounded bg-light h-100">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                      <span class="fw-bold font-monospace small text-primary">{{ model_key }}</span>
+                      {% if cell_cases %}
+                        {% set c = cell_cases[0] %}
+                        <span class="badge {{ 'bg-success' if c.status == 'success' else 'bg-danger' }}">{{ c.status }}</span>
+                      {% endif %}
+                    </div>
+                    {% for c in cell_cases %}
+                      {% if c.error_message %}
+                        <div class="alert alert-danger py-1 px-2 small mb-2">{{ c.error_message }}</div>
+                      {% elif c.failure_reason %}
+                        <div class="alert alert-warning py-1 px-2 small mb-2">{{ c.failure_reason }}</div>
+                      {% endif %}
+                      {% if c.answer %}
+                        <div class="border rounded bg-white p-2 small evaluation-markdown" data-markdown-response>{{ c.answer }}</div>
+                      {% endif %}
+                      <div class="ai-meta mt-2">
+                        Revisión: <strong>{{ c.review_status }}</strong>
+                        {% if c.review_notes %} · <em>"{{ c.review_notes }}"</em>{% endif %}
+                        · {{ c.latency_ms or 0 }} ms · ${{ '%.5f'|format(c.pipeline_total_cost or 0) }}
+                      </div>
+                    {% else %}
+                      <span class="text-muted small">Sin ejecución para este modelo</span>
+                    {% endfor %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <div class="ai-card p-5 text-center text-muted">
+        <i class="bi bi-check-circle fs-1 text-success d-block mb-2"></i>
+        <h5 class="text-dark">No se detectaron fallos ni respuestas observadas</h5>
+        <p class="mb-0">Todos los modelos evaluados respondieron con éxito y sin calificaciones de error en esta corrida.</p>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Tab 3: Cases & Manual Review -->
+  <div class="tab-pane fade" id="tab-cases" role="tabpanel">
+    <div class="ai-card">
+      <div class="ai-card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div>
+          <h5 class="ai-card-title mb-0">Casos individuales y calificación de calidad</h5>
+          <p class="ai-card-subtitle">Inspecciona respuestas y califica la precisión como Correcta, Parcial o Incorrecta.</p>
+        </div>
+        <div class="d-flex gap-2">
+          <select class="form-select form-select-sm" id="filter-model" style="width: 170px;">
+            <option value="">Todos los modelos</option>
+            {% for key in model_keys %}
+              <option value="{{ key }}">{{ key }}</option>
+            {% endfor %}
+          </select>
+          <select class="form-select form-select-sm" id="filter-review" style="width: 160px;">
+            <option value="">Todas las revisiones</option>
+            <option value="unreviewed">Sin revisar</option>
+            <option value="correct">Correcta</option>
+            <option value="partial">Parcial</option>
+            <option value="incorrect">Incorrecta</option>
+          </select>
+        </div>
+      </div>
+      <div class="table-responsive">
+        <table class="ai-table" id="cases-table">
+          <thead>
+            <tr>
+              <th style="width: 40px;">#</th>
+              <th style="min-width: 300px;">Pregunta y respuesta</th>
+              <th>Modelo</th>
+              <th style="min-width: 160px;">Ejecución</th>
+              <th style="min-width: 260px;">Revisión manual</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for case in cases %}
+            <tr data-case-id="{{ case.id }}" data-model="{{ case.model_key }}" data-review="{{ case.review_status }}">
+              <td class="text-center font-monospace text-muted">{{ case.sequence_index }}</td>
+              <td>
+                <div class="fw-bold text-dark mb-1">{{ case.question }}</div>
+                {% if case.expected_answer %}
+                  <div class="small text-muted mb-2"><strong>Esperada:</strong> {{ case.expected_answer }}</div>
+                {% endif %}
+                {% if case.answer %}
+                  <div class="border rounded bg-light p-2 evaluation-markdown" data-markdown-response>{{ case.answer }}</div>
+                {% elif case.error_message %}
+                  <div class="alert alert-danger py-1 px-2 small mb-0">{{ case.error_message }}</div>
+                {% else %}
+                  <div class="text-muted small">Pendiente de ejecución</div>
+                {% endif %}
+              </td>
+              <td>
+                <div class="fw-bold font-monospace text-dark">{{ case.model_key }}</div>
+                <div class="ai-meta">{{ case.actual_model or case.physical_model or '--' }}</div>
+                <div class="ai-meta">Caché: {{ case.cache_mode }}</div>
+              </td>
+              <td>
+                <span class="badge {{ 'bg-success' if case.status == 'success' else ('bg-danger' if case.status in ['error', 'interrupted'] else 'bg-secondary') }}">
+                  {{ case.status }}
+                </span>
+                <div class="ai-meta mt-1 font-monospace">
+                  {{ case.latency_ms or 0 }} ms · ${{ '%.5f'|format(case.pipeline_total_cost or 0) }}
+                </div>
+                <div class="ai-meta font-monospace">
+                  {{ case.input_tokens or 0 }} in / {{ case.output_tokens or 0 }} out
+                </div>
+              </td>
+              <td>
+                <select class="form-select form-select-sm review-status mb-2" {% if case.status != 'success' %}disabled{% endif %}>
+                  <option value="unreviewed" {% if case.review_status == 'unreviewed' %}selected{% endif %}>Sin revisar</option>
+                  <option value="correct" {% if case.review_status == 'correct' %}selected{% endif %}>Correcta</option>
+                  <option value="partial" {% if case.review_status == 'partial' %}selected{% endif %}>Parcial</option>
+                  <option value="incorrect" {% if case.review_status == 'incorrect' %}selected{% endif %}>Incorrecta</option>
+                </select>
+                <textarea class="form-control form-control-sm review-notes mb-2" rows="2" placeholder="Notas de revisión..." {% if case.status != 'success' %}disabled{% endif %}>{{ case.review_notes or '' }}</textarea>
+                <button class="btn btn-sm btn-outline-primary w-100 save-review" type="button" {% if case.status != 'success' %}disabled{% endif %}>
+                  <i class="bi bi-save me-1"></i>Guardar revisión
+                </button>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-center text-muted py-5">No hay casos en esta evaluación.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- Tab 4: DAX, Tools & Traces -->
+  <div class="tab-pane fade" id="tab-traces" role="tabpanel">
+    <div class="ai-card">
+      <div class="ai-card-header">
+        <h5 class="ai-card-title mb-0">Diagnóstico técnico, DAX y trazas de ejecución</h5>
+        <p class="ai-card-subtitle">Inspección forense de llamadas a herramientas, consultas DAX generadas y tokens.</p>
+      </div>
+      <div class="table-responsive">
+        <table class="ai-table">
+          <thead>
+            <tr>
+              <th style="width: 40px;">#</th>
+              <th>Pregunta / Modelo</th>
+              <th>Tools invocadas & Skills</th>
+              <th>Consulta DAX</th>
+              <th>Trace ID & Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for case in cases %}
+            <tr>
+              <td class="text-center font-monospace text-muted">{{ case.sequence_index }}</td>
+              <td>
+                <div class="fw-semibold text-dark small mb-1">{{ case.question }}</div>
+                <span class="badge bg-secondary-subtle text-secondary font-monospace">{{ case.model_key }}</span>
+              </td>
+              <td>
+                {% if case.tools_called_json %}
+                  <div class="mb-1">
+                    <strong class="small text-muted">Tools:</strong>
+                    {% for tool in case.tools_called_json %}
+                      <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle small me-1">{{ tool }}</span>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+                {% if case.selected_skills_json %}
+                  <div>
+                    <strong class="small text-muted">Skills:</strong>
+                    <span class="small font-monospace text-muted">{{ case.selected_skills_json|tojson }}</span>
+                  </div>
+                {% endif %}
+                {% if not case.tools_called_json and not case.selected_skills_json %}
+                  <span class="text-muted small">Sin tools registradas</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if case.dax_query %}
+                  <pre class="bg-light p-2 rounded small font-monospace mb-0" style="max-height: 140px; overflow-y: auto;">{{ case.dax_query }}</pre>
+                {% else %}
+                  <span class="text-muted small">No ejecutó DAX</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if case.trace_id %}
+                  <div class="font-monospace small text-primary mb-1">{{ case.trace_id }}</div>
+                {% endif %}
+                <div class="ai-meta font-monospace">
+                  In: {{ case.input_tokens or 0 }} | Out: {{ case.output_tokens or 0 }}<br>
+                  Reasoning: {{ case.reasoning_tokens or 0 }}<br>
+                  Cache read: {{ case.cache_read_tokens or 0 }}
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="5" class="text-center text-muted py-4">No hay datos técnicos disponibles.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script>
 (() => {
   document.querySelectorAll('[data-markdown-response]').forEach(element => {
     element.innerHTML = marked.parse(element.textContent || '');
@@ -111,7 +469,13 @@
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
   const message = document.getElementById('page-message');
   const active = new Set(['queued', 'running', 'cancel_requested']);
-  const showMessage = (text, kind='success') => { message.innerHTML = `<div class="alert alert-${kind}">${String(text).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}</div>`; };
+  const showMessage = (text, kind='success') => {
+    message.innerHTML = `<div class="alert alert-${kind} alert-dismissible fade show" role="alert">
+      ${String(text).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>`;
+  };
+
   async function poll() {
     const response = await fetch(`{{ url_for('evaluations.get_run', run_id=run.id) }}`);
     if (!response.ok) return;
@@ -120,26 +484,95 @@
     document.getElementById('completed-cases').textContent = data.completed_cases;
     document.getElementById('total-cases').textContent = data.total_cases;
     document.getElementById('progress-bar').style.width = `${data.progress_percent}%`;
-    if (active.has(data.status)) setTimeout(poll, 3000);
-    else if (active.has(page.dataset.status)) window.location.reload();
+    if (active.has(data.status)) {
+      setTimeout(poll, 3000);
+    } else if (active.has(page.dataset.status)) {
+      window.location.reload();
+    }
   }
-  document.getElementById('cases-table').addEventListener('click', async event => {
-    const button = event.target.closest('.save-review'); if (!button) return;
-    const row = button.closest('tr'); button.disabled = true;
-    const response = await fetch(`/admin/ai-evaluations/${runId}/cases/${row.dataset.caseId}/review`, {method:'PATCH', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify({review_status:row.querySelector('.review-status').value, review_notes:row.querySelector('.review-notes').value})});
-    const data = await response.json(); button.disabled = false;
-    if (!response.ok) return showMessage(data.error || 'No se pudo guardar la revisión.', 'danger');
-    row.dataset.review = data.review_status; showMessage('Revisión guardada. Recarga la página para actualizar la promoción.'); applyFilters();
-  });
+
+  const casesTable = document.getElementById('cases-table');
+  if (casesTable) {
+    casesTable.addEventListener('click', async event => {
+      const button = event.target.closest('.save-review');
+      if (!button) return;
+      const row = button.closest('tr');
+      button.disabled = true;
+      button.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Guardando...';
+      try {
+        const response = await fetch(`/admin/ai-evaluations/${runId}/cases/${row.dataset.caseId}/review`, {
+          method: 'PATCH',
+          headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
+          body: JSON.stringify({
+            review_status: row.querySelector('.review-status').value,
+            review_notes: row.querySelector('.review-notes').value
+          })
+        });
+        const data = await response.json();
+        button.disabled = false;
+        button.innerHTML = '<i class="bi bi-save me-1"></i>Guardar revisión';
+        if (!response.ok) {
+          return showMessage(data.error || 'No se pudo guardar la revisión.', 'danger');
+        }
+        row.dataset.review = data.review_status;
+        showMessage('Revisión guardada con éxito.');
+        applyFilters();
+      } catch (err) {
+        button.disabled = false;
+        button.innerHTML = '<i class="bi bi-save me-1"></i>Guardar revisión';
+        showMessage('Error de red al guardar la revisión.', 'danger');
+      }
+    });
+  }
+
   document.querySelectorAll('.promote-model').forEach(button => button.addEventListener('click', async () => {
-    const response = await fetch(`/admin/ai-evaluations/${runId}/models/${encodeURIComponent(button.dataset.modelKey)}/promote`, {method:'POST', headers:{'X-CSRFToken':csrf}}); const data = await response.json();
-    if (!response.ok) return showMessage(data.error || 'No se pudo promover el modelo.', 'danger');
-    button.disabled = true; showMessage(`Modelo ${data.model_key} validado y promovido.`);
+    button.disabled = true;
+    const response = await fetch(`/admin/ai-evaluations/${runId}/models/${encodeURIComponent(button.dataset.modelKey)}/promote`, {
+      method: 'POST',
+      headers: {'X-CSRFToken': csrf}
+    });
+    const data = await response.json();
+    if (!response.ok) {
+      button.disabled = false;
+      return showMessage(data.error || 'No se pudo promover el modelo.', 'danger');
+    }
+    showMessage(`Modelo ${data.model_key} validado y promovido a producción con éxito.`);
   }));
-  const cancel = document.getElementById('cancel-run'); if (cancel) cancel.addEventListener('click', async () => { cancel.disabled = true; const response = await fetch(`/admin/ai-evaluations/${runId}/cancel`, {method:'POST', headers:{'X-CSRFToken':csrf}}); const data = await response.json(); if (!response.ok) { cancel.disabled = false; return showMessage(data.error || 'No se pudo cancelar.', 'danger'); } window.location.reload(); });
-  const modelFilter = document.getElementById('filter-model'); const reviewFilter = document.getElementById('filter-review');
-  function applyFilters() { document.querySelectorAll('#cases-table tbody tr[data-case-id]').forEach(row => { row.hidden = !!((modelFilter.value && row.dataset.model !== modelFilter.value) || (reviewFilter.value && row.dataset.review !== reviewFilter.value)); }); }
-  modelFilter.addEventListener('change', applyFilters); reviewFilter.addEventListener('change', applyFilters);
-  if (active.has(page.dataset.status)) setTimeout(poll, 1500);
+
+  const cancel = document.getElementById('cancel-run');
+  if (cancel) {
+    cancel.addEventListener('click', async () => {
+      cancel.disabled = true;
+      const response = await fetch(`/admin/ai-evaluations/${runId}/cancel`, {
+        method: 'POST',
+        headers: {'X-CSRFToken': csrf}
+      });
+      const data = await response.json();
+      if (!response.ok) {
+        cancel.disabled = false;
+        return showMessage(data.error || 'No se pudo cancelar.', 'danger');
+      }
+      window.location.reload();
+    });
+  }
+
+  const modelFilter = document.getElementById('filter-model');
+  const reviewFilter = document.getElementById('filter-review');
+  function applyFilters() {
+    if (!casesTable) return;
+    casesTable.querySelectorAll('tbody tr[data-case-id]').forEach(row => {
+      const matchModel = !modelFilter.value || row.dataset.model === modelFilter.value;
+      const matchReview = !reviewFilter.value || row.dataset.review === reviewFilter.value;
+      row.hidden = !(matchModel && matchReview);
+    });
+  }
+
+  if (modelFilter) modelFilter.addEventListener('change', applyFilters);
+  if (reviewFilter) reviewFilter.addEventListener('change', applyFilters);
+
+  if (active.has(page.dataset.status)) {
+    setTimeout(poll, 1500);
+  }
 })();
-</script>{% endblock %}
+</script>
+{% endblock %}

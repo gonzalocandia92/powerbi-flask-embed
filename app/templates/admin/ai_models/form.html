@@ -1,24 +1,107 @@
-{% extends "layout.html" %}
-{% block title %}{{ 'Editar' if model else 'Nuevo' }} modelo - Sudata PBI{% endblock %}
-{% macro field(item, cls='col-md-6') %}<div class="{{ cls }}">{{ item.label(class='form-label') }}{{ item(class='form-control' + (' is-invalid' if item.errors else '')) }}{% for error in item.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}</div>{% endmacro %}
-{% block body %}
-<div class="container-fluid py-2">
-  <div class="d-flex justify-content-between align-items-center mb-4"><div><h2 class="fw-bold mb-1">{{ 'Editar modelo' if model else 'Nuevo modelo' }}</h2><p class="text-muted mb-0">Las credenciales se configuran solamente mediante variables de entorno.</p></div><a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.catalog_page') }}">Volver</a></div>
-  <form method="post" class="card"><div class="card-body"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="row g-3">
-    <div class="col-md-6">{{ form.model_key.label(class='form-label') }}{{ form.model_key(class='form-control', readonly=(model is not none)) }}{% for error in form.model_key.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}</div>
-    {{ field(form.family_key) }}{{ field(form.display_name) }}{{ field(form.provider) }}{{ field(form.gateway) }}{{ field(form.physical_model, 'col-12') }}
-    {{ field(form.context_window) }}{{ field(form.max_output_tokens) }}{{ field(form.thinking_mode) }}
-    <div class="col-md-6 family-thinking-level">{{ form.default_reasoning_effort.label(class='form-label') }}{{ form.default_reasoning_effort(class='form-control') }}</div>
-    <div class="col-md-6 family-verbosity">{{ form.default_verbosity.label(class='form-label') }}{{ form.default_verbosity(class='form-control') }}</div>
-    <div class="col-md-6 family-thinking-budget">{{ form.budget_tokens.label(class='form-label') }}{{ form.budget_tokens(class='form-control') }}</div>
-    {{ field(form.default_service_tier) }}{{ field(form.pricing_tier) }}
-    <div class="col-12">{{ form.provider_options_json.label(class='form-label') }}{{ form.provider_options_json(class='form-control font-monospace', rows=5) }}{% for error in form.provider_options_json.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}</div>
-    <div class="col-12"><div class="row g-2">{% for item in [form.enabled, form.client_selectable, form.supports_tools] %}<div class="col-sm-6 col-lg-4"><label class="form-check">{{ item(class='form-check-input') }}<span class="form-check-label">{{ item.label.text }}</span></label></div>{% endfor %}</div></div>
-    <div class="col-12 family-report-cache"><label class="form-check">{{ form.cache_by_report(class='form-check-input') }}<span class="form-check-label">{{ form.cache_by_report.label.text }}</span></label><div class="form-text">La clave es estable por reporte. Los proveedores pueden almacenar prefijos automáticamente aun si esta opción está desmarcada; la casilla controla la separación por reporte.</div></div>
-  </div></div><div class="card-footer bg-white text-end"><a class="btn btn-outline-secondary me-2" href="{{ url_for('model_catalog.catalog_page') }}">Cancelar</a>{{ form.submit(class='btn btn-primary') }}</div></form>
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
+
+{% set active_section = 'catalog' %}
+{% set page_title = 'Editar modelo' if model else 'Nuevo modelo' %}
+{% set page_subtitle = 'Las credenciales se configuran exclusivamente mediante variables de entorno del servidor' %}
+
+{% block header_actions %}
+<a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.catalog_page') }}">
+  <i class="bi bi-arrow-left me-1"></i>Volver al catálogo
+</a>
+{% endblock %}
+
+{% macro field(item, cls='col-md-6') %}
+<div class="{{ cls }}">
+  {{ item.label(class='form-label fw-semibold') }}
+  {{ item(class='form-control' + (' is-invalid' if item.errors else '')) }}
+  {% for error in item.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+</div>
+{% endmacro %}
+
+{% block ai_content %}
+<div class="row justify-content-center">
+  <div class="col-xl-9 col-lg-11">
+    <div class="ai-card">
+      <div class="ai-card-header">
+        <h5 class="ai-card-title mb-0">
+          <i class="bi bi-cpu me-2 text-primary"></i>Parámetros técnicos del modelo
+        </h5>
+        <p class="ai-card-subtitle">
+          Configuración de proveedor, gateway, ventanas de contexto y capacidades de reasoning.
+        </p>
+      </div>
+      <div class="ai-card-body">
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="row g-3">
+            <div class="col-md-6">
+              {{ form.model_key.label(class='form-label fw-semibold') }}
+              {{ form.model_key(class='form-control font-monospace', readonly=(model is not none)) }}
+              {% for error in form.model_key.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+            </div>
+            {{ field(form.family_key) }}
+            {{ field(form.display_name) }}
+            {{ field(form.provider) }}
+            {{ field(form.gateway) }}
+            {{ field(form.physical_model, 'col-12') }}
+            {{ field(form.context_window) }}
+            {{ field(form.max_output_tokens) }}
+            {{ field(form.thinking_mode) }}
+            <div class="col-md-6 family-thinking-level">
+              {{ form.default_reasoning_effort.label(class='form-label fw-semibold') }}
+              {{ form.default_reasoning_effort(class='form-control') }}
+            </div>
+            <div class="col-md-6 family-verbosity">
+              {{ form.default_verbosity.label(class='form-label fw-semibold') }}
+              {{ form.default_verbosity(class='form-control') }}
+            </div>
+            <div class="col-md-6 family-thinking-budget">
+              {{ form.budget_tokens.label(class='form-label fw-semibold') }}
+              {{ form.budget_tokens(class='form-control') }}
+            </div>
+            {{ field(form.default_service_tier) }}
+            {{ field(form.pricing_tier) }}
+            <div class="col-12">
+              {{ form.provider_options_json.label(class='form-label fw-semibold') }}
+              {{ form.provider_options_json(class='form-control font-monospace', rows=4) }}
+              {% for error in form.provider_options_json.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-12 pt-2">
+              <div class="row g-2">
+                {% for item in [form.enabled, form.client_selectable, form.supports_tools] %}
+                <div class="col-sm-6 col-lg-4">
+                  <label class="form-check p-2 border rounded bg-light d-flex align-items-center gap-2 mb-0 cursor-pointer">
+                    {{ item(class='form-check-input mt-0') }}
+                    <span class="form-check-label fw-semibold">{{ item.label.text }}</span>
+                  </label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="col-12 family-report-cache pt-2">
+              <label class="form-check p-2 border rounded bg-light d-flex align-items-center gap-2 mb-1 cursor-pointer">
+                {{ form.cache_by_report(class='form-check-input mt-0') }}
+                <span class="form-check-label fw-semibold">{{ form.cache_by_report.label.text }}</span>
+              </label>
+              <div class="form-text small">La clave es estable por reporte. Los proveedores pueden almacenar prefijos automáticamente aun si esta opción está desmarcada; la casilla controla la separación por reporte.</div>
+            </div>
+          </div>
+
+          <div class="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
+            <a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.catalog_page') }}">Cancelar</a>
+            {{ form.submit(class='btn btn-primary px-4') }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script>
+
+{% block scripts %}
+{{ super() }}
+<script>
 (() => {
   const profiles = {{ families|tojson }};
   const family = document.getElementById('family_key');
@@ -69,4 +152,5 @@
   gateway.addEventListener('change', update);
   update();
 })();
-</script>{% endblock %}
+</script>
+{% endblock %}

@@ -290,18 +290,27 @@ def export_run(run_id):
 @login_required
 @admin_required
 def runs_page():
+    from app.services import ai_console
     runs = ModelEvaluationRun.query.order_by(ModelEvaluationRun.created_at.desc()).limit(100).all()
-    return render_template('admin/ai_evaluations/index.html', runs=runs)
+    model_comparison = ai_console.evaluation_model_comparison()
+    runs_overview = ai_console.evaluation_runs_overview(runs)
+    return render_template(
+        'admin/ai_evaluations/index.html',
+        runs=runs,
+        model_comparison=model_comparison,
+        runs_overview=runs_overview,
+    )
 
 
 @bp.route('/ui/new', methods=['GET'])
 @login_required
 @admin_required
 def new_page():
+    from app.services import ai_console
     models = AIModelConfig.query.filter_by(enabled=True).order_by(AIModelConfig.display_name.asc()).all()
     return render_template(
         'admin/ai_evaluations/new.html',
-        reports=Report.query.order_by(Report.name.asc()).all(),
+        reports=ai_console.klara_enabled_reports(),
         models=[model for model in models if model_readiness(
             model, config=dict(current_app.config)
         )['ready_for_evaluation']],
@@ -312,10 +321,17 @@ def new_page():
 @login_required
 @admin_required
 def detail_page(run_id):
+    from app.services import ai_console
     run = db.get_or_404(ModelEvaluationRun, run_id)
-    cases = run.cases.all()
+    cases = run.cases.order_by(ModelEvaluationCase.sequence_index.asc()).all()
+    run_comparison = ai_console.evaluation_model_comparison(run_id=run.id)
+    question_matrix = ai_console.evaluation_question_matrix(cases)
     return render_template(
-        'admin/ai_evaluations/detail.html', run=run,
+        'admin/ai_evaluations/detail.html',
+        run=run,
+        cases=cases,
+        run_comparison=run_comparison,
+        question_matrix=question_matrix,
         total_cost=sum(case.pipeline_total_cost or 0 for case in cases),
         model_keys=list(dict.fromkeys(case.model_key for case in cases)),
     )

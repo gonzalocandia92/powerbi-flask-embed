@@ -1,73 +1,333 @@
-{% extends "layout.html" %}
-{% block title %}Componentes del chat - Sudata PBI{% endblock %}
-{% block body %}
-<div class="container-fluid py-2" id="components-page">
-  {% set active_ai_section = 'components' %}
-  {% include "admin/ai_config/_navigation.html" %}
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-    <div><h2 class="fw-bold mb-1">Componentes del chat</h2><p class="text-muted mb-0">Configura disponibilidad y componentes con herencia reporte → empresa → global.</p></div>
-    <div class="d-flex gap-2"><a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.catalog_page') }}">Catalogo</a><button class="btn btn-primary" id="save-scope" type="button">Guardar alcance</button></div>
-  </div>
+{% extends "admin/ai/shell.html" %}
+{% from "admin/ai/_macros.html" import page_header, kpi, badge, origin_badge, searchable_select %}
+
+{% block title %}Componentes del chat · Configuración AI{% endblock %}
+
+{% set active_ai_section = 'components' %}
+
+{% block ai_content %}
+<div id="components-page">
+  {% call page_header(
+      'Componentes del chat',
+      'Disponibilidad de modelos y asignación por rol del pipeline con herencia Reporte → Empresa → Global.',
+      'Agente KLARA'
+  ) %}
+    <a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.catalog_page') }}">
+      <i class="bi bi-cpu me-1"></i>Catálogo
+    </a>
+    <button class="btn btn-primary" id="save-scope" type="button">
+      <i class="bi bi-check-lg me-1"></i>Guardar alcance
+    </button>
+  {% endcall %}
+
   <div id="message"></div>
-  <div class="card mb-4"><div class="card-body"><div class="row g-3 align-items-end">
-    <div class="col-lg-3"><label class="form-label" for="scope-type">Alcance</label><select class="form-select" id="scope-type"><option value="global">Global</option><option value="empresa">Empresa</option><option value="report">Reporte</option></select></div>
-    <div class="col-lg-4 scope-target" id="company-wrap" hidden><label class="form-label" for="company-id">Empresa</label><select class="form-select" id="company-id">{% for item in companies %}<option value="{{ item.id }}">{{ item.nombre }}</option>{% endfor %}</select></div>
-    <div class="col-lg-4 scope-target" id="report-wrap" hidden><label class="form-label" for="report-id">Reporte</label><select class="form-select" id="report-id">{% for item in reports %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select></div>
-    <div class="col-lg-5 text-muted small" id="scope-note">Los valores globales son el fallback del sistema.</div>
-  </div></div></div>
 
-  <div class="card mb-4"><div class="card-header d-flex justify-content-between align-items-center"><div><h5 class="mb-1">Modelo principal y selector del chat</h5><div class="text-muted small">Un override de empresa o reporte reemplaza la lista heredada completa.</div></div><label class="form-check"><input class="form-check-input" type="checkbox" id="inherit-grants"><span class="form-check-label">Heredar disponibilidad</span></label></div>
-    <div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Modelo</th><th>Estado</th><th>Permitido</th><th>Visible</th><th>Predeterminado</th></tr></thead><tbody>
-      {% for model in models %}<tr data-model="{{ model.model_key }}"><td><div class="fw-semibold">{{ model.display_name }}</div><code>{{ model.model_key }}</code></td><td><span class="badge {{ 'bg-success' if model.validation_status == 'passed' else 'bg-warning text-dark' }}">{{ model.validation_status }}</span></td><td><input class="form-check-input grant-allowed" type="checkbox"></td><td><input class="form-check-input grant-selectable" type="checkbox"></td><td><input class="form-check-input grant-default" type="radio" name="default-model"></td></tr>{% endfor %}
-    </tbody></table></div>
+  {# Selector de Alcance #}
+  <div class="ai-card mb-3">
+    <div class="ai-card-body">
+      <div class="row g-3 align-items-end">
+        <div class="col-lg-3 col-md-4">
+          <label class="form-label" for="scope-type">Alcance a configurar</label>
+          <select class="form-select" id="scope-type">
+            <option value="global">Global</option>
+            <option value="empresa">Empresa</option>
+            <option value="report">Reporte</option>
+          </select>
+        </div>
+
+        <div class="col-lg-4 col-md-8 scope-target" id="company-wrap" hidden>
+          <label class="form-label" for="company-id">Empresa</label>
+          <select class="form-select" id="company-id" data-searchable data-placeholder="Buscar empresa…" data-search-placeholder="Escribí para buscar empresas…">
+            {% for item in companies %}
+              <option value="{{ item.id }}">{{ item.nombre }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {# Selector CRÍTICO: SOLO reportes con KLARA habilitada, mostrando advertencia si está incompleta #}
+        <div class="col-lg-5 col-md-8 scope-target" id="report-wrap" hidden>
+          <label class="form-label" for="report-id">Reporte (KLARA habilitada)</label>
+          <select class="form-select" id="report-id" data-searchable data-placeholder="Buscar reporte habilitado…" data-search-placeholder="Escribí para buscar reportes con KLARA…">
+            {% for item in reports %}
+              <option value="{{ item.id }}"
+                      {% if item.incomplete %}data-warning="configuración incompleta"{% endif %}>
+                {{ item.name }}{% if item.incomplete %} (incompleto){% endif %}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <div class="col-12 text-muted small" id="scope-note">
+          Los valores globales son el fallback del sistema.
+        </div>
+      </div>
+    </div>
   </div>
 
-  <div class="card"><div class="card-header"><h5 class="mb-1">Componentes internos</h5><div class="text-muted small">Heredar no crea un registro en este alcance. Con estrategia «Modelo» se pueden definir overrides de ejecución por rol; lo que quede en «Heredar» usa los valores del modelo.</div></div><div class="card-body"><div class="row g-3">
-    {% for c in component_defs %}
-    <div class="col-lg-6"><div class="component-card border rounded p-3 h-100" data-role="{{ c.role }}">
-      <label class="form-label fw-semibold" for="role-{{ c.role }}">{{ c.label }}</label>
-      <select class="form-select component-select" id="role-{{ c.role }}" data-role="{{ c.role }}"><option value="inherit">Heredar</option>{% for st in c.strategies %}<option value="{{ st.value }}">{{ st.label }}</option>{% endfor %}{% for model in models if model.enabled %}<option value="model:{{ model.model_key }}">{{ model.display_name }}</option>{% endfor %}</select>
-      <details class="role-advanced mt-2" hidden>
-        <summary class="small text-primary" style="cursor:pointer">Configuración avanzada <span class="badge bg-secondary role-override-count"></span></summary>
-        <div class="row g-2 mt-1">
-          <div class="col-sm-6"><label class="form-label small mb-1">Thinking</label><select class="form-select form-select-sm" data-field="thinking_mode"></select></div>
-          <div class="col-sm-6"><label class="form-label small mb-1">Reasoning effort</label><select class="form-select form-select-sm" data-field="reasoning_effort"></select></div>
-          <div class="col-sm-6"><label class="form-label small mb-1">Max output tokens</label><input class="form-control form-control-sm" type="number" min="1" step="1" data-field="max_output_tokens"></div>
-          <div class="col-sm-6"><label class="form-label small mb-1">Service tier</label><select class="form-select form-select-sm" data-field="service_tier"></select></div>
+  {# Visualización del Pipeline Efectivo #}
+  <div class="ai-card mb-3">
+    <div class="ai-card-header">
+      <div>
+        <h3><i class="bi bi-diagram-3 me-2"></i>Visualización del pipeline</h3>
+        <span class="ai-sub">Secuencia de ejecución y componentes efectivos para este alcance.</span>
+      </div>
+    </div>
+    <div class="ai-card-body">
+      <div class="ai-pipe-label">Pipeline de Chat (Interacciones en tiempo real)</div>
+      <div class="ai-pipeline mb-3" id="pipeline-chat-viz">
+        <div class="ai-pipe-node terminal">Pregunta</div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node" data-pipe-role="query_rewriter">
+          <div class="node-role">Query Rewriter</div>
+          <div class="node-model font-monospace text-muted">—</div>
+          <div class="node-meta small"></div>
         </div>
-        <div class="form-text role-hint"></div>
-      </details>
-      <div class="form-text component-effective mt-2"></div>
-    </div></div>
-    {% endfor %}
-  </div></div></div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node" data-pipe-role="skill_selector">
+          <div class="node-role">Skill Selector</div>
+          <div class="node-model font-monospace text-muted">—</div>
+          <div class="node-meta small"></div>
+        </div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node" data-pipe-role="complexity_classifier">
+          <div class="node-role">Classifier</div>
+          <div class="node-model font-monospace text-muted">—</div>
+          <div class="node-meta small"></div>
+        </div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node highlight" id="pipe-main-agent">
+          <div class="node-role">Main Agent</div>
+          <div class="node-model font-monospace" id="pipe-default-model">—</div>
+          <div class="node-meta small"><span class="ai-badge tone-primary">Predeterminado</span></div>
+        </div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node terminal">DAX / Tools</div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node terminal">Respuesta</div>
+      </div>
+
+      <div class="ai-pipe-label">Pipeline de Reporting Analítico</div>
+      <div class="ai-pipeline" id="pipeline-reporting-viz">
+        <div class="ai-pipe-node terminal">Preguntas</div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node" data-pipe-role="structure_planner">
+          <div class="node-role">Structure Planner</div>
+          <div class="node-model font-monospace text-muted">—</div>
+          <div class="node-meta small"></div>
+        </div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node" data-pipe-role="report_coordinator">
+          <div class="node-role">Coordinator</div>
+          <div class="node-model font-monospace text-muted">—</div>
+          <div class="node-meta small"></div>
+        </div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node" data-pipe-role="report_writer">
+          <div class="node-role">Writer</div>
+          <div class="node-model font-monospace text-muted">—</div>
+          <div class="node-meta small"></div>
+        </div>
+        <div class="ai-pipe-arrow">&rarr;</div>
+        <div class="ai-pipe-node terminal">Informe</div>
+      </div>
+    </div>
+  </div>
+
+  {# 1. Modelos Permitidos y Disponibilidad #}
+  <div class="ai-card mb-3">
+    <div class="ai-card-header">
+      <div>
+        <h3><i class="bi bi-shield-check me-2"></i>1. Modelos permitidos y selector del chat</h3>
+        <span class="ai-sub">Define qué modelos pueden usarse en este alcance y cuál es el predeterminado. Un override reemplaza la lista heredada completa.</span>
+      </div>
+      <div>
+        <label class="form-check form-switch mb-0">
+          <input class="form-check-input" type="checkbox" id="inherit-grants">
+          <span class="form-check-label fw-semibold small">Heredar disponibilidad</span>
+        </label>
+      </div>
+    </div>
+    <div class="ai-table-wrap">
+      <table class="ai-table" id="grants-table">
+        <thead>
+          <tr>
+            <th>Modelo</th>
+            <th>Proveedor</th>
+            <th>Estado catálogo</th>
+            <th class="text-center" style="width: 110px;">Permitido</th>
+            <th class="text-center" style="width: 140px;">Visible en chat</th>
+            <th class="text-center" style="width: 140px;">Predeterminado</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for model in models %}
+          <tr data-model="{{ model.model_key }}">
+            <td>
+              <div class="ai-cell-title">{{ model.display_name }}</div>
+              <code>{{ model.model_key }}</code>
+            </td>
+            <td><strong class="text-capitalize">{{ model.provider }}</strong></td>
+            <td>
+              <span class="ai-badge tone-{{ 'success' if model.validation_status == 'passed' else 'warning' }}">
+                {{ model.validation_status }}
+              </span>
+              {% if not model.enabled %}
+                <span class="ai-badge tone-neutral ms-1">deshabilitado</span>
+              {% endif %}
+            </td>
+            <td class="text-center">
+              <input class="form-check-input grant-allowed" type="checkbox" aria-label="Permitido">
+            </td>
+            <td class="text-center">
+              <input class="form-check-input grant-selectable" type="checkbox" aria-label="Visible para clientes">
+            </td>
+            <td class="text-center">
+              <input class="form-check-input grant-default" type="radio" name="default-model" aria-label="Predeterminado">
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# 2. Configuración de Componentes Internos #}
+  <div class="ai-card">
+    <div class="ai-card-header">
+      <div>
+        <h3><i class="bi bi-sliders me-2"></i>2. Componentes internos / Roles del pipeline</h3>
+        <span class="ai-sub">Cada rol puede configurarse en "Heredar" (usa la configuración del alcance superior) o sobreescribirse específicamente.</span>
+      </div>
+    </div>
+    <div class="ai-card-body">
+      <div class="row g-3">
+        {% for c in component_defs %}
+        <div class="col-lg-6">
+          <div class="ai-component" data-role="{{ c.role }}" id="card-role-{{ c.role }}">
+            <div class="ai-component-head">
+              <div>
+                <h3>{{ c.label }}</h3>
+                <div class="role-key">{{ c.role }}</div>
+              </div>
+              <span class="ai-badge tone-neutral role-dirty-badge" hidden>modificado</span>
+            </div>
+
+            <div class="mb-2">
+              <label class="form-label" for="role-{{ c.role }}">Estrategia / Modelo</label>
+              <select class="form-select component-select" id="role-{{ c.role }}" data-role="{{ c.role }}">
+                <option value="inherit">Heredar de alcance superior</option>
+                {% for st in c.strategies %}
+                  <option value="{{ st.value }}">{{ st.label }}</option>
+                {% endfor %}
+                {% for model in models if model.enabled %}
+                  <option value="model:{{ model.model_key }}">Modelo: {{ model.display_name }}</option>
+                {% endfor %}
+              </select>
+            </div>
+
+            <details class="role-advanced mt-2" hidden>
+              <summary class="fw-semibold">
+                Configuración avanzada de ejecución <span class="badge bg-secondary role-override-count"></span>
+              </summary>
+              <div class="row g-2 mt-2">
+                <div class="col-sm-6">
+                  <label class="form-label small mb-1">Thinking</label>
+                  <select class="form-select form-select-sm" data-field="thinking_mode"></select>
+                </div>
+                <div class="col-sm-6">
+                  <label class="form-label small mb-1">Reasoning effort</label>
+                  <select class="form-select form-select-sm" data-field="reasoning_effort"></select>
+                </div>
+                <div class="col-sm-6">
+                  <label class="form-label small mb-1">Max output tokens</label>
+                  <input class="form-control form-control-sm" type="number" min="1" step="1" data-field="max_output_tokens">
+                </div>
+                <div class="col-sm-6">
+                  <label class="form-label small mb-1">Service tier</label>
+                  <select class="form-select form-select-sm" data-field="service_tier"></select>
+                </div>
+              </div>
+              <div class="form-text role-hint mt-1"></div>
+            </details>
+
+            <div class="ai-effective component-effective"></div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+
+  {# Barra visible de cambios sin guardar #}
+  <div class="ai-dirtybar" id="dirty-bar" hidden>
+    <div class="d-flex align-items-center gap-2">
+      <i class="bi bi-exclamation-triangle-fill text-warning fs-5"></i>
+      <div>
+        <strong>Tenés cambios sin guardar en este alcance.</strong>
+        <div class="small text-muted">Las modificaciones no se aplicarán a KLARA hasta que hagas clic en Guardar.</div>
+      </div>
+    </div>
+    <div class="d-flex gap-2">
+      <button class="btn btn-sm btn-outline-secondary" type="button" id="discard-scope">Descartar</button>
+      <button class="btn btn-sm btn-primary" type="button" id="save-dirty">Guardar alcance</button>
+    </div>
+  </div>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script>
+
+{% block ai_scripts %}
+<script>
 (() => {
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
   const scopeType = document.getElementById('scope-type');
   const inherit = document.getElementById('inherit-grants');
   const message = document.getElementById('message');
-  const scopeId = () => scopeType.value === 'empresa' ? document.getElementById('company-id').value : (scopeType.value === 'report' ? document.getElementById('report-id').value : null);
+  const dirtyBar = document.getElementById('dirty-bar');
+  const saveBtn = document.getElementById('save-scope');
+  const saveDirtyBtn = document.getElementById('save-dirty');
+  const discardBtn = document.getElementById('discard-scope');
+  const companySelect = document.getElementById('company-id');
+  const reportSelect = document.getElementById('report-id');
+
+  let isDirty = false;
+  let modelsMeta = {};
+  let currentLoadedData = null;
+
+  const scopeId = () => scopeType.value === 'empresa' ? companySelect.value : (scopeType.value === 'report' ? reportSelect.value : null);
   const escapeHtml = value => String(value || '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-  const showMessage = (text, kind='success') => { message.innerHTML = `<div class="alert alert-${kind}">${escapeHtml(text)}</div>`; };
+  const showMessage = (text, kind='success') => {
+    message.innerHTML = `<div class="ai-callout tone-${kind} mb-3"><div class="ai-callout-body">${escapeHtml(text)}</div></div>`;
+    message.scrollIntoView({behavior: 'smooth', block: 'nearest'});
+  };
+
+  function setDirty(dirty) {
+    isDirty = dirty;
+    dirtyBar.hidden = !dirty;
+  }
+  AiConsole.guardUnsaved(() => isDirty);
+
   function toggleTargets() {
     document.getElementById('company-wrap').hidden = scopeType.value !== 'empresa';
     document.getElementById('report-wrap').hidden = scopeType.value !== 'report';
-    document.getElementById('scope-note').textContent = scopeType.value === 'global' ? 'Los valores globales son el fallback del sistema.' : 'Sin override se utiliza la configuración heredada.';
+    document.getElementById('scope-note').textContent = scopeType.value === 'global'
+      ? 'Los valores globales son el fallback del sistema.'
+      : 'Sin override se utiliza la configuración heredada del alcance superior.';
   }
-  // ---- Generic per-role override section (all data comes from /effective: no provider logic here) ----
-  let modelsMeta = {};
+
   const FIELDS = [['thinking_mode', 'Thinking'], ['reasoning_effort', 'Reasoning'], ['max_output_tokens', 'Max output'], ['service_tier', 'Service tier']];
-  const SCOPE_LABEL = {report: 'reporte', empresa: 'empresa', global: 'global', fallback: 'valor por defecto del sistema'};
+  const SCOPE_LABEL = {report: 'Reporte', empresa: 'Empresa', global: 'Global', fallback: 'Default del sistema'};
   const field = (card, name) => card.querySelector(`[data-field="${name}"]`);
-  const selectedModelKey = card => { const v = card.querySelector('.component-select').value; return v.startsWith('model:') ? v.slice(6) : null; };
+  const selectedModelKey = card => {
+    const v = card.querySelector('.component-select').value;
+    return v.startsWith('model:') ? v.slice(6) : null;
+  };
   const show = value => (value === null || value === undefined || value === '') ? '—' : value;
+
   function fillSelect(el, inheritLabel, values, wanted) {
     el.innerHTML = `<option value="">${escapeHtml(inheritLabel)}</option>` + values.map(v => `<option value="${escapeHtml(v[0])}">${escapeHtml(v[1])}</option>`).join('');
-    el.value = values.some(v => v[0] === wanted) ? wanted : '';   // unsupported value for this model -> inherit
+    el.value = values.some(v => v[0] === wanted) ? wanted : '';
   }
+
   function readAdvanced(card) {
     const tokens = field(card, 'max_output_tokens').value.trim();
     return {
@@ -77,100 +337,212 @@
       service_tier: field(card, 'service_tier').value || null,
     };
   }
-  // values = current/explicit overrides to show. Capabilities and defaults come from the backend.
+
   function renderAdvanced(card, values) {
-    const box = card.querySelector('.role-advanced'); const key = selectedModelKey(card);
-    box.hidden = !key; if (!key) return;
-    const meta = modelsMeta[key]; if (!meta) { box.hidden = true; return; }
+    const box = card.querySelector('.role-advanced');
+    const key = selectedModelKey(card);
+    box.hidden = !key;
+    if (!key) return;
+    const meta = modelsMeta[key];
+    if (!meta) { box.hidden = true; return; }
     const caps = meta.capabilities, defs = meta.defaults;
-    const thinking = field(card, 'thinking_mode'), effort = field(card, 'reasoning_effort'), tokens = field(card, 'max_output_tokens'), tier = field(card, 'service_tier');
+    const thinking = field(card, 'thinking_mode'), effort = field(card, 'reasoning_effort'),
+          tokens = field(card, 'max_output_tokens'), tier = field(card, 'service_tier');
     tokens.value = values.max_output_tokens || '';
-    fillSelect(thinking, `Heredar del modelo (${show(defs.thinking_mode)})`, caps.thinking_modes.map(m => [m, m === 'on' ? 'On' : 'Off']), values.thinking_mode);
+    fillSelect(thinking, `Heredar (${show(defs.thinking_mode)})`, caps.thinking_modes.map(m => [m, m === 'on' ? 'On' : 'Off']), values.thinking_mode);
     thinking.disabled = caps.thinking_modes.length === 0;
-    // Reasoning only makes sense when thinking is (explicitly or by inheritance) on and the model exposes levels.
+
     const gated = thinking.value || defs.thinking_mode;
     const effortOk = caps.reasoning_levels.length > 0 && gated === 'on';
-    fillSelect(effort, `Heredar del modelo (${show(defs.reasoning_effort)})`, caps.reasoning_levels.map(l => [l, l]), values.reasoning_effort);
+    fillSelect(effort, `Heredar (${show(defs.reasoning_effort)})`, caps.reasoning_levels.map(l => [l, l]), values.reasoning_effort);
     if (!effortOk) effort.value = '';
     effort.disabled = !effortOk;
-    tokens.placeholder = `Heredar del modelo (${show(defs.max_output_tokens)})`;
-    if (caps.max_output_tokens_limit) tokens.max = caps.max_output_tokens_limit; else tokens.removeAttribute('max');
-    fillSelect(tier, `Heredar del modelo (${defs.service_tier || 'estándar'})`, caps.service_tiers.map(t => [t, t]), values.service_tier);
+
+    tokens.placeholder = `Heredar (${show(defs.max_output_tokens)})`;
+    if (caps.max_output_tokens_limit) tokens.max = caps.max_output_tokens_limit;
+    else tokens.removeAttribute('max');
+
+    fillSelect(tier, `Heredar (${defs.service_tier || 'estándar'})`, caps.service_tiers.map(t => [t, t]), values.service_tier);
     tier.disabled = caps.service_tiers.length === 0;
+
     const hints = [];
     if (caps.thinking_modes.length === 0) hints.push('Este modelo no expone thinking configurable.');
     else if (gated !== 'on' && caps.reasoning_levels.length) hints.push('Reasoning effort requiere thinking On.');
     card.querySelector('.role-hint').textContent = hints.join(' ');
+
     const count = Object.values(readAdvanced(card)).filter(v => v !== null).length;
     card.querySelector('.role-override-count').textContent = count ? `${count} override${count > 1 ? 's' : ''}` : '';
   }
+
   function renderEffective(card, item) {
     const target = card.querySelector('.component-effective');
     const origin = SCOPE_LABEL[item.source_scope] || item.source_scope;
-    if (!item.effective) { target.textContent = `Efectivo: ${item.strategy} · origen ${origin}${item.error ? ' · ' + item.error : ''}`; return; }
+    const isOwn = item.source_scope === scopeType.value;
+    const originBadge = isOwn
+      ? `<span class="ai-origin is-own"><i class="bi bi-pencil-square"></i>Configurado en este alcance</span>`
+      : `<span class="ai-origin is-inherited"><i class="bi bi-arrow-down-short"></i>Heredado de ${escapeHtml(origin)}</span>`;
+
+    if (!item.effective) {
+      target.innerHTML = `<div class="d-flex justify-content-between align-items-center"><span>Efectivo: <strong>${escapeHtml(item.strategy)}</strong></span> ${originBadge}</div>`;
+      updatePipelineNode(card.dataset.role, item.strategy, origin);
+      return;
+    }
     const rows = FIELDS.map(([name, label]) => {
-      const value = name === 'service_tier' && !item.effective[name] ? 'estándar' : show(item.effective[name]);
-      const src = item.effective_sources[name] === 'role' ? 'override del rol' : 'heredado del modelo';
-      return `${label}: <strong>${escapeHtml(value)}</strong> <span class="badge ${item.effective_sources[name] === 'role' ? 'bg-primary' : 'bg-light text-dark border'}">${src}</span>`;
+      const val = name === 'service_tier' && !item.effective[name] ? 'estándar' : show(item.effective[name]);
+      const src = item.effective_sources[name] === 'role' ? 'override del rol' : 'del modelo';
+      return `<div class="ai-effective-row"><span class="k">${label}</span><span class="v">${escapeHtml(val)} <span class="ai-badge tone-neutral">${src}</span></span></div>`;
     });
-    target.innerHTML = `<div>Efectivo (guardado): <strong>${escapeHtml(item.display_name)}</strong> · origen ${escapeHtml(origin)}</div><div>${rows.join(' · ')}</div>`;
+    target.innerHTML = `<div class="d-flex justify-content-between align-items-center mb-1"><span>Efectivo: <strong>${escapeHtml(item.display_name)}</strong></span> ${originBadge}</div>${rows.join('')}`;
+    updatePipelineNode(card.dataset.role, item.display_name || item.model_key, origin);
   }
-  document.querySelectorAll('.component-card').forEach(card => {
-    const markDirty = () => { const t = card.querySelector('.component-effective'); if (!card.dataset.dirty) { card.dataset.dirty = '1'; t.insertAdjacentHTML('beforeend', ' <span class="badge bg-warning text-dark">cambios sin guardar</span>'); } };
-    card.querySelector('.component-select').addEventListener('change', () => { renderAdvanced(card, readAdvanced(card)); markDirty(); });
-    card.querySelector('.role-advanced').addEventListener('change', () => { renderAdvanced(card, readAdvanced(card)); markDirty(); });
+
+  function updatePipelineNode(role, modelLabel, origin) {
+    const node = document.querySelector(`[data-pipe-role="${role}"]`);
+    if (!node) return;
+    const modelEl = node.querySelector('.node-model');
+    const metaEl = node.querySelector('.node-meta');
+    modelEl.textContent = modelLabel || '—';
+    node.classList.toggle('is-off', modelLabel === 'disabled');
+    metaEl.innerHTML = `<span class="ai-badge tone-neutral">${escapeHtml(origin)}</span>`;
+  }
+
+  function updateDefaultModelPipe(modelName) {
+    const el = document.getElementById('pipe-default-model');
+    if (el) el.textContent = modelName || 'Sin asignar';
+  }
+
+  document.querySelectorAll('.component-card, .ai-component').forEach(card => {
+    const markCardDirty = () => {
+      card.classList.add('is-dirty');
+      const b = card.querySelector('.role-dirty-badge');
+      if (b) b.hidden = false;
+      const node = document.querySelector(`[data-pipe-role="${card.dataset.role}"]`);
+      if (node) node.classList.add('is-dirty');
+      setDirty(true);
+    };
+    card.querySelector('.component-select').addEventListener('change', () => {
+      renderAdvanced(card, readAdvanced(card));
+      markCardDirty();
+    });
+    card.querySelector('.role-advanced').addEventListener('change', () => {
+      renderAdvanced(card, readAdvanced(card));
+      markCardDirty();
+    });
   });
-  function setGrantDisabled() { document.querySelectorAll('.grant-allowed,.grant-selectable,.grant-default').forEach(el => el.disabled = inherit.checked); }
+
+  function setGrantDisabled() {
+    document.querySelectorAll('.grant-allowed,.grant-selectable,.grant-default').forEach(el => el.disabled = inherit.checked);
+  }
+
   async function loadScope() {
-    toggleTargets(); message.innerHTML = '';
-    const query = new URLSearchParams({scope_type: scopeType.value}); if (scopeId()) query.set('scope_id', scopeId());
+    toggleTargets();
+    message.innerHTML = '';
+    setDirty(false);
+    document.querySelectorAll('.ai-component').forEach(c => {
+      c.classList.remove('is-dirty');
+      const b = c.querySelector('.role-dirty-badge');
+      if (b) b.hidden = true;
+    });
+    document.querySelectorAll('.ai-pipe-node').forEach(n => n.classList.remove('is-dirty'));
+
+    const query = new URLSearchParams({scope_type: scopeType.value});
+    if (scopeId()) query.set('scope_id', scopeId());
     const response = await fetch(`{{ url_for('model_catalog.effective_scope') }}?${query}`);
-    const data = await response.json(); if (!response.ok) return showMessage(data.error || 'No se pudo cargar.', 'danger');
+    const data = await response.json();
+    if (!response.ok) return showMessage(data.error || 'No se pudo cargar la configuración del alcance.', 'danger');
+
+    currentLoadedData = data;
     const grants = data.direct_grants.length ? data.direct_grants : data.grants;
     inherit.checked = scopeType.value !== 'global' && data.direct_grants.length === 0;
+
+    let defaultDisplayName = 'Sin predeterminado';
     document.querySelectorAll('tr[data-model]').forEach(row => {
       const grant = grants.find(item => item.model_key === row.dataset.model);
-      row.querySelector('.grant-allowed').checked = !!(grant && grant.allowed);
+      const allowed = !!(grant && grant.allowed);
+      const isDef = !!(grant && grant.is_default);
+      row.querySelector('.grant-allowed').checked = allowed;
       row.querySelector('.grant-selectable').checked = !!(grant && grant.client_selectable !== false);
-      row.querySelector('.grant-default').checked = !!(grant && grant.is_default);
+      row.querySelector('.grant-default').checked = isDef;
+      if (isDef && allowed) {
+        defaultDisplayName = row.querySelector('.ai-cell-title')?.textContent || row.dataset.model;
+      }
     });
+    updateDefaultModelPipe(defaultDisplayName);
     setGrantDisabled();
+
     modelsMeta = data.models || {};
-    document.querySelectorAll('.component-card').forEach(card => {
+    document.querySelectorAll('.ai-component').forEach(card => {
       const select = card.querySelector('.component-select');
-      const item = data.components[card.dataset.role]; const direct = item.direct;
+      const item = data.components[card.dataset.role];
+      if (!item) return;
+      const direct = item.direct;
       const wanted = direct ? (direct.strategy === 'model' ? `model:${direct.model_key}` : direct.strategy) : 'inherit';
       select.value = wanted;
-      if (select.value !== wanted) select.value = 'inherit';   // model no longer enabled
+      if (select.value !== wanted) select.value = 'inherit';
       renderAdvanced(card, direct || {});
-      card.dataset.dirty = '';
       renderEffective(card, item);
     });
   }
+
   async function saveScope() {
     let grants = [];
     if (!inherit.checked || scopeType.value === 'global') {
       document.querySelectorAll('tr[data-model]').forEach(row => {
         const allowed = row.querySelector('.grant-allowed').checked;
-        if (allowed) grants.push({model_key: row.dataset.model, allowed: true, client_selectable: row.querySelector('.grant-selectable').checked, is_default: row.querySelector('.grant-default').checked});
+        if (allowed) {
+          grants.push({
+            model_key: row.dataset.model,
+            allowed: true,
+            client_selectable: row.querySelector('.grant-selectable').checked,
+            is_default: row.querySelector('.grant-default').checked,
+          });
+        }
       });
     }
+
     const roles = {};
-    document.querySelectorAll('.component-card').forEach(card => {
+    document.querySelectorAll('.ai-component').forEach(card => {
       const [strategy, modelKey] = card.querySelector('.component-select').value.split(':');
       const entry = {strategy};
       if (modelKey) {
         entry.model_key = modelKey;
-        const v = readAdvanced(card);   // explicit nulls = inherit from the model
+        const v = readAdvanced(card);
         Object.assign(entry, v);
       }
       roles[card.dataset.role] = entry;
     });
-    const body = {scope_type: scopeType.value, grants, roles}; if (scopeId()) body.scope_id = scopeId();
-    const response = await fetch(`{{ url_for('model_catalog.replace_scope') }}`, {method:'PUT', headers:{'Content-Type':'application/json','X-CSRFToken':csrf}, body:JSON.stringify(body)});
-    const data = await response.json(); if (!response.ok) return showMessage(data.error || 'No se pudo guardar.', 'danger');
-    showMessage('Configuración guardada.'); await loadScope();
+
+    const body = {scope_type: scopeType.value, grants, roles};
+    if (scopeId()) body.scope_id = scopeId();
+
+    const response = await fetch(`{{ url_for('model_catalog.replace_scope') }}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
+      body: JSON.stringify(body)
+    });
+    const data = await response.json();
+    if (!response.ok) return showMessage(data.error || 'No se pudo guardar la configuración.', 'danger');
+
+    showMessage('Configuración del alcance guardada correctamente.');
+    await loadScope();
   }
-  scopeType.addEventListener('change', loadScope); document.getElementById('company-id').addEventListener('change', loadScope); document.getElementById('report-id').addEventListener('change', loadScope); inherit.addEventListener('change', setGrantDisabled); document.getElementById('save-scope').addEventListener('click', saveScope); loadScope();
+
+  scopeType.addEventListener('change', loadScope);
+  companySelect.addEventListener('change', loadScope);
+  reportSelect.addEventListener('change', loadScope);
+  inherit.addEventListener('change', () => {
+    setGrantDisabled();
+    setDirty(true);
+  });
+  document.querySelectorAll('.grant-allowed, .grant-selectable, .grant-default').forEach(input => {
+    input.addEventListener('change', () => setDirty(true));
+  });
+
+  saveBtn.addEventListener('click', saveScope);
+  saveDirtyBtn.addEventListener('click', saveScope);
+  discardBtn.addEventListener('click', loadScope);
+
+  loadScope();
 })();
-</script>{% endblock %}
+</script>
+{% endblock %}
