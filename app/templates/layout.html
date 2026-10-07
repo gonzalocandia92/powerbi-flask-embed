@@ -484,7 +484,7 @@
   {% block styles %}{% endblock %}
   <meta name="csrf-token" content="{{ csrf_token() }}">
 </head>
-<body class="bg-light">
+<body class="bg-light {% block body_class %}{% endblock %}">
 <nav class="navbar navbar-expand-lg navbar-dark">
   <div class="container-fluid">
     <a class="navbar-brand" href="{{ url_for('main.index') }}">

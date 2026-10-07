@@ -1,19 +1,20 @@
 {% extends "admin/ai/shell.html" %}
 {% import "admin/ai/_macros.html" as ui %}
 
-{% set active_section = 'evaluations' %}
+{% set active_ai_section = 'evaluations' %}
+{% set page_crumb = 'Calidad' %}
 {% set page_title = 'Evaluaciones de modelos' %}
-{% set page_subtitle = 'Consola de benchmarks, comparación de rendimiento y control de calidad entre modelos de IA' %}
+{% set page_subtitle = 'Consola de benchmarks, comparación de rendimiento y control de calidad entre modelos de IA.' %}
 
 {% block header_actions %}
-<a class="btn btn-primary" href="{{ url_for('evaluations.new_page') }}">
+<a class="ai-btn-primary" href="{{ url_for('evaluations.new_page') }}">
   <i class="bi bi-plus-lg me-1"></i>Nueva evaluación
 </a>
 {% endblock %}
 
 {% block ai_content %}
 <!-- KPI strip -->
-<div class="ai-kpi-grid mb-4">
+<div class="ai-kpis">
   {{ ui.kpi('Evaluaciones', runs_overview.kpis.runs, 'Ejecuciones registradas', icon='bi-speedometer2') }}
   {{ ui.kpi('Completadas', runs_overview.kpis.completed, 'Benchmarks finalizados', tone='success', icon='bi-check-circle') }}
   {{ ui.kpi('Casos evaluados', runs_overview.kpis.cases, 'Preguntas procesadas', icon='bi-list-check') }}
@@ -22,20 +23,20 @@
 </div>
 
 <!-- Comparison-First Section -->
-<div class="ai-card mb-4">
-  <div class="ai-card-header">
+<div class="ai-surface mb-4">
+  <div class="ai-surface-header">
     <div>
-      <h5 class="ai-card-title mb-0">
+      <h3 class="ai-surface-title">
         <i class="bi bi-bar-chart-steps me-2 text-primary"></i>Comparativa consolidada por modelo
-      </h5>
-      <p class="ai-card-subtitle">
+      </h3>
+      <p class="ai-surface-subtitle">
         Métricas agregadas a lo largo de las evaluaciones. Identifica rápidamente trade-offs entre calidad, latencia y costo por inferencia.
       </p>
     </div>
   </div>
 
   {% if model_comparison %}
-  <div class="table-responsive">
+  <div class="ai-table-wrap">
     <table class="ai-table">
       <thead>
         <tr>
@@ -58,12 +59,12 @@
             <div class="d-flex align-items-center gap-2">
               <span class="fw-bold font-monospace text-dark">{{ m.model_key }}</span>
               {% if m.best.quality and m.quality %}
-                <span class="badge bg-success-subtle text-success border border-success-subtle small">Mejor calidad</span>
+                {{ ui.pill('Mejor calidad', 'success') }}
               {% elif m.best.cost_per_case and m.cost_per_case %}
-                <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle small">Más económico</span>
+                {{ ui.pill('Más económico', 'info') }}
               {% endif %}
             </div>
-            <div class="ai-meta">{{ m.errors }} fallos registrados</div>
+            <div class="ai-cell-sub">{{ m.errors }} fallos registrados</div>
           </td>
           <td class="text-center">
             <span class="fw-semibold">{{ m.runs }}</span> runs · <span class="text-muted">{{ m.cases }} casos</span>
@@ -71,7 +72,7 @@
           <td class="text-center">
             {% if m.quality is not none %}
               {% set q_val = m.quality|round(1) %}
-              <span class="badge {{ 'bg-success' if q_val >= 90 else ('bg-warning text-dark' if q_val >= 70 else 'bg-danger') }}">
+              <span class="fw-semibold {{ 'text-success' if q_val >= 90 else ('text-warning' if q_val >= 70 else 'text-danger') }}">
                 {{ q_val }}%
               </span>
             {% else %}
@@ -84,8 +85,8 @@
               <span class="fw-semibold {{ 'text-success' if s_val >= 95 else ('text-warning' if s_val >= 80 else 'text-danger') }}">
                 {{ s_val }}%
               </span>
-              <div class="progress ai-progress mt-1 mx-auto" style="width: 60px; height: 4px;">
-                <div class="progress-bar {{ 'bg-success' if s_val >= 95 else 'bg-warning' }}" style="width: {{ s_val }}%"></div>
+              <div class="mt-1 mx-auto" style="width: 60px;">
+                {{ ui.progress(s_val, 'success' if s_val >= 95 else 'warning') }}
               </div>
             {% else %}
               <span class="text-muted">--</span>
@@ -129,9 +130,9 @@
               <span class="text-danger" title="Incorrectos">{{ m.incorrect }}</span>
             </div>
             {% if m.pending_review > 0 %}
-              <span class="ai-meta text-warning">{{ m.pending_review }} pendientes</span>
+              <div class="ai-cell-sub text-warning">{{ m.pending_review }} pendientes</div>
             {% else %}
-              <span class="ai-meta text-success">Completada</span>
+              <div class="ai-cell-sub text-success">Completada</div>
             {% endif %}
           </td>
         </tr>
@@ -140,7 +141,7 @@
     </table>
   </div>
   {% else %}
-  <div class="ai-card-body text-center py-5 text-muted">
+  <div class="ai-surface-body text-center py-5 text-muted">
     <i class="bi bi-bar-chart fs-1 d-block mb-2 text-secondary"></i>
     <p class="mb-1">Todavía no hay casos evaluados para construir la comparativa.</p>
     <small>Ejecuta una evaluación para comparar modelos de forma reproducible.</small>
@@ -149,38 +150,36 @@
 </div>
 
 <!-- Evaluation Runs History Section -->
-<div class="ai-card">
-  <div class="ai-card-header">
+<div class="ai-surface" data-ai-filter-scope>
+  <div class="ai-surface-header">
     <div>
-      <h5 class="ai-card-title mb-0">
+      <h3 class="ai-surface-title">
         <i class="bi bi-clock-history me-2 text-primary"></i>Historial de ejecuciones
-      </h5>
-      <p class="ai-card-subtitle">
+      </h3>
+      <p class="ai-surface-subtitle">
         Detalle de todas las corridas de evaluación ejecutadas. Accede al drill-down para revisar casos individuales y trazas.
       </p>
     </div>
   </div>
 
-  <div class="ai-card-body pb-0">
-    <!-- Live filter bar -->
-    <div class="ai-filter-bar mb-3" data-ai-filter-scope="#runs-table">
-      <div class="ai-filter-item flex-grow-1">
-        <input type="search" class="form-control form-control-sm" data-ai-filter-search placeholder="Buscar evaluación o reporte...">
-      </div>
-      <div class="ai-filter-item">
-        <select class="form-select form-select-sm" data-ai-filter-col="2">
-          <option value="">Todos los estados</option>
-          <option value="completed">completed</option>
-          <option value="running">running</option>
-          <option value="queued">queued</option>
-          <option value="failed">failed</option>
-          <option value="cancelled">cancelled</option>
-        </select>
-      </div>
+  <div class="ai-toolbar">
+    <div class="ai-field grow">
+      <input type="search" class="form-control" data-filter-search placeholder="Buscar evaluación o reporte...">
     </div>
+    <div class="ai-field">
+      <select class="form-select" data-filter="status">
+        <option value="">Todos los estados</option>
+        <option value="completed">completed</option>
+        <option value="running">running</option>
+        <option value="queued">queued</option>
+        <option value="failed">failed</option>
+        <option value="cancelled">cancelled</option>
+      </select>
+    </div>
+    <div class="ai-toolbar-count" data-filter-count></div>
   </div>
 
-  <div class="table-responsive">
+  <div class="ai-table-wrap">
     <table class="ai-table" id="runs-table">
       <thead>
         <tr>
@@ -196,10 +195,10 @@
       <tbody>
         {% for run in runs %}
         {% set run_stat = runs_overview.per_run.get(run.id, {}) %}
-        <tr>
+        <tr data-filter-row data-status="{{ run.status }}" data-search="{{ run.name }} {{ run.report.name if run.report else '' }} {{ run.id }}">
           <td>
             <div class="fw-bold text-dark">{{ run.name }}</div>
-            <div class="ai-meta">
+            <div class="ai-cell-sub">
               <span class="font-monospace">#{{ run.id }}</span> ·
               <span>{{ run.mode }}</span> ·
               <span>caché {{ run.cache_mode }}</span>
@@ -212,17 +211,9 @@
             <span class="fw-semibold">{{ run.report.name if run.report else 'Reporte eliminado' }}</span>
           </td>
           <td>
-            {% if run.status == 'completed' %}
-              <span class="badge bg-success-subtle text-success border border-success-subtle">completed</span>
-            {% elif run.status in ['failed', 'completed_with_errors'] %}
-              <span class="badge bg-danger-subtle text-danger border border-danger-subtle">{{ run.status }}</span>
-            {% elif run.status in ['running', 'queued'] %}
-              <span class="badge bg-info-subtle text-info border border-info-subtle">{{ run.status }}</span>
-            {% else %}
-              <span class="badge bg-secondary-subtle text-secondary border border-secondary-subtle">{{ run.status }}</span>
-            {% endif %}
+            {{ ui.status_badge(run.status) }}
             {% if run_stat.errors > 0 %}
-              <div class="ai-meta text-danger">{{ run_stat.errors }} errores</div>
+              <div class="ai-cell-sub text-danger">{{ run_stat.errors }} errores</div>
             {% endif %}
           </td>
           <td>
@@ -231,9 +222,7 @@
               <span class="fw-semibold">{{ run.completed_cases }}/{{ run.total_cases }}</span>
               <span class="text-muted">{{ pct }}%</span>
             </div>
-            <div class="progress ai-progress">
-              <div class="progress-bar {{ 'bg-success' if run.status == 'completed' else 'bg-primary' }}" style="width: {{ pct }}%"></div>
-            </div>
+            {{ ui.progress(pct, 'success' if run.status == 'completed' else 'primary') }}
           </td>
           <td class="text-end font-monospace">
             ${{ '%.5f'|format(run_stat.cost or 0) }}
@@ -242,7 +231,7 @@
             {{ run.created_at.strftime('%d/%m/%Y %H:%M') if run.created_at else '--' }}
           </td>
           <td class="text-end">
-            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('evaluations.detail_page', run_id=run.id) }}">
+            <a class="ai-btn-ghost btn-sm" href="{{ url_for('evaluations.detail_page', run_id=run.id) }}">
               <i class="bi bi-eye me-1"></i>Drill-down
             </a>
           </td>
@@ -254,6 +243,11 @@
           </td>
         </tr>
         {% endfor %}
+        <tr data-filter-empty hidden>
+          <td colspan="7">
+            {{ ui.empty_state('search', 'No se encontraron evaluaciones con los filtros seleccionados.') }}
+          </td>
+        </tr>
       </tbody>
     </table>
   </div>

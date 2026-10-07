@@ -1,12 +1,13 @@
 {% extends "admin/ai/shell.html" %}
 {% import "admin/ai/_macros.html" as ui %}
 
-{% set active_section = 'reporting_history' %}
+{% set active_ai_section = 'reporting_history' %}
+{% set page_crumb = 'Reporting' %}
 {% set page_title = 'Historial de informes KLARA' %}
-{% set page_subtitle = 'Registro cronológico de ejecuciones analíticas, seguimiento de estados y descarga de informes' %}
+{% set page_subtitle = 'Registro cronológico de ejecuciones analíticas, seguimiento de estados y descarga de informes.' %}
 
 {% block header_actions %}
-<a class="btn btn-primary" href="{{ url_for('ai_reporting.page') }}">
+<a class="ai-btn-primary" href="{{ url_for('ai_reporting.page') }}">
   <i class="bi bi-plus-lg me-1"></i>Nuevo informe
 </a>
 {% endblock %}
@@ -16,12 +17,12 @@
   <div id="history-message" class="alert alert-danger d-none" role="alert"></div>
 
   <!-- Filter Card -->
-  <div class="ai-card mb-4">
-    <div class="ai-card-body">
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-body">
       <form id="history-filters" class="row g-3 align-items-end">
         <div class="col-md-4">
-          <label class="form-label fw-semibold" for="f-report">Reporte (con KLARA habilitada)</label>
-          <select class="form-select form-select-sm" id="f-report" name="report_id" data-searchable>
+          <label class="form-label" for="f-report">Reporte (con KLARA habilitada)</label>
+          <select class="form-select" id="f-report" name="report_id" data-searchable>
             <option value="">Todos los reportes</option>
             {% for report in reports %}
               <option value="{{ report.id }}">{{ report.name }}</option>
@@ -29,8 +30,8 @@
           </select>
         </div>
         <div class="col-md-2">
-          <label class="form-label fw-semibold" for="f-status">Estado</label>
-          <select class="form-select form-select-sm" id="f-status" name="status">
+          <label class="form-label" for="f-status">Estado</label>
+          <select class="form-select" id="f-status" name="status">
             <option value="">Todos</option>
             {% for status in statuses %}
               <option value="{{ status }}">{{ status }}</option>
@@ -38,18 +39,18 @@
           </select>
         </div>
         <div class="col-md-2">
-          <label class="form-label fw-semibold" for="f-from">Desde</label>
-          <input class="form-control form-control-sm" type="date" id="f-from" name="date_from">
+          <label class="form-label" for="f-from">Desde</label>
+          <input class="form-control" type="date" id="f-from" name="date_from">
         </div>
         <div class="col-md-2">
-          <label class="form-label fw-semibold" for="f-to">Hasta</label>
-          <input class="form-control form-control-sm" type="date" id="f-to" name="date_to">
+          <label class="form-label" for="f-to">Hasta</label>
+          <input class="form-control" type="date" id="f-to" name="date_to">
         </div>
         <div class="col-md-2 d-flex gap-2">
-          <button class="btn btn-primary btn-sm w-100" type="submit">
+          <button class="ai-btn-primary btn-sm w-100" type="submit">
             <i class="bi bi-funnel me-1"></i>Filtrar
           </button>
-          <button class="btn btn-outline-secondary btn-sm" type="reset" id="f-reset" title="Restablecer filtros">
+          <button class="ai-btn-ghost btn-sm" type="reset" id="f-reset" title="Restablecer filtros">
             Limpiar
           </button>
         </div>
@@ -58,8 +59,8 @@
   </div>
 
   <!-- Results Card -->
-  <div class="ai-card">
-    <div class="table-responsive">
+  <div class="ai-surface">
+    <div class="ai-table-wrap">
       <table class="ai-table">
         <thead>
           <tr>
@@ -81,11 +82,11 @@
         </tbody>
       </table>
     </div>
-    <div class="ai-card-body d-flex justify-content-between align-items-center border-top">
+    <div class="ai-surface-body d-flex justify-content-between align-items-center border-top">
       <small class="text-muted" id="history-summary"></small>
       <div class="btn-group btn-group-sm">
-        <button class="btn btn-outline-secondary" id="history-prev" type="button">Anterior</button>
-        <button class="btn btn-outline-secondary" id="history-next" type="button">Siguiente</button>
+        <button class="ai-btn-secondary btn-sm" id="history-prev" type="button">Anterior</button>
+        <button class="ai-btn-secondary btn-sm" id="history-next" type="button">Siguiente</button>
       </div>
     </div>
   </div>

@@ -1,23 +1,26 @@
 {% extends "admin/ai/shell.html" %}
 {% import "admin/ai/_macros.html" as ui %}
 
-{% set active_section = 'skills' %}
+{% set active_ai_section = 'skills' %}
+{% set page_crumb = 'Agente KLARA' %}
 {% set page_title = 'Importar skills' %}
-{% set page_subtitle = 'Sube un CSV completo exportado o un CSV parcial tipo patch por ID para actualizar skills analíticas' %}
+{% set page_subtitle = 'Sube un CSV completo exportado o un CSV parcial tipo patch por ID para actualizar skills analíticas.' %}
 
 {% block header_actions %}
-<a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='skills') }}">
+<a class="ai-btn-secondary" href="{{ url_for('ai_config.index', tab='skills') }}">
   <i class="bi bi-arrow-left me-1"></i>Volver a skills
 </a>
 {% endblock %}
 
 {% block ai_content %}
-
-  <div class="ai-card mb-4">
-    <div class="ai-card-header">
-      <h5 class="mb-0"><i class="bi bi-filetype-csv me-2"></i>Archivo CSV</h5>
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-header">
+      <div>
+        <h3 class="ai-surface-title"><i class="bi bi-filetype-csv me-2 text-primary"></i>Archivo CSV</h3>
+        <p class="ai-surface-subtitle">Selecciona el archivo y modo de procesamiento.</p>
+      </div>
     </div>
-    <div class="ai-card-body">
+    <div class="ai-surface-body">
       <form method="post" action="{{ url_for('ai_config.skill_import_preview') }}" enctype="multipart/form-data">
         <div class="row g-3 align-items-end">
           <div class="col-lg-7">
@@ -34,83 +37,67 @@
             <div class="form-text">Para borrar en patch usa clear_fields.</div>
           </div>
           <div class="col-lg-2">
-            <button class="btn btn-primary w-100" type="submit">
+            <button class="ai-btn-primary w-100" type="submit">
               <i class="bi bi-search me-1"></i>Previsualizar
             </button>
           </div>
         </div>
-        <div class="alert alert-light border mt-3 mb-0 small">
-          <div><strong>Patch minimo:</strong> <code>id,content</code></div>
-          <div><strong>Patch con dos campos:</strong> <code>id,content,routing_text</code></div>
-          <div><strong>Borrar campo:</strong> <code>id,clear_fields</code> con <code>clear_fields=description</code></div>
+        <div class="ai-callout tone-neutral mt-3 mb-0 small">
+          <i class="bi bi-info-circle"></i>
+          <div class="ai-callout-body">
+            <div><strong>Patch minimo:</strong> <code>id,content</code></div>
+            <div><strong>Patch con dos campos:</strong> <code>id,content,routing_text</code></div>
+            <div><strong>Borrar campo:</strong> <code>id,clear_fields</code> con <code>clear_fields=description</code></div>
+          </div>
         </div>
       </form>
     </div>
   </div>
 
   {% if preview %}
-  <div class="ai-card">
-    <div class="ai-card-header">
-      <div class="d-flex flex-wrap justify-content-between align-items-center gap-2">
-        <h5 class="mb-0"><i class="bi bi-list-check me-2"></i>Vista previa</h5>
+  <div class="ai-surface">
+    <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div>
+        <h3 class="ai-surface-title"><i class="bi bi-list-check me-2 text-primary"></i>Vista previa</h3>
+        <p class="ai-surface-subtitle">Revisa el resumen de cambios antes de confirmar.</p>
+      </div>
+      <div>
         {% if import_token %}
         <form method="post" action="{{ url_for('ai_config.skill_import_confirm') }}">
           <textarea class="d-none" name="import_token">{{ import_token }}</textarea>
-          <button class="btn btn-success" type="submit" onclick="return confirm('Esto aplicara la importacion. Si algo falla, no se guardara nada.');">
+          <button class="ai-btn-primary" type="submit" onclick="return confirm('Esto aplicara la importacion. Si algo falla, no se guardara nada.');">
             <i class="bi bi-check2-circle me-1"></i>Confirmar importacion
           </button>
         </form>
         {% else %}
-        <button class="btn btn-secondary" type="button" disabled>
+        <button class="ai-btn-secondary" type="button" disabled>
           <i class="bi bi-lock me-1"></i>Corregir errores para confirmar
         </button>
         {% endif %}
       </div>
     </div>
-    <div class="ai-card-body">
+    <div class="ai-surface-body">
       {% if preview.errors %}
-      <div class="alert alert-danger">
-        {% for error in preview.errors %}
-        <div>{{ error }}</div>
-        {% endfor %}
+      <div class="ai-callout tone-danger mb-4">
+        <i class="bi bi-exclamation-triangle"></i>
+        <div class="ai-callout-body">
+          {% for error in preview.errors %}
+          <div>{{ error }}</div>
+          {% endfor %}
+        </div>
       </div>
       {% endif %}
 
-      <div class="row row-cols-1 row-cols-md-2 row-cols-xl-5 g-3 mb-4">
-        <div class="col">
-          <div class="border rounded p-3 h-100">
-            <div class="text-muted small fw-bold text-uppercase">Nuevas</div>
-            <div class="fs-4 fw-bold text-primary">{{ preview.summary['create'] }}</div>
-          </div>
-        </div>
-        <div class="col">
-          <div class="border rounded p-3 h-100">
-            <div class="text-muted small fw-bold text-uppercase">Actualizaciones</div>
-            <div class="fs-4 fw-bold text-warning">{{ preview.summary['update'] }}</div>
-          </div>
-        </div>
-        <div class="col">
-          <div class="border rounded p-3 h-100">
-            <div class="text-muted small fw-bold text-uppercase">Patches</div>
-            <div class="fs-4 fw-bold text-info">{{ preview.summary['patch'] }}</div>
-          </div>
-        </div>
-        <div class="col">
-          <div class="border rounded p-3 h-100">
-            <div class="text-muted small fw-bold text-uppercase">Sin cambios</div>
-            <div class="fs-4 fw-bold text-secondary">{{ preview.summary['unchanged'] }}</div>
-          </div>
-        </div>
-        <div class="col">
-          <div class="border rounded p-3 h-100">
-            <div class="text-muted small fw-bold text-uppercase">Errores</div>
-            <div class="fs-4 fw-bold {{ 'text-danger' if preview.summary['error'] else 'text-success' }}">{{ preview.summary['error'] }}</div>
-          </div>
-        </div>
+      <div class="ai-kpis mb-4">
+        {{ ui.kpi('Nuevas', preview.summary['create'], 'Skills a crear', 'primary') }}
+        {{ ui.kpi('Actualizaciones', preview.summary['update'], 'Skills a actualizar', 'warning') }}
+        {{ ui.kpi('Patches', preview.summary['patch'], 'Modificaciones puntuales', 'neutral') }}
+        {{ ui.kpi('Sin cambios', preview.summary['unchanged'], 'Sin diferencias', 'neutral') }}
+        {{ ui.kpi('Errores', preview.summary['error'], 'Filas con fallo', 'danger' if preview.summary['error'] else 'success') }}
       </div>
 
-      <div class="table-responsive">
-        <table class="table align-middle">
+      <div class="ai-table-wrap">
+        <table class="ai-table">
           <thead>
             <tr>
               <th>Fila</th>
@@ -125,27 +112,27 @@
           <tbody>
             {% for row in preview.rows %}
             <tr>
-              <td>{{ row.row_number }}</td>
+              <td class="font-monospace">{{ row.row_number }}</td>
               <td>
                 {% if row.action == 'create' %}
-                <span class="badge bg-primary">Nueva</span>
+                {{ ui.pill('Nueva', 'primary') }}
                 {% elif row.action == 'update' %}
-                <span class="badge bg-warning text-dark">Actualizar</span>
+                {{ ui.pill('Actualizar', 'warning') }}
                 {% elif row.action == 'patch' %}
-                <span class="badge bg-info text-dark">Patch</span>
+                {{ ui.pill('Patch', 'info') }}
                 {% elif row.action == 'unchanged' %}
-                <span class="badge bg-secondary">Sin cambios</span>
+                {{ ui.pill('Sin cambios', 'neutral') }}
                 {% else %}
-                <span class="badge bg-danger">Error</span>
+                {{ ui.pill('Error', 'danger') }}
                 {% endif %}
               </td>
               <td>{{ row.scope or '--' }}</td>
-              <td class="fw-semibold">{{ row.skill_key or '--' }}</td>
+              <td class="fw-semibold font-monospace">{{ row.skill_key or '--' }}</td>
               <td>{{ row.title or '--' }}</td>
               <td>
                 {% if row.data and row.data.changed_fields %}
                 {% for field_name in row.data.changed_fields %}
-                <span class="badge bg-light text-dark border">{{ field_name }}</span>
+                {{ ui.pill(field_name, 'neutral') }}
                 {% endfor %}
                 {% else %}
                 <span class="text-muted">--</span>
@@ -153,7 +140,7 @@
               </td>
               <td>
                 {% if row.errors %}
-                <ul class="mb-0 ps-3">
+                <ul class="mb-0 ps-3 text-danger small">
                   {% for error in row.errors %}
                   <li>{{ error }}</li>
                   {% endfor %}

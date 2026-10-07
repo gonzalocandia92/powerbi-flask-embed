@@ -1,12 +1,13 @@
 {% extends "admin/ai/shell.html" %}
 {% import "admin/ai/_macros.html" as ui %}
 
-{% set active_section = 'evaluations' %}
+{% set active_ai_section = 'evaluations' %}
+{% set page_crumb = 'Calidad' %}
 {% set page_title = 'Nueva evaluación de modelos' %}
-{% set page_subtitle = 'Configura y ejecuta un benchmark reproducible para comparar modelos sobre las mismas preguntas y reporte' %}
+{% set page_subtitle = 'Configura y ejecuta un benchmark reproducible para comparar modelos sobre las mismas preguntas y reporte.' %}
 
 {% block header_actions %}
-<a class="btn btn-outline-secondary" href="{{ url_for('evaluations.runs_page') }}">
+<a class="ai-btn-secondary" href="{{ url_for('evaluations.runs_page') }}">
   <i class="bi bi-arrow-left me-1"></i>Volver
 </a>
 {% endblock %}
@@ -18,19 +19,21 @@
   <div class="row g-4">
     <div class="col-xl-8">
       <!-- Context & Models Card -->
-      <div class="ai-card mb-4">
-        <div class="ai-card-header">
-          <h5 class="ai-card-title mb-0">1. Contexto y selección de modelos</h5>
-          <p class="ai-card-subtitle">Define el nombre del benchmark, el reporte analítico objetivo y los modelos a comparar.</p>
+      <div class="ai-surface mb-4">
+        <div class="ai-surface-header">
+          <div>
+            <h3 class="ai-surface-title">1. Contexto y selección de modelos</h3>
+            <p class="ai-surface-subtitle">Define el nombre del benchmark, el reporte analítico objetivo y los modelos a comparar.</p>
+          </div>
         </div>
-        <div class="ai-card-body">
+        <div class="ai-surface-body">
           <div class="row g-3">
             <div class="col-md-7">
-              <label class="form-label fw-semibold" for="name">Nombre de la evaluación</label>
+              <label class="form-label" for="name">Nombre de la evaluación</label>
               <input class="form-control" id="name" maxlength="200" value="Comparación de modelos" placeholder="Ej.: Benchmark Q3 - Análisis de Ventas">
             </div>
             <div class="col-md-5">
-              <label class="form-label fw-semibold" for="report">Reporte (con KLARA habilitada)</label>
+              <label class="form-label" for="report">Reporte (con KLARA habilitada)</label>
               <select class="form-select" id="report" data-searchable>
                 {% for report in reports %}
                   <option value="{{ report.id }}">{{ report.name }}</option>
@@ -38,16 +41,16 @@
               </select>
             </div>
             <div class="col-12">
-              <label class="form-label fw-semibold">Modelos listos para evaluación</label>
+              <label class="form-label">Modelos listos para evaluación</label>
               <div class="row g-2">
                 {% for model in models %}
                 <div class="col-md-6">
-                  <label class="border rounded p-3 d-flex gap-2 h-100 bg-white shadow-xs cursor-pointer">
+                  <label class="border rounded p-3 d-flex gap-2 h-100 bg-white cursor-pointer" style="transition: border-color 0.15s ease;">
                     <input class="form-check-input model-check mt-1" type="checkbox" value="{{ model.model_key }}">
                     <div>
                       <div class="fw-bold font-monospace text-dark">{{ model.display_name }}</div>
                       <small class="text-muted d-block">{{ model.provider }} · {{ model.physical_model }}</small>
-                      <span class="badge bg-success-subtle text-success border border-success-subtle small mt-1">Listo para evaluar</span>
+                      <span class="ai-pill tone-success mt-1">Listo para evaluar</span>
                     </div>
                   </label>
                 </div>
@@ -61,26 +64,26 @@
       </div>
 
       <!-- Questions Card -->
-      <div class="ai-card">
-        <div class="ai-card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div class="ai-surface">
+        <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-2">
           <div>
-            <h5 class="ai-card-title mb-0">2. Banco de preguntas</h5>
-            <p class="ai-card-subtitle">Preguntas analíticas contra las cuales se ejecutará cada modelo.</p>
+            <h3 class="ai-surface-title">2. Banco de preguntas</h3>
+            <p class="ai-surface-subtitle">Preguntas analíticas contra las cuales se ejecutará cada modelo.</p>
           </div>
           <div class="d-flex gap-2">
-            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('evaluations.questions_template') }}">
+            <a class="ai-btn-ghost btn-sm" href="{{ url_for('evaluations.questions_template') }}">
               <i class="bi bi-download me-1"></i>Plantilla CSV
             </a>
-            <label class="btn btn-sm btn-outline-primary mb-0">
+            <label class="ai-btn-secondary btn-sm mb-0">
               <i class="bi bi-upload me-1"></i>Importar CSV
               <input id="csv-file" type="file" accept=".csv,text/csv" hidden>
             </label>
-            <button class="btn btn-sm btn-primary" id="add-question" type="button">
+            <button class="ai-btn-primary btn-sm" id="add-question" type="button">
               <i class="bi bi-plus-lg me-1"></i>Agregar pregunta
             </button>
           </div>
         </div>
-        <div class="ai-card-body">
+        <div class="ai-surface-body">
           <div id="csv-message"></div>
           <div id="questions"></div>
         </div>
@@ -89,21 +92,23 @@
 
     <!-- Sidebar: Configuration & Summary -->
     <div class="col-xl-4">
-      <div class="ai-card mb-4">
-        <div class="ai-card-header">
-          <h5 class="ai-card-title mb-0">Variantes de ejecución</h5>
-          <p class="ai-card-subtitle">Estrategias de caché y componentes del pipeline.</p>
+      <div class="ai-surface mb-4">
+        <div class="ai-surface-header">
+          <div>
+            <h3 class="ai-surface-title">Variantes de ejecución</h3>
+            <p class="ai-surface-subtitle">Estrategias de caché y componentes del pipeline.</p>
+          </div>
         </div>
-        <div class="ai-card-body">
+        <div class="ai-surface-body">
           <div class="mb-3">
-            <label class="form-label fw-semibold" for="mode">Continuidad conversacional</label>
+            <label class="form-label" for="mode">Continuidad conversacional</label>
             <select class="form-select" id="mode">
               <option value="independent">Preguntas independientes</option>
               <option value="conversation">Conversación concatenada</option>
             </select>
           </div>
           <div class="mb-3">
-            <label class="form-label fw-semibold" for="cache-mode">Modo de caché</label>
+            <label class="form-label" for="cache-mode">Modo de caché</label>
             <select class="form-select" id="cache-mode">
               <option value="cold">Solo cold (sin prompt cache)</option>
               <option value="warm">Solo warm (con prompt cache)</option>
@@ -111,7 +116,7 @@
             </select>
           </div>
           <div class="mb-3">
-            <label class="form-label fw-semibold" for="selector-strategy">Selector de skills</label>
+            <label class="form-label" for="selector-strategy">Selector de skills</label>
             <select class="form-select" id="selector-strategy">
               <option value="current">Configuración actual del sistema</option>
               <option value="embeddings">Solo embeddings</option>
@@ -120,7 +125,7 @@
             </select>
           </div>
           <div>
-            <label class="form-label fw-semibold" for="rewriter-strategy">Reescritor de query</label>
+            <label class="form-label" for="rewriter-strategy">Reescritor de query</label>
             <select class="form-select" id="rewriter-strategy">
               <option value="current">Configuración actual</option>
               <option value="disabled">Deshabilitado</option>
@@ -129,11 +134,11 @@
         </div>
       </div>
 
-      <div class="ai-card">
-        <div class="ai-card-header">
-          <h5 class="ai-card-title mb-0">Resumen del benchmark</h5>
+      <div class="ai-surface">
+        <div class="ai-surface-header">
+          <h3 class="ai-surface-title">Resumen del benchmark</h3>
         </div>
-        <div class="ai-card-body">
+        <div class="ai-surface-body">
           <dl class="row mb-3">
             <dt class="col-7 text-muted">Modelos seleccionados</dt>
             <dd class="col-5 text-end font-monospace fw-bold" id="model-count">0</dd>
@@ -142,10 +147,13 @@
             <dt class="col-7 text-muted">Casos totales a inferir</dt>
             <dd class="col-5 text-end font-monospace fw-bold fs-5 text-primary" id="case-count">0</dd>
           </dl>
-          <div class="alert alert-warning small mb-3">
-            <i class="bi bi-info-circle me-1"></i>La evaluación consume tokens reales de la API y se registra en el billing del reporte asociado.
+          <div class="ai-callout tone-warning mb-3">
+            <i class="bi bi-info-circle me-1"></i>
+            <div class="ai-callout-body">
+              La evaluación consume tokens reales de la API y se registra en el billing del reporte asociado.
+            </div>
           </div>
-          <button class="btn btn-primary w-100 py-2" id="run-evaluation" type="button">
+          <button class="ai-btn-primary w-100 py-2" id="run-evaluation" type="button">
             <i class="bi bi-play-fill me-1"></i>Ejecutar evaluación
           </button>
         </div>
@@ -168,7 +176,7 @@
   function addQuestion(question='', expected='') {
     const index = questions.children.length + 1;
     questions.insertAdjacentHTML('beforeend', `
-      <div class="row g-2 align-items-start mb-3 question-row p-2 border rounded bg-light">
+      <div class="row g-2 align-items-start mb-3 question-row p-2 border rounded bg-white">
         <div class="col-auto pt-2 text-muted fw-bold question-index font-monospace">${index}</div>
         <div class="col">
           <textarea class="form-control question" rows="2" placeholder="Pregunta analítica..." required>${escapeHtml(question)}</textarea>
@@ -177,7 +185,7 @@
           <textarea class="form-control expected" rows="2" placeholder="Respuesta o criterio esperado (opcional)">${escapeHtml(expected)}</textarea>
         </div>
         <div class="col-auto">
-          <button class="btn btn-outline-danger remove-question" type="button" aria-label="Eliminar"><i class="bi bi-trash"></i></button>
+          <button class="ai-btn-icon text-danger remove-question" type="button" aria-label="Eliminar"><i class="bi bi-trash"></i></button>
         </div>
       </div>
     `);
@@ -218,13 +226,13 @@
       });
       const data = await response.json();
       if (!response.ok) {
-        csvMsg.innerHTML = `<div class="alert alert-danger">${(data.errors || ['CSV inválido']).map(escapeHtml).join('<br>')}</div>`;
+        csvMsg.innerHTML = `<div class="ai-callout tone-danger mb-3"><div class="ai-callout-body">${(data.errors || ['CSV inválido']).map(escapeHtml).join('<br>')}</div></div>`;
         return;
       }
       data.rows.forEach(row => addQuestion(row.question, row.expected_answer || ''));
-      csvMsg.innerHTML = `<div class="alert alert-success">Se importaron ${data.rows.length} preguntas correctamente.${data.warnings.length ? '<br>' + data.warnings.map(escapeHtml).join('<br>') : ''}</div>`;
+      csvMsg.innerHTML = `<div class="ai-callout tone-success mb-3"><div class="ai-callout-body">Se importaron ${data.rows.length} preguntas correctamente.${data.warnings.length ? '<br>' + data.warnings.map(escapeHtml).join('<br>') : ''}</div></div>`;
     } catch (err) {
-      csvMsg.innerHTML = `<div class="alert alert-danger">Error al procesar el archivo CSV.</div>`;
+      csvMsg.innerHTML = `<div class="ai-callout tone-danger mb-3"><div class="ai-callout-body">Error al procesar el archivo CSV.</div></div>`;
     }
     e.target.value = '';
   });
@@ -237,11 +245,11 @@
 
     const models = [...document.querySelectorAll('.model-check:checked')].map(el => el.value);
     if (!models.length) {
-      msg.innerHTML = `<div class="alert alert-danger">Selecciona al menos un modelo para evaluar.</div>`;
+      msg.innerHTML = `<div class="ai-callout tone-danger mb-3"><div class="ai-callout-body">Selecciona al menos un modelo para evaluar.</div></div>`;
       return;
     }
     if (!rows.length) {
-      msg.innerHTML = `<div class="alert alert-danger">Ingresa al menos una pregunta para la evaluación.</div>`;
+      msg.innerHTML = `<div class="ai-callout tone-danger mb-3"><div class="ai-callout-body">Ingresa al menos una pregunta para la evaluación.</div></div>`;
       return;
     }
 
@@ -272,14 +280,14 @@
       if (!response.ok) {
         runBtn.disabled = false;
         runBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Ejecutar evaluación';
-        msg.innerHTML = `<div class="alert alert-danger">${escapeHtml(data.error || 'No se pudo crear la evaluación.')}</div>`;
+        msg.innerHTML = `<div class="ai-callout tone-danger mb-3"><div class="ai-callout-body">${escapeHtml(data.error || 'No se pudo crear la evaluación.')}</div></div>`;
         return;
       }
       window.location.href = `{{ url_for('evaluations.runs_page') }}/${data.id}`;
     } catch (err) {
       runBtn.disabled = false;
       runBtn.innerHTML = '<i class="bi bi-play-fill me-1"></i>Ejecutar evaluación';
-      msg.innerHTML = `<div class="alert alert-danger">Error de red al crear la evaluación.</div>`;
+      msg.innerHTML = `<div class="ai-callout tone-danger mb-3"><div class="ai-callout-body">Error de red al crear la evaluación.</div></div>`;
     }
   });
 

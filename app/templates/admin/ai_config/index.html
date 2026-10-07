@@ -1,5 +1,5 @@
 {% extends "admin/ai/shell.html" %}
-{% from "admin/ai/_macros.html" import page_header, kpi, badge, origin_badge, scope_badge, active_badge, empty_state, progress, callout, searchable_select, money %}
+{% from "admin/ai/_macros.html" import page_header, kpi, badge, pill, origin_badge, scope_badge, active_badge, status_badge, empty_state, progress, callout, searchable_select, money %}
 
 {% block title %}
   {%- if active_tab == 'limits' -%}Límites de consumo
@@ -10,20 +10,71 @@
 
 {% set active_ai_section = active_tab %}
 
+{%- if active_tab == 'limits' -%}
+  {% set page_crumb = 'Gobierno' %}
+  {% set page_title = 'Límites de consumo' %}
+  {% set page_subtitle = 'Presupuesto mensual y control de gasto por empresa con fallback al default global.' %}
+{%- elif active_tab == 'pricing' -%}
+  {% set page_crumb = 'Gobierno' %}
+  {% set page_title = 'Pricing de modelos' %}
+  {% set page_subtitle = 'Tarifas unitarias por millón de tokens aplicadas a la imputación de consumo de KLARA.' %}
+{%- elif active_tab == 'prompts' -%}
+  {% set page_crumb = 'Agente KLARA' %}
+  {% set page_title = 'Prompts del agente' %}
+  {% set page_subtitle = 'Configurá instrucciones complementarias por alcance. La resolución es aditiva a lo largo de la cadena.' %}
+{%- else -%}
+  {% set page_crumb = 'Agente KLARA' %}
+  {% set page_title = 'Skills analíticas' %}
+  {% set page_subtitle = 'Catálogo unificado de conocimientos analíticos operacionales para KLARA.' %}
+{%- endif -%}
+
+{% block header_actions %}
+  {% if active_tab == 'limits' %}
+    <a class="ai-btn ai-btn-secondary" href="{{ url_for('ai_config.global_limit') }}">
+      <i class="bi bi-gear me-1"></i>Configurar default global
+    </a>
+  {% elif active_tab == 'pricing' %}
+    <a class="ai-btn ai-btn-primary" href="{{ url_for('ai_config.pricing_new') }}">
+      <i class="bi bi-plus-lg me-1"></i>Nuevo pricing
+    </a>
+  {% elif active_tab == 'prompts' %}
+    {% if prompt_editor and prompt_editor.action %}
+      <a class="ai-btn ai-btn-primary" href="{{ prompt_editor.action }}">
+        <i class="bi bi-pencil me-1"></i>Editar prompt seleccionado
+      </a>
+    {% endif %}
+  {% elif active_tab == 'skills' %}
+    <div class="btn-group">
+      <button class="ai-btn ai-btn-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
+        <i class="bi bi-download me-1"></i>Exportar CSV
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end">
+        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='all') }}">Todas las skills</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='global') }}">Solo globales</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='report') }}">Todos los reportes</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='empresa') }}">Todas las empresas</a></li>
+        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='dataset') }}">Todos los datasets</a></li>
+      </ul>
+    </div>
+    <a class="ai-btn ai-btn-secondary" href="{{ url_for('ai_config.skill_import') }}">
+      <i class="bi bi-upload me-1"></i>Importar CSV
+    </a>
+    <form class="d-inline" method="post" action="{{ url_for('ai_config.skill_reindex_all') }}" onsubmit="return confirm('Esto reindexará en background las skills activas con embeddings pendientes.');">
+      <button class="ai-btn ai-btn-secondary" type="submit">
+        <i class="bi bi-arrow-repeat me-1"></i>Reindexar activas
+      </button>
+    </form>
+    <a class="ai-btn ai-btn-primary" href="{{ url_for('ai_config.skill_new') }}">
+      <i class="bi bi-plus-lg me-1"></i>Nueva skill
+    </a>
+  {% endif %}
+{% endblock %}
+
 {% block ai_content %}
 {% if active_tab == 'limits' %}
   {# ====================================================================== #}
   {# 1. GOBIERNO · LÍMITES DE CONSUMO                                      #}
   {# ====================================================================== #}
-  {% call page_header(
-      'Límites de consumo',
-      'Presupuesto mensual y control de gasto por empresa con fallback al default global.',
-      'Gobierno'
-  ) %}
-    <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.global_limit') }}">
-      <i class="bi bi-gear me-1"></i>Configurar default global
-    </a>
-  {% endcall %}
 
   {% set kv = limits_view.kpis %}
   <div class="ai-kpis">
@@ -36,34 +87,34 @@
     {% endif %}
   </div>
 
-  {# Card destacada de Default Global (Herencia nivel 1) #}
+  {# Superficie de Default Global (Herencia nivel 1) #}
   {% set g = limits_view.global_row %}
-  <div class="ai-card mb-3">
-    <div class="ai-card-header">
+  <div class="ai-surface mb-3">
+    <div class="ai-surface-header">
       <div>
-        <h3><i class="bi bi-globe2 me-2 text-primary"></i>Default Global</h3>
-        <span class="ai-sub">Aplica como fallback a cualquier reporte o empresa que no tenga un override propio activo.</span>
+        <h3 class="ai-surface-title"><i class="bi bi-globe2 me-2 text-primary"></i>Default Global</h3>
+        <p class="ai-surface-subtitle">Aplica como fallback a cualquier reporte o empresa que no tenga un override propio activo.</p>
       </div>
       <div class="d-flex align-items-center gap-2">
         {% if g.own_limit %}
           {{ active_badge(g.own_limit.is_active) }}
-          <a class="btn btn-sm btn-outline-primary" href="{{ url_for('ai_config.global_limit') }}">
+          <a class="ai-btn ai-btn-secondary" href="{{ url_for('ai_config.global_limit') }}">
             <i class="bi bi-pencil me-1"></i>Editar
           </a>
         {% else %}
-          {{ badge('Sin límite global', 'warning') }}
-          <a class="btn btn-sm btn-primary" href="{{ url_for('ai_config.global_limit') }}">
+          {{ pill('Sin límite global', 'warning') }}
+          <a class="ai-btn ai-btn-primary" href="{{ url_for('ai_config.global_limit') }}">
             <i class="bi bi-plus-lg me-1"></i>Configurar
           </a>
         {% endif %}
       </div>
     </div>
-    <div class="ai-card-body">
+    <div class="ai-surface-body">
       {% if g.own_limit %}
         <div class="row g-3 align-items-center">
           <div class="col-md-3">
             <div class="ai-cell-sub">Límite mensual</div>
-            <div class="fs-5 fw-bold">{{ money(g.limit_usd) }}</div>
+            <div class="fs-5 fw-bold font-monospace">{{ money(g.limit_usd) }}</div>
           </div>
           <div class="col-md-3">
             <div class="ai-cell-sub">Ciclo / Renovación</div>
@@ -72,11 +123,11 @@
           </div>
           <div class="col-md-3">
             <div class="ai-cell-sub">Consumo actual (reportes sin empresa)</div>
-            <div class="fw-semibold">{{ money(g.spent_usd) }}</div>
+            <div class="fw-semibold font-monospace">{{ money(g.spent_usd) }}</div>
           </div>
           <div class="col-md-3">
             <div class="ai-cell-sub">Disponible</div>
-            <div class="fw-bold text-success">{{ money(g.available_usd) }}</div>
+            <div class="fw-bold font-monospace text-success">{{ money(g.available_usd) }}</div>
           </div>
         </div>
       {% else %}
@@ -88,11 +139,11 @@
   </div>
 
   {# Tabla de empresas #}
-  <div class="ai-card" data-ai-filter-scope>
-    <div class="ai-card-header">
+  <div class="ai-surface" data-ai-filter-scope>
+    <div class="ai-surface-header">
       <div>
-        <h3><i class="bi bi-buildings me-2"></i>Límites por empresa</h3>
-        <span class="ai-sub">Resolución: Override de Empresa &rarr; Default Global</span>
+        <h3 class="ai-surface-title"><i class="bi bi-buildings me-2"></i>Límites por empresa</h3>
+        <p class="ai-surface-subtitle">Resolución jerárquica: Override de Empresa &rarr; Default Global</p>
       </div>
     </div>
 
@@ -146,10 +197,10 @@
                 <div class="ai-cell-sub text-muted">Override inactivo &middot; usando fallback</div>
               {% endif %}
             </td>
-            <td class="num">
+            <td class="num font-monospace">
               <strong>{{ money(r.limit_usd) if r.limit_usd is not none else '—' }}</strong>
             </td>
-            <td class="num">{{ money(r.spent_usd) }}</td>
+            <td class="num font-monospace">{{ money(r.spent_usd) }}</td>
             <td>
               {% if r.limit_usd is not none and r.limit_usd > 0 %}
                 <div class="d-flex align-items-center gap-2">
@@ -162,7 +213,7 @@
                 <span class="text-muted small">Sin tope</span>
               {% endif %}
             </td>
-            <td class="num">
+            <td class="num font-monospace">
               {% if r.available_usd is not none %}
                 <span class="{% if r.available_usd == 0 %}text-danger fw-bold{% else %}text-success{% endif %}">
                   {{ money(r.available_usd) }}
@@ -182,12 +233,10 @@
               {% endif %}
             </td>
             <td>
-              <span class="ai-badge tone-{{ r.tone }}">
-                <span class="ai-dot tone-{{ r.tone }}"></span>{{ r.state_label }}
-              </span>
+              {{ status_badge(r.state_label, r.tone) }}
             </td>
             <td class="text-end">
-              <a class="btn btn-sm btn-outline-primary" href="{{ url_for('ai_config.company_limit', empresa_id=r.empresa_id) }}" title="Configurar límite">
+              <a class="ai-btn-ghost btn-sm" href="{{ url_for('ai_config.company_limit', empresa_id=r.empresa_id) }}" title="Configurar límite">
                 <i class="bi bi-pencil me-1"></i>Configurar
               </a>
             </td>
@@ -213,15 +262,6 @@
   {# ====================================================================== #}
   {# 2. GOBIERNO · PRICING DE MODELOS                                      #}
   {# ====================================================================== #}
-  {% call page_header(
-      'Pricing de modelos',
-      'Tarifas unitarias por millón de tokens aplicadas a la imputación de consumo de KLARA.',
-      'Gobierno'
-  ) %}
-    <a class="btn btn-primary" href="{{ url_for('ai_config.pricing_new') }}">
-      <i class="bi bi-plus-lg me-1"></i>Nuevo pricing
-    </a>
-  {% endcall %}
 
   {% if pending_usage_count %}
   <div class="ai-callout tone-warning mb-3">
@@ -233,13 +273,13 @@
   </div>
   {% endif %}
 
-  <div class="ai-card" data-ai-filter-scope>
-    <div class="ai-card-header">
+  <div class="ai-surface" data-ai-filter-scope>
+    <div class="ai-surface-header">
       <div>
-        <h3><i class="bi bi-tags me-2"></i>Catálogo de tarifas</h3>
-        <span class="ai-sub">Información principal visible; detalles técnicos y tiers accesibles en cada fila.</span>
+        <h3 class="ai-surface-title"><i class="bi bi-tags me-2"></i>Catálogo de tarifas</h3>
+        <p class="ai-surface-subtitle">Información principal visible; detalles técnicos y tiers accesibles en cada fila.</p>
       </div>
-      <button class="btn btn-sm btn-outline-secondary" type="button" data-filter-reset>
+      <button class="ai-btn-ghost" type="button" data-filter-reset>
         <i class="bi bi-arrow-counterclockwise me-1"></i>Limpiar filtros
       </button>
     </div>
@@ -296,7 +336,7 @@
           {% for p in pricings %}
           <tr data-filter-row data-provider="{{ p.provider }}" data-event="{{ p.event_type }}" data-status="{{ 'active' if p.is_active else 'inactive' }}" data-search="{{ p.model }} {{ p.provider }} {{ p.id }}" id="pricing-row-{{ p.id }}">
             <td>
-              <button class="ai-icon-btn" type="button" data-toggle-detail="pricing-detail-{{ p.id }}" title="Ver detalles técnicos y cache" aria-expanded="false">
+              <button class="ai-btn-icon" type="button" data-toggle-detail="pricing-detail-{{ p.id }}" title="Ver detalles técnicos y cache" aria-expanded="false">
                 <i class="bi bi-chevron-right"></i>
               </button>
             </td>
@@ -318,11 +358,11 @@
             </td>
             <td class="text-end nowrap">
               <div class="ai-actions">
-                <a class="ai-icon-btn" href="{{ url_for('ai_config.pricing_edit', pricing_id=p.id) }}" title="Editar tarifa">
+                <a class="ai-btn-icon" href="{{ url_for('ai_config.pricing_edit', pricing_id=p.id) }}" title="Editar tarifa">
                   <i class="bi bi-pencil"></i>
                 </a>
                 <form method="post" action="{{ url_for('ai_config.pricing_toggle', pricing_id=p.id) }}">
-                  <button class="ai-icon-btn" type="submit" title="{{ 'Desactivar' if p.is_active else 'Activar' }}">
+                  <button class="ai-btn-icon" type="submit" title="{{ 'Desactivar' if p.is_active else 'Activar' }}">
                     <i class="bi {{ 'bi-pause-fill text-warning' if p.is_active else 'bi-play-fill text-success' }}"></i>
                   </button>
                 </form>
@@ -333,7 +373,7 @@
           <tr class="ai-detail-row" id="pricing-detail-{{ p.id }}" data-detail-for="pricing-row-{{ p.id }}" hidden>
             <td></td>
             <td colspan="7">
-              <div class="row g-3 py-1">
+              <div class="row g-3 py-2">
                 <div class="col-md-3">
                   <div class="ai-cell-sub">Cache Write / 1M</div>
                   <div class="font-monospace fw-semibold">{{ '%.4f'|format(p.cache_write_cost_per_million_usd or 0) }} USD</div>
@@ -388,25 +428,14 @@
   {# ====================================================================== #}
   {# 3. AGENTE KLARA · PROMPTS DEL AGENTE                                  #}
   {# ====================================================================== #}
-  {% call page_header(
-      'Prompts del agente',
-      'Configurá instrucciones complementarias por alcance. La resolución es aditiva a lo largo de la cadena.',
-      'Agente KLARA'
-  ) %}
-    {% if prompt_editor and prompt_editor.action %}
-      <a class="btn btn-primary" href="{{ prompt_editor.action }}">
-        <i class="bi bi-pencil me-1"></i>Editar prompt seleccionado
-      </a>
-    {% endif %}
-  {% endcall %}
 
   {# Selector de Alcance: Global | Empresa | Reporte #}
-  <div class="ai-card mb-3">
-    <div class="ai-card-body">
+  <div class="ai-surface mb-3">
+    <div class="ai-surface-body">
       <div class="row g-3 align-items-end">
         <div class="col-lg-3 col-md-4">
           <label class="form-label">Alcance a configurar</label>
-          <div class="ai-scope-tabs d-flex w-100">
+          <div class="ai-segmented d-flex w-100">
             <a class="flex-fill text-center {% if prompt_scope == 'global' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='prompts', scope='global') }}">Global</a>
             <a class="flex-fill text-center {% if prompt_scope == 'empresa' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='prompts', scope='empresa') }}">Empresa</a>
             <a class="flex-fill text-center {% if prompt_scope == 'report' %}active{% endif %}" href="{{ url_for('ai_config.index', tab='prompts', scope='report') }}">Reporte</a>
@@ -434,30 +463,30 @@
 
   {% if prompt_editor %}
     {# Cadena efectiva: Base protegido -> Global -> Empresa -> Reporte #}
-    <div class="ai-card mb-3">
-      <div class="ai-card-header">
+    <div class="ai-surface mb-3">
+      <div class="ai-surface-header">
         <div>
-          <h3><i class="bi bi-diagram-2 me-2"></i>Cadena efectiva de instrucciones</h3>
-          <span class="ai-sub">KLARA concatena en runtime las instrucciones vigentes desde el nivel más amplio al más específico.</span>
+          <h3 class="ai-surface-title"><i class="bi bi-diagram-2 me-2"></i>Cadena efectiva de instrucciones</h3>
+          <p class="ai-surface-subtitle">KLARA concatena en runtime las instrucciones vigentes desde el nivel más amplio al más específico.</p>
         </div>
         <div>
-          <span class="ai-badge tone-primary">{{ prompt_editor.chain.effective_count }} nivel{{ '' if prompt_editor.chain.effective_count == 1 else 'es' }} activo{{ '' if prompt_editor.chain.effective_count == 1 else 's' }}</span>
+          {{ pill(prompt_editor.chain.effective_count ~ ' niveles activos', 'primary') }}
         </div>
       </div>
-      <div class="ai-card-body">
+      <div class="ai-surface-body">
         <div class="ai-chain mb-3">
           {% for step in prompt_editor.chain.levels %}
           <div class="ai-chain-step {% if step.current %}current{% endif %} {% if step.kind == 'protected' %}protected{% endif %}">
             <div class="step-label">
               <span>{{ step.label }}</span>
               {% if step.kind == 'protected' %}
-                {{ badge('Protegido', 'neutral', 'shield-lock') }}
+                {{ pill('Protegido', 'neutral', 'shield-lock') }}
               {% elif step.kind == 'active' %}
-                {{ badge('Activo', 'success') }}
+                {{ pill('Activo', 'success') }}
               {% elif step.kind == 'inactive' %}
-                {{ badge('Inactivo', 'warning') }}
+                {{ pill('Inactivo', 'warning') }}
               {% else %}
-                {{ badge('Sin config', 'neutral') }}
+                {{ pill('Sin config', 'neutral') }}
               {% endif %}
             </div>
             <div class="step-state">
@@ -474,7 +503,7 @@
           <summary><i class="bi bi-shield-lock me-1"></i>Ver contenido protegido del prompt base (no modificable)</summary>
           <div class="ai-disclosure-body">
             <p class="small text-muted mb-2">Este bloque es inmutable desde la interfaz para asegurar las reglas de privacidad, generación DAX y contención de fallas.</p>
-            <pre class="ai-textblock protected"># KLARA SYSTEM PROMPT (PROTECTED BASE)
+            <pre class="ai-codeblock"># KLARA SYSTEM PROMPT (PROTECTED BASE)
 - Seguridad: No exponer credenciales ni conexiones internas.
 - Privacy Guard: Respeta permisos de tenant, empresa y workspace.
 - DAX Guardrail: Solo consultas analíticas de lectura sobre el modelo tabular.
@@ -485,24 +514,24 @@
     </div>
 
     {# Editor del Scope Seleccionado #}
-    <div class="ai-card">
-      <div class="ai-card-header">
+    <div class="ai-surface">
+      <div class="ai-surface-header">
         <div>
-          <h3>
+          <h3 class="ai-surface-title">
             <i class="bi bi-pencil-square me-2"></i>
             {% if prompt_scope == 'global' %}Instrucciones Globales
             {% elif prompt_scope == 'empresa' %}Instrucciones de Empresa: {{ prompt_editor.target.nombre }}
             {% else %}Instrucciones de Reporte: {{ prompt_editor.target.name }}{% endif %}
           </h3>
-          <span class="ai-sub">Configuración editable en este alcance.</span>
+          <p class="ai-surface-subtitle">Configuración editable en este alcance.</p>
         </div>
         <div>
-          <a class="btn btn-sm btn-primary" href="{{ prompt_editor.action }}">
+          <a class="ai-btn-primary" href="{{ prompt_editor.action }}">
             <i class="bi bi-pencil me-1"></i>Abrir editor completo
           </a>
         </div>
       </div>
-      <div class="ai-card-body">
+      <div class="ai-surface-body">
         {% if prompt_editor.prompt %}
           <div class="row g-3 mb-3">
             <div class="col-md-4">
@@ -524,7 +553,7 @@
           </div>
           <div class="mb-3">
             <label class="form-label">Instrucciones configuradas</label>
-            <pre class="ai-textblock">{{ prompt_editor.prompt.instructions }}</pre>
+            <pre class="ai-codeblock">{{ prompt_editor.prompt.instructions }}</pre>
           </div>
         {% else %}
           <div class="ai-callout tone-info mb-3">
@@ -532,7 +561,7 @@
             <div class="ai-callout-body">
               No hay instrucciones configuradas en este alcance. Se aplicará únicamente la herencia superior.
               <div class="mt-2">
-                <a class="btn btn-sm btn-outline-primary" href="{{ prompt_editor.action }}">
+                <a class="ai-btn-secondary" href="{{ prompt_editor.action }}">
                   <i class="bi bi-plus-lg me-1"></i>Crear instrucciones para este alcance
                 </a>
               </div>
@@ -557,7 +586,7 @@
                 <div class="col-md-6">
                   <div class="ai-cell-sub">Prompt de recuperación de esquema</div>
                   {% if prompt_editor.target.schema_retrieval_prompt %}
-                    <pre class="ai-textblock mt-1" style="max-height: 120px;">{{ prompt_editor.target.schema_retrieval_prompt }}</pre>
+                    <pre class="ai-codeblock mt-1" style="max-height: 120px;">{{ prompt_editor.target.schema_retrieval_prompt }}</pre>
                   {% else %}
                     <div class="text-muted small mt-1">Sin prompt personalizado (usa keywords automáticas).</div>
                   {% endif %}
@@ -569,8 +598,8 @@
       </div>
     </div>
   {% else %}
-    <div class="ai-card">
-      <div class="ai-card-body">
+    <div class="ai-surface">
+      <div class="ai-surface-body">
         {{ empty_state('search', 'Seleccioná un elemento para ver y editar su prompt.', 'Elegí una empresa o reporte en el selector superior.') }}
       </div>
     </div>
@@ -580,35 +609,6 @@
   {# ====================================================================== #}
   {# 4. AGENTE KLARA · SKILLS ANALÍTICAS                                   #}
   {# ====================================================================== #}
-  {% call page_header(
-      'Skills analíticas',
-      'Catálogo unificado de conocimientos analíticos operacionales para KLARA. (Skills analiticas)',
-      'Agente KLARA'
-  ) %}
-    <div class="btn-group">
-      <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" aria-expanded="false">
-        <i class="bi bi-download me-1"></i>Exportar CSV
-      </button>
-      <ul class="dropdown-menu dropdown-menu-end">
-        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='all') }}">Todas las skills</a></li>
-        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='global') }}">Solo globales</a></li>
-        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='report') }}">Todos los reportes</a></li>
-        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='empresa') }}">Todas las empresas</a></li>
-        <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='dataset') }}">Todos los datasets</a></li>
-      </ul>
-    </div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.skill_import') }}">
-      <i class="bi bi-upload me-1"></i>Importar CSV
-    </a>
-    <form class="d-inline" method="post" action="{{ url_for('ai_config.skill_reindex_all') }}" onsubmit="return confirm('Esto reindexará en background las skills activas con embeddings pendientes.');">
-      <button class="btn btn-outline-secondary" type="submit">
-        <i class="bi bi-arrow-repeat me-1"></i>Reindexar activas
-      </button>
-    </form>
-    <a class="btn btn-primary" href="{{ url_for('ai_config.skill_new') }}">
-      <i class="bi bi-plus-lg me-1"></i>Nueva skill
-    </a>
-  {% endcall %}
 
   {% set sk = skill_view.kpis %}
   <div class="ai-kpis">
@@ -619,13 +619,13 @@
     {{ kpi('Reportes con skills', sk.reports, 'Alcance reporte', 'primary') }}
   </div>
 
-  <div class="ai-card" data-ai-filter-scope>
-    <div class="ai-card-header">
+  <div class="ai-surface" data-ai-filter-scope>
+    <div class="ai-surface-header">
       <div>
-        <h3><i class="bi bi-diagram-3 me-2"></i>Catálogo unificado</h3>
-        <span class="ai-sub">Búsqueda rápida y filtros sobre todas las skills del sistema.</span>
+        <h3 class="ai-surface-title"><i class="bi bi-diagram-3 me-2"></i>Catálogo unificado</h3>
+        <p class="ai-surface-subtitle">Búsqueda rápida y filtros sobre todas las Skills analiticas del sistema.</p>
       </div>
-      <button class="btn btn-sm btn-outline-secondary" type="button" data-filter-reset>
+      <button class="ai-btn-ghost" type="button" data-filter-reset>
         <i class="bi bi-arrow-counterclockwise me-1"></i>Limpiar filtros
       </button>
     </div>
@@ -719,33 +719,33 @@
               <div>{{ scope_badge(row.scope) }}</div>
               <div class="ai-cell-sub text-truncate" style="max-width: 180px;" title="{{ row.target }}">{{ row.target }}</div>
             </td>
-            <td><span class="badge bg-light text-dark border">{{ s.domain_key }}</span></td>
+            <td>{{ pill(s.domain_key, 'neutral') }}</td>
             <td>
-              <span class="ai-badge tone-{{ 'danger' if s.priority == 'high' else 'neutral' }}">{{ s.priority or 'normal' }}</span>
+              <span class="small font-monospace">{{ s.priority or 'normal' }}</span>
             </td>
             <td><span class="small">{{ s.enforcement_mode or 'soft' }}</span></td>
             <td><span class="small font-monospace">{{ s.confidence_label or '—' }}</span></td>
             <td>
               {% if row.indexed %}
-                <span class="ai-badge tone-success"><i class="bi bi-check2"></i>Indexada</span>
+                <span class="ai-status tone-success"><span class="ai-status-dot"></span><span>Indexada</span></span>
                 <div class="ai-cell-sub">{{ s.embedded_at.strftime('%d/%m/%Y %H:%M') if s.embedded_at else '' }}</div>
               {% else %}
-                <span class="ai-badge tone-warning"><i class="bi bi-clock"></i>Pendiente</span>
+                <span class="ai-status tone-warning"><span class="ai-status-dot"></span><span>Pendiente</span></span>
               {% endif %}
             </td>
             <td>{{ active_badge(s.is_active) }}</td>
             <td class="text-end nowrap">
               <div class="ai-actions">
-                <a class="ai-icon-btn" href="{{ url_for('ai_config.skill_edit', skill_id=s.id) }}" title="Editar skill">
+                <a class="ai-btn-icon" href="{{ url_for('ai_config.skill_edit', skill_id=s.id) }}" title="Editar skill">
                   <i class="bi bi-pencil"></i>
                 </a>
                 <form method="post" action="{{ url_for('ai_config.skill_reindex', skill_id=s.id) }}">
-                  <button class="ai-icon-btn" type="submit" title="Reindexar embedding">
+                  <button class="ai-btn-icon" type="submit" title="Reindexar embedding">
                     <i class="bi bi-arrow-repeat"></i>
                   </button>
                 </form>
                 <form method="post" action="{{ url_for('ai_config.skill_toggle', skill_id=s.id) }}">
-                  <button class="ai-icon-btn" type="submit" title="{{ 'Desactivar' if s.is_active else 'Activar' }}">
+                  <button class="ai-btn-icon" type="submit" title="{{ 'Desactivar' if s.is_active else 'Activar' }}">
                     <i class="bi {{ 'bi-pause-fill text-warning' if s.is_active else 'bi-play-fill text-success' }}"></i>
                   </button>
                 </form>
@@ -773,22 +773,28 @@
 
 {% block ai_scripts %}
 <script>
-  // Link selector changes in the Prompts tab
-  const companyPicker = document.getElementById('prompt-company-picker');
-  if (companyPicker) {
-    companyPicker.addEventListener('change', () => {
-      if (companyPicker.value) {
-        window.location.href = "{{ url_for('ai_config.index', tab='prompts', scope='empresa') }}&scope_id=" + encodeURIComponent(companyPicker.value);
-      }
-    });
-  }
-  const reportPicker = document.getElementById('prompt-report-picker');
-  if (reportPicker) {
-    reportPicker.addEventListener('change', () => {
-      if (reportPicker.value) {
-        window.location.href = "{{ url_for('ai_config.index', tab='prompts', scope='report') }}&scope_id=" + encodeURIComponent(reportPicker.value);
-      }
-    });
-  }
+  (function() {
+    const baseUrl = "{{ url_for('ai_config.index') }}";
+    const companyPicker = document.getElementById('prompt-company-picker');
+    if (companyPicker) {
+      companyPicker.addEventListener('change', function() {
+        if (this.value) {
+          window.location.href = baseUrl + "?tab=prompts&scope=empresa&scope_id=" + encodeURIComponent(this.value);
+        } else {
+          window.location.href = baseUrl + "?tab=prompts&scope=empresa";
+        }
+      });
+    }
+    const reportPicker = document.getElementById('prompt-report-picker');
+    if (reportPicker) {
+      reportPicker.addEventListener('change', function() {
+        if (this.value) {
+          window.location.href = baseUrl + "?tab=prompts&scope=report&scope_id=" + encodeURIComponent(this.value);
+        } else {
+          window.location.href = baseUrl + "?tab=prompts&scope=report";
+        }
+      });
+    }
+  })();
 </script>
 {% endblock %}

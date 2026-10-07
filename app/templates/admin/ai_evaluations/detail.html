@@ -1,7 +1,7 @@
 {% extends "admin/ai/shell.html" %}
 {% import "admin/ai/_macros.html" as ui %}
 
-{% set active_section = 'evaluations' %}
+{% set active_ai_section = 'evaluations' %}
 {% set active_statuses = ['queued', 'running', 'cancel_requested'] %}
 
 {% block extra_head %}
@@ -22,55 +22,56 @@
 </style>
 {% endblock %}
 
-{% block page_header %}
-<div class="ai-page-header mb-4" id="evaluation-detail" data-run-id="{{ run.id }}" data-status="{{ run.status }}">
-  <div class="d-flex flex-wrap justify-content-between align-items-start gap-3">
-    <div>
-      <div class="d-flex align-items-center gap-2 mb-1">
-        <h1 class="ai-page-title mb-0">{{ run.name }}</h1>
-        <span class="badge {{ 'bg-success' if run.status == 'completed' else ('bg-danger' if run.status in ['failed', 'completed_with_errors'] else 'bg-info text-dark') }}" id="run-status">
-          {{ run.status }}
-        </span>
-      </div>
-      <p class="ai-page-subtitle">
-        Evaluación <span class="font-monospace">#{{ run.id }}</span> · Reporte: <strong>{{ run.report.name if run.report else 'N/A' }}</strong> · Modo: {{ run.mode }} · Caché: {{ run.cache_mode }}
-      </p>
+{% block ai_header %}
+<header class="ai-page-header" id="evaluation-detail" data-run-id="{{ run.id }}" data-status="{{ run.status }}">
+  <div>
+    <div class="ai-breadcrumb">Calidad</div>
+    <div class="d-flex align-items-center gap-2">
+      <h1 class="ai-page-title mb-0">{{ run.name }}</h1>
+      <span class="ai-pill tone-{{ 'success' if run.status == 'completed' else ('danger' if run.status in ['failed', 'completed_with_errors'] else 'info') }}" id="run-status">
+        {{ run.status }}
+      </span>
     </div>
-    <div class="d-flex flex-wrap gap-2">
-      <a class="btn btn-outline-secondary" href="{{ url_for('evaluations.runs_page') }}">
-        <i class="bi bi-arrow-left me-1"></i>Volver
-      </a>
-      <a class="btn btn-outline-primary" href="{{ url_for('evaluations.export_run', run_id=run.id) }}">
-        <i class="bi bi-download me-1"></i>Exportar CSV
-      </a>
-      {% if run.status in active_statuses %}
-        <button class="btn btn-outline-danger" id="cancel-run" type="button">
-          <i class="bi bi-stop-circle me-1"></i>Cancelar
-        </button>
-      {% endif %}
-    </div>
+    <p class="ai-page-subtitle">
+      Evaluación <span class="font-monospace">#{{ run.id }}</span> · Reporte: <strong>{{ run.report.name if run.report else 'N/A' }}</strong> · Modo: {{ run.mode }} · Caché: {{ run.cache_mode }}
+    </p>
   </div>
-</div>
+  <div class="ai-page-actions">
+    <a class="ai-btn-secondary" href="{{ url_for('evaluations.runs_page') }}">
+      <i class="bi bi-arrow-left me-1"></i>Volver
+    </a>
+    <a class="ai-btn-secondary" href="{{ url_for('evaluations.export_run', run_id=run.id) }}">
+      <i class="bi bi-download me-1"></i>Exportar CSV
+    </a>
+    {% if run.status in active_statuses %}
+      <button class="btn btn-outline-danger btn-sm" id="cancel-run" type="button">
+        <i class="bi bi-stop-circle me-1"></i>Cancelar
+      </button>
+    {% endif %}
+  </div>
+</header>
 {% endblock %}
 
 {% block ai_content %}
 <div id="page-message"></div>
 {% if run.error_message %}
-  <div class="alert alert-danger mb-4">{{ run.error_message }}</div>
+  <div class="ai-callout tone-danger mb-4">
+    <i class="bi bi-exclamation-triangle"></i>
+    <div class="ai-callout-body">{{ run.error_message }}</div>
+  </div>
 {% endif %}
 
 <!-- KPIs Strip -->
-<div class="ai-kpi-grid mb-4">
-  <div class="ai-kpi-card">
-    <div class="ai-kpi-header">
-      <span class="ai-kpi-label">Progreso de ejecución</span>
-      <i class="bi bi-pie-chart text-muted"></i>
-    </div>
+<div class="ai-kpis mb-4">
+  <div class="ai-kpi">
+    <div class="ai-kpi-label"><i class="bi bi-pie-chart me-1"></i>Progreso de ejecución</div>
     <div class="ai-kpi-value">
       <span id="completed-cases">{{ run.completed_cases or 0 }}</span> / <span id="total-cases">{{ run.total_cases or 0 }}</span>
     </div>
-    <div class="progress ai-progress mt-2">
-      <div class="progress-bar {{ 'bg-success' if run.status == 'completed' else 'bg-primary' }}" id="progress-bar" style="width: {{ ((run.completed_cases or 0) * 100 / run.total_cases)|round if run.total_cases else 0 }}%"></div>
+    <div class="mt-2">
+      <div class="ai-progress {{ 'tone-success' if run.status == 'completed' else 'tone-primary' }}">
+        <span id="progress-bar" style="width: {{ ((run.completed_cases or 0) * 100 / run.total_cases)|round if run.total_cases else 0 }}%"></span>
+      </div>
     </div>
   </div>
 
@@ -84,18 +85,18 @@
 </div>
 
 <!-- Model Promotion Card -->
-<div class="ai-card mb-4">
-  <div class="ai-card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+<div class="ai-surface mb-4">
+  <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-2">
     <div>
-      <h5 class="ai-card-title mb-0">
+      <h3 class="ai-surface-title">
         <i class="bi bi-patch-check me-2 text-primary"></i>Promoción de modelos evaluados
-      </h5>
-      <p class="ai-card-subtitle">
+      </h3>
+      <p class="ai-surface-subtitle">
         Para promover y validar un modelo en producción, el 100% de sus casos deben terminar con éxito y estar calificados como "Correcta".
       </p>
     </div>
   </div>
-  <div class="ai-card-body d-flex flex-wrap gap-2">
+  <div class="ai-surface-body d-flex flex-wrap gap-2">
     {% for model_key in model_keys %}
       {% set model_cases = cases|selectattr('model_key', 'equalto', model_key)|list %}
       {% set successful = model_cases|selectattr('status', 'equalto', 'success')|list|length %}
@@ -142,12 +143,14 @@
 <div class="tab-content" id="evalDetailContent">
   <!-- Tab 1: Comparison Matrix -->
   <div class="tab-pane fade show active" id="tab-comparison" role="tabpanel">
-    <div class="ai-card">
-      <div class="ai-card-header">
-        <h5 class="ai-card-title mb-0">Rendimiento comparativo en esta ejecución</h5>
-        <p class="ai-card-subtitle">Comparación directa entre los modelos configurados en esta corrida.</p>
+    <div class="ai-surface">
+      <div class="ai-surface-header">
+        <div>
+          <h3 class="ai-surface-title">Rendimiento comparativo en esta ejecución</h3>
+          <p class="ai-surface-subtitle">Comparación directa entre los modelos configurados en esta corrida.</p>
+        </div>
       </div>
-      <div class="table-responsive">
+      <div class="ai-table-wrap">
         <table class="ai-table">
           <thead>
             <tr>
@@ -169,14 +172,14 @@
               <td>
                 <span class="fw-bold font-monospace text-dark">{{ m.model_key }}</span>
                 {% if m.best.quality and m.quality %}
-                  <span class="badge bg-success-subtle text-success border border-success-subtle ms-1">Mejor</span>
+                  {{ ui.pill('Mejor', 'success') }}
                 {% endif %}
               </td>
               <td class="text-center">{{ m.cases }}</td>
               <td class="text-center">
                 {% if m.quality is not none %}
                   {% set q = m.quality|round(1) %}
-                  <span class="badge {{ 'bg-success' if q >= 90 else ('bg-warning text-dark' if q >= 70 else 'bg-danger') }}">{{ q }}%</span>
+                  <span class="fw-semibold {{ 'text-success' if q >= 90 else ('text-warning' if q >= 70 else 'text-danger') }}">{{ q }}%</span>
                 {% else %}
                   <span class="text-muted small">Sin revisar</span>
                 {% endif %}
@@ -216,7 +219,7 @@
                 <span class="text-warning">{{ m.partial }}</span> /
                 <span class="text-danger">{{ m.incorrect }}</span>
                 {% if m.pending_review > 0 %}
-                  <div class="ai-meta text-warning">{{ m.pending_review }} pendientes</div>
+                  <div class="ai-cell-sub text-warning">{{ m.pending_review }} pendientes</div>
                 {% endif %}
               </td>
             </tr>
@@ -235,39 +238,39 @@
     {% if problem_rows %}
       <div class="d-flex flex-column gap-3">
         {% for q_item in problem_rows %}
-        <div class="ai-card border-danger-subtle">
-          <div class="ai-card-header bg-danger-subtle bg-opacity-10">
+        <div class="ai-surface border-danger">
+          <div class="ai-surface-header">
             <div class="d-flex align-items-center gap-2">
-              <span class="badge bg-danger">#{{ q_item.index }}</span>
+              <span class="ai-pill tone-danger">#{{ q_item.index }}</span>
               <strong class="text-dark">{{ q_item.question }}</strong>
             </div>
             {% if q_item.cost_spread > 0 %}
-              <span class="ai-meta">Dispersión de costo: ${{ '%.5f'|format(q_item.cost_spread) }}</span>
+              <span class="ai-cell-sub">Dispersión de costo: ${{ '%.5f'|format(q_item.cost_spread) }}</span>
             {% endif %}
           </div>
-          <div class="ai-card-body">
+          <div class="ai-surface-body">
             <div class="row g-3">
               {% for model_key in question_matrix.models %}
                 {% set cell_cases = q_item.cells.get(model_key, []) %}
                 <div class="col-md-{{ 12 // (question_matrix.models|length or 1) }}">
-                  <div class="p-3 border rounded bg-light h-100">
+                  <div class="p-3 border rounded bg-white h-100">
                     <div class="d-flex justify-content-between align-items-center mb-2">
                       <span class="fw-bold font-monospace small text-primary">{{ model_key }}</span>
                       {% if cell_cases %}
                         {% set c = cell_cases[0] %}
-                        <span class="badge {{ 'bg-success' if c.status == 'success' else 'bg-danger' }}">{{ c.status }}</span>
+                        <span class="ai-pill {{ 'tone-success' if c.status == 'success' else 'tone-danger' }}">{{ c.status }}</span>
                       {% endif %}
                     </div>
                     {% for c in cell_cases %}
                       {% if c.error_message %}
-                        <div class="alert alert-danger py-1 px-2 small mb-2">{{ c.error_message }}</div>
+                        <div class="ai-callout tone-danger py-1 px-2 small mb-2"><div class="ai-callout-body">{{ c.error_message }}</div></div>
                       {% elif c.failure_reason %}
-                        <div class="alert alert-warning py-1 px-2 small mb-2">{{ c.failure_reason }}</div>
+                        <div class="ai-callout tone-warning py-1 px-2 small mb-2"><div class="ai-callout-body">{{ c.failure_reason }}</div></div>
                       {% endif %}
                       {% if c.answer %}
-                        <div class="border rounded bg-white p-2 small evaluation-markdown" data-markdown-response>{{ c.answer }}</div>
+                        <div class="border rounded bg-light p-2 small evaluation-markdown" data-markdown-response>{{ c.answer }}</div>
                       {% endif %}
-                      <div class="ai-meta mt-2">
+                      <div class="ai-cell-sub mt-2">
                         Revisión: <strong>{{ c.review_status }}</strong>
                         {% if c.review_notes %} · <em>"{{ c.review_notes }}"</em>{% endif %}
                         · {{ c.latency_ms or 0 }} ms · ${{ '%.5f'|format(c.pipeline_total_cost or 0) }}
@@ -284,9 +287,9 @@
         {% endfor %}
       </div>
     {% else %}
-      <div class="ai-card p-5 text-center text-muted">
+      <div class="ai-surface p-5 text-center text-muted">
         <i class="bi bi-check-circle fs-1 text-success d-block mb-2"></i>
-        <h5 class="text-dark">No se detectaron fallos ni respuestas observadas</h5>
+        <h4 class="text-dark fs-5">No se detectaron fallos ni respuestas observadas</h4>
         <p class="mb-0">Todos los modelos evaluados respondieron con éxito y sin calificaciones de error en esta corrida.</p>
       </div>
     {% endif %}
@@ -294,11 +297,11 @@
 
   <!-- Tab 3: Cases & Manual Review -->
   <div class="tab-pane fade" id="tab-cases" role="tabpanel">
-    <div class="ai-card">
-      <div class="ai-card-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+    <div class="ai-surface">
+      <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-2">
         <div>
-          <h5 class="ai-card-title mb-0">Casos individuales y calificación de calidad</h5>
-          <p class="ai-card-subtitle">Inspecciona respuestas y califica la precisión como Correcta, Parcial o Incorrecta.</p>
+          <h3 class="ai-surface-title">Casos individuales y calificación de calidad</h3>
+          <p class="ai-surface-subtitle">Inspecciona respuestas y califica la precisión como Correcta, Parcial o Incorrecta.</p>
         </div>
         <div class="d-flex gap-2">
           <select class="form-select form-select-sm" id="filter-model" style="width: 170px;">
@@ -316,7 +319,7 @@
           </select>
         </div>
       </div>
-      <div class="table-responsive">
+      <div class="ai-table-wrap">
         <table class="ai-table" id="cases-table">
           <thead>
             <tr>
@@ -337,26 +340,24 @@
                   <div class="small text-muted mb-2"><strong>Esperada:</strong> {{ case.expected_answer }}</div>
                 {% endif %}
                 {% if case.answer %}
-                  <div class="border rounded bg-light p-2 evaluation-markdown" data-markdown-response>{{ case.answer }}</div>
+                  <div class="border rounded bg-white p-2 evaluation-markdown" data-markdown-response>{{ case.answer }}</div>
                 {% elif case.error_message %}
-                  <div class="alert alert-danger py-1 px-2 small mb-0">{{ case.error_message }}</div>
+                  <div class="ai-callout tone-danger py-1 px-2 small mb-0"><div class="ai-callout-body">{{ case.error_message }}</div></div>
                 {% else %}
                   <div class="text-muted small">Pendiente de ejecución</div>
                 {% endif %}
               </td>
               <td>
                 <div class="fw-bold font-monospace text-dark">{{ case.model_key }}</div>
-                <div class="ai-meta">{{ case.actual_model or case.physical_model or '--' }}</div>
-                <div class="ai-meta">Caché: {{ case.cache_mode }}</div>
+                <div class="ai-cell-sub">{{ case.actual_model or case.physical_model or '--' }}</div>
+                <div class="ai-cell-sub">Caché: {{ case.cache_mode }}</div>
               </td>
               <td>
-                <span class="badge {{ 'bg-success' if case.status == 'success' else ('bg-danger' if case.status in ['error', 'interrupted'] else 'bg-secondary') }}">
-                  {{ case.status }}
-                </span>
-                <div class="ai-meta mt-1 font-monospace">
+                {{ ui.status_badge(case.status) }}
+                <div class="ai-cell-sub mt-1 font-monospace">
                   {{ case.latency_ms or 0 }} ms · ${{ '%.5f'|format(case.pipeline_total_cost or 0) }}
                 </div>
-                <div class="ai-meta font-monospace">
+                <div class="ai-cell-sub font-monospace">
                   {{ case.input_tokens or 0 }} in / {{ case.output_tokens or 0 }} out
                 </div>
               </td>
@@ -368,7 +369,7 @@
                   <option value="incorrect" {% if case.review_status == 'incorrect' %}selected{% endif %}>Incorrecta</option>
                 </select>
                 <textarea class="form-control form-control-sm review-notes mb-2" rows="2" placeholder="Notas de revisión..." {% if case.status != 'success' %}disabled{% endif %}>{{ case.review_notes or '' }}</textarea>
-                <button class="btn btn-sm btn-outline-primary w-100 save-review" type="button" {% if case.status != 'success' %}disabled{% endif %}>
+                <button class="ai-btn-secondary btn-sm w-100 save-review" type="button" {% if case.status != 'success' %}disabled{% endif %}>
                   <i class="bi bi-save me-1"></i>Guardar revisión
                 </button>
               </td>
@@ -384,12 +385,14 @@
 
   <!-- Tab 4: DAX, Tools & Traces -->
   <div class="tab-pane fade" id="tab-traces" role="tabpanel">
-    <div class="ai-card">
-      <div class="ai-card-header">
-        <h5 class="ai-card-title mb-0">Diagnóstico técnico, DAX y trazas de ejecución</h5>
-        <p class="ai-card-subtitle">Inspección forense de llamadas a herramientas, consultas DAX generadas y tokens.</p>
+    <div class="ai-surface">
+      <div class="ai-surface-header">
+        <div>
+          <h3 class="ai-surface-title">Diagnóstico técnico, DAX y trazas de ejecución</h3>
+          <p class="ai-surface-subtitle">Inspección forense de llamadas a herramientas, consultas DAX generadas y tokens.</p>
+        </div>
       </div>
-      <div class="table-responsive">
+      <div class="ai-table-wrap">
         <table class="ai-table">
           <thead>
             <tr>
@@ -406,14 +409,14 @@
               <td class="text-center font-monospace text-muted">{{ case.sequence_index }}</td>
               <td>
                 <div class="fw-semibold text-dark small mb-1">{{ case.question }}</div>
-                <span class="badge bg-secondary-subtle text-secondary font-monospace">{{ case.model_key }}</span>
+                <span class="ai-pill tone-neutral font-monospace">{{ case.model_key }}</span>
               </td>
               <td>
                 {% if case.tools_called_json %}
                   <div class="mb-1">
                     <strong class="small text-muted">Tools:</strong>
                     {% for tool in case.tools_called_json %}
-                      <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle small me-1">{{ tool }}</span>
+                      <span class="ai-pill tone-info small me-1">{{ tool }}</span>
                     {% endfor %}
                   </div>
                 {% endif %}
@@ -438,7 +441,7 @@
                 {% if case.trace_id %}
                   <div class="font-monospace small text-primary mb-1">{{ case.trace_id }}</div>
                 {% endif %}
-                <div class="ai-meta font-monospace">
+                <div class="ai-cell-sub font-monospace">
                   In: {{ case.input_tokens or 0 }} | Out: {{ case.output_tokens or 0 }}<br>
                   Reasoning: {{ case.reasoning_tokens or 0 }}<br>
                   Cache read: {{ case.cache_read_tokens or 0 }}
@@ -470,10 +473,7 @@
   const message = document.getElementById('page-message');
   const active = new Set(['queued', 'running', 'cancel_requested']);
   const showMessage = (text, kind='success') => {
-    message.innerHTML = `<div class="alert alert-${kind} alert-dismissible fade show" role="alert">
-      ${String(text).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
-      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
-    </div>`;
+    message.innerHTML = `<div class="ai-callout tone-${kind} mb-3"><div class="ai-callout-body">${String(text).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}</div></div>`;
   };
 
   async function poll() {

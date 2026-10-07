@@ -1,30 +1,29 @@
 {% extends "admin/ai/shell.html" %}
-{% from "admin/ai/_macros.html" import page_header, kpi, badge, origin_badge, searchable_select %}
+{% from "admin/ai/_macros.html" import page_header, kpi, pill, origin_badge, searchable_select %}
 
 {% block title %}Componentes del chat · Configuración AI{% endblock %}
 
 {% set active_ai_section = 'components' %}
+{% set page_crumb = 'Agente KLARA' %}
+{% set page_title = 'Componentes del chat' %}
+{% set page_subtitle = 'Disponibilidad de modelos y asignación por rol del pipeline con herencia Reporte → Empresa → Global.' %}
+
+{% block header_actions %}
+  <a class="ai-btn-secondary" href="{{ url_for('model_catalog.catalog_page') }}">
+    <i class="bi bi-cpu me-1"></i>Catálogo
+  </a>
+  <button class="ai-btn-primary" id="save-scope" type="button">
+    <i class="bi bi-check-lg me-1"></i>Guardar alcance
+  </button>
+{% endblock %}
 
 {% block ai_content %}
 <div id="components-page">
-  {% call page_header(
-      'Componentes del chat',
-      'Disponibilidad de modelos y asignación por rol del pipeline con herencia Reporte → Empresa → Global.',
-      'Agente KLARA'
-  ) %}
-    <a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.catalog_page') }}">
-      <i class="bi bi-cpu me-1"></i>Catálogo
-    </a>
-    <button class="btn btn-primary" id="save-scope" type="button">
-      <i class="bi bi-check-lg me-1"></i>Guardar alcance
-    </button>
-  {% endcall %}
-
   <div id="message"></div>
 
   {# Selector de Alcance #}
-  <div class="ai-card mb-3">
-    <div class="ai-card-body">
+  <div class="ai-surface mb-3">
+    <div class="ai-surface-body">
       <div class="row g-3 align-items-end">
         <div class="col-lg-3 col-md-4">
           <label class="form-label" for="scope-type">Alcance a configurar</label>
@@ -44,7 +43,7 @@
           </select>
         </div>
 
-        {# Selector CRÍTICO: SOLO reportes con KLARA habilitada, mostrando advertencia si está incompleta #}
+        {# Selector CRÍTICO: SOLO reportes con KLARA habilitada #}
         <div class="col-lg-5 col-md-8 scope-target" id="report-wrap" hidden>
           <label class="form-label" for="report-id">Reporte (KLARA habilitada)</label>
           <select class="form-select" id="report-id" data-searchable data-placeholder="Buscar reporte habilitado…" data-search-placeholder="Escribí para buscar reportes con KLARA…">
@@ -65,16 +64,16 @@
   </div>
 
   {# Visualización del Pipeline Efectivo #}
-  <div class="ai-card mb-3">
-    <div class="ai-card-header">
+  <div class="ai-surface mb-3">
+    <div class="ai-surface-header">
       <div>
-        <h3><i class="bi bi-diagram-3 me-2"></i>Visualización del pipeline</h3>
-        <span class="ai-sub">Secuencia de ejecución y componentes efectivos para este alcance.</span>
+        <h3 class="ai-surface-title"><i class="bi bi-diagram-3 me-2"></i>Visualización del pipeline</h3>
+        <p class="ai-surface-subtitle">Secuencia de ejecución y componentes efectivos para este alcance.</p>
       </div>
     </div>
-    <div class="ai-card-body">
+    <div class="ai-surface-body">
       <div class="ai-pipe-label">Pipeline de Chat (Interacciones en tiempo real)</div>
-      <div class="ai-pipeline mb-3" id="pipeline-chat-viz">
+      <div class="ai-pipeline mb-4" id="pipeline-chat-viz">
         <div class="ai-pipe-node terminal">Pregunta</div>
         <div class="ai-pipe-arrow">&rarr;</div>
         <div class="ai-pipe-node" data-pipe-role="query_rewriter">
@@ -98,7 +97,7 @@
         <div class="ai-pipe-node highlight" id="pipe-main-agent">
           <div class="node-role">Main Agent</div>
           <div class="node-model font-monospace" id="pipe-default-model">—</div>
-          <div class="node-meta small"><span class="ai-badge tone-primary">Predeterminado</span></div>
+          <div class="node-meta small"><span class="ai-pill tone-primary">Predeterminado</span></div>
         </div>
         <div class="ai-pipe-arrow">&rarr;</div>
         <div class="ai-pipe-node terminal">DAX / Tools</div>
@@ -134,11 +133,11 @@
   </div>
 
   {# 1. Modelos Permitidos y Disponibilidad #}
-  <div class="ai-card mb-3">
-    <div class="ai-card-header">
+  <div class="ai-surface mb-3">
+    <div class="ai-surface-header">
       <div>
-        <h3><i class="bi bi-shield-check me-2"></i>1. Modelos permitidos y selector del chat</h3>
-        <span class="ai-sub">Define qué modelos pueden usarse en este alcance y cuál es el predeterminado. Un override reemplaza la lista heredada completa.</span>
+        <h3 class="ai-surface-title"><i class="bi bi-shield-check me-2"></i>1. Modelos permitidos y selector del chat</h3>
+        <p class="ai-surface-subtitle">Define qué modelos pueden usarse en este alcance y cuál es el predeterminado. Un override reemplaza la lista heredada completa.</p>
       </div>
       <div>
         <label class="form-check form-switch mb-0">
@@ -164,15 +163,16 @@
           <tr data-model="{{ model.model_key }}">
             <td>
               <div class="ai-cell-title">{{ model.display_name }}</div>
-              <code>{{ model.model_key }}</code>
+              <code class="small">{{ model.model_key }}</code>
             </td>
             <td><strong class="text-capitalize">{{ model.provider }}</strong></td>
             <td>
-              <span class="ai-badge tone-{{ 'success' if model.validation_status == 'passed' else 'warning' }}">
-                {{ model.validation_status }}
+              <span class="ai-status tone-{{ 'success' if model.validation_status == 'passed' else 'warning' }}">
+                <span class="ai-status-dot"></span>
+                <span>{{ model.validation_status }}</span>
               </span>
               {% if not model.enabled %}
-                <span class="ai-badge tone-neutral ms-1">deshabilitado</span>
+                <span class="ai-pill tone-neutral ms-1">deshabilitado</span>
               {% endif %}
             </td>
             <td class="text-center">
@@ -192,24 +192,24 @@
   </div>
 
   {# 2. Configuración de Componentes Internos #}
-  <div class="ai-card">
-    <div class="ai-card-header">
+  <div class="ai-surface">
+    <div class="ai-surface-header">
       <div>
-        <h3><i class="bi bi-sliders me-2"></i>2. Componentes internos / Roles del pipeline</h3>
-        <span class="ai-sub">Cada rol puede configurarse en "Heredar" (usa la configuración del alcance superior) o sobreescribirse específicamente.</span>
+        <h3 class="ai-surface-title"><i class="bi bi-sliders me-2"></i>2. Componentes internos / Roles del pipeline</h3>
+        <p class="ai-surface-subtitle">Cada rol puede configurarse en "Heredar" (usa la configuración del alcance superior) o sobreescribirse específicamente.</p>
       </div>
     </div>
-    <div class="ai-card-body">
+    <div class="ai-surface-body">
       <div class="row g-3">
         {% for c in component_defs %}
         <div class="col-lg-6">
           <div class="ai-component" data-role="{{ c.role }}" id="card-role-{{ c.role }}">
             <div class="ai-component-head">
               <div>
-                <h3>{{ c.label }}</h3>
-                <div class="role-key">{{ c.role }}</div>
+                <h4 class="mb-0 fw-semibold fs-6">{{ c.label }}</h4>
+                <div class="role-key small text-muted font-monospace">{{ c.role }}</div>
               </div>
-              <span class="ai-badge tone-neutral role-dirty-badge" hidden>modificado</span>
+              <span class="ai-pill tone-warning role-dirty-badge" hidden>modificado</span>
             </div>
 
             <div class="mb-2">
@@ -226,7 +226,7 @@
             </div>
 
             <details class="role-advanced mt-2" hidden>
-              <summary class="fw-semibold">
+              <summary class="fw-semibold small text-muted">
                 Configuración avanzada de ejecución <span class="badge bg-secondary role-override-count"></span>
               </summary>
               <div class="row g-2 mt-2">
@@ -247,7 +247,7 @@
                   <select class="form-select form-select-sm" data-field="service_tier"></select>
                 </div>
               </div>
-              <div class="form-text role-hint mt-1"></div>
+              <div class="form-text role-hint mt-1 small"></div>
             </details>
 
             <div class="ai-effective component-effective"></div>
@@ -268,8 +268,8 @@
       </div>
     </div>
     <div class="d-flex gap-2">
-      <button class="btn btn-sm btn-outline-secondary" type="button" id="discard-scope">Descartar</button>
-      <button class="btn btn-sm btn-primary" type="button" id="save-dirty">Guardar alcance</button>
+      <button class="ai-btn-ghost btn-sm" type="button" id="discard-scope">Descartar</button>
+      <button class="ai-btn-primary btn-sm" type="button" id="save-dirty">Guardar alcance</button>
     </div>
   </div>
 </div>
@@ -390,7 +390,7 @@
     const rows = FIELDS.map(([name, label]) => {
       const val = name === 'service_tier' && !item.effective[name] ? 'estándar' : show(item.effective[name]);
       const src = item.effective_sources[name] === 'role' ? 'override del rol' : 'del modelo';
-      return `<div class="ai-effective-row"><span class="k">${label}</span><span class="v">${escapeHtml(val)} <span class="ai-badge tone-neutral">${src}</span></span></div>`;
+      return `<div class="ai-effective-row"><span class="k">${label}</span><span class="v">${escapeHtml(val)} <span class="ai-pill tone-neutral">${src}</span></span></div>`;
     });
     target.innerHTML = `<div class="d-flex justify-content-between align-items-center mb-1"><span>Efectivo: <strong>${escapeHtml(item.display_name)}</strong></span> ${originBadge}</div>${rows.join('')}`;
     updatePipelineNode(card.dataset.role, item.display_name || item.model_key, origin);
@@ -403,7 +403,7 @@
     const metaEl = node.querySelector('.node-meta');
     modelEl.textContent = modelLabel || '—';
     node.classList.toggle('is-off', modelLabel === 'disabled');
-    metaEl.innerHTML = `<span class="ai-badge tone-neutral">${escapeHtml(origin)}</span>`;
+    metaEl.innerHTML = `<span class="ai-pill tone-neutral">${escapeHtml(origin)}</span>`;
   }
 
   function updateDefaultModelPipe(modelName) {

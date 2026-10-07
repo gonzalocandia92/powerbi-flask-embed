@@ -28,7 +28,7 @@
   function enhanceSelect(select) {
     if (instances.has(select)) return instances.get(select);
 
-    const wrap = el('div', 'ai-ss');
+    const wrap = el('div', 'ai-ss ai-ss-wrap');
     const control = el('button', 'ai-ss-control');
     control.type = 'button';
     control.setAttribute('aria-haspopup', 'listbox');
@@ -140,6 +140,11 @@
       search.value = '';
       render();
       search.focus();
+      const parentSurface = wrap.closest('.ai-surface');
+      if (parentSurface) {
+        parentSurface.style.zIndex = '30';
+        parentSurface.style.position = 'relative';
+      }
     }
 
     function close(focusControl) {
@@ -147,6 +152,11 @@
       panel.hidden = true;
       wrap.classList.remove('open');
       control.setAttribute('aria-expanded', 'false');
+      const parentSurface = wrap.closest('.ai-surface');
+      if (parentSurface) {
+        parentSurface.style.removeProperty('z-index');
+        parentSurface.style.removeProperty('position');
+      }
       if (focusControl) control.focus();
     }
 

@@ -1,24 +1,23 @@
 {% extends "admin/ai/shell.html" %}
-{% from "admin/ai/_macros.html" import page_header, kpi, badge, active_badge, empty_state %}
+{% from "admin/ai/_macros.html" import page_header, kpi, pill, active_badge, status_badge, empty_state %}
 
 {% block title %}Catálogo de modelos · Configuración AI{% endblock %}
 
 {% set active_ai_section = 'catalog' %}
+{% set page_crumb = 'Gobierno' %}
+{% set page_title = 'Catálogo de modelos' %}
+{% set page_subtitle = 'Modelos registrados, credenciales, pricing y estado de preparación operativa.' %}
 
-{% block ai_content %}
-{% call page_header(
-    'Catálogo de modelos',
-    'Modelos registrados, credenciales, pricing y estado de preparación operativa.',
-    'Gobierno'
-) %}
-  <a class="btn btn-outline-secondary" href="{{ url_for('model_catalog.components_page') }}">
+{% block header_actions %}
+  <a class="ai-btn-secondary" href="{{ url_for('model_catalog.components_page') }}">
     <i class="bi bi-sliders me-1"></i>Componentes del chat
   </a>
-  <a class="btn btn-primary" href="{{ url_for('model_catalog.catalog_new') }}">
+  <a class="ai-btn-primary" href="{{ url_for('model_catalog.catalog_new') }}">
     <i class="bi bi-plus-lg me-1"></i>Nuevo modelo
   </a>
-{% endcall %}
+{% endblock %}
 
+{% block ai_content %}
 {% set kv = catalog_view.kpis %}
 <div class="ai-kpis">
   {{ kpi('Total registrados', kv.total, 'En el catálogo', 'neutral') }}
@@ -27,13 +26,13 @@
   {{ kpi('Deshabilitados', kv.disabled, 'Desactivados administrativamente', 'neutral') }}
 </div>
 
-<div class="ai-card" data-ai-filter-scope>
-  <div class="ai-card-header">
+<div class="ai-surface" data-ai-filter-scope>
+  <div class="ai-surface-header">
     <div>
-      <h3><i class="bi bi-cpu me-2"></i>Modelos disponibles</h3>
-      <span class="ai-sub">Los bloqueos operativos son derivados automáticamente de la configuración del sistema.</span>
+      <h3 class="ai-surface-title"><i class="bi bi-cpu me-2"></i>Modelos disponibles</h3>
+      <p class="ai-surface-subtitle">Los bloqueos operativos son derivados automáticamente de la configuración del sistema.</p>
     </div>
-    <button class="btn btn-sm btn-outline-secondary" type="button" data-filter-reset>
+    <button class="ai-btn-ghost" type="button" data-filter-reset>
       <i class="bi bi-arrow-counterclockwise me-1"></i>Limpiar filtros
     </button>
   </div>
@@ -69,7 +68,7 @@
       <thead>
         <tr>
           <th style="width: 28px;"></th>
-          <th>Nombre lógico / Clave</th>
+          <th>Nombre comercial / Clave</th>
           <th>Proveedor</th>
           <th>Modelo físico</th>
           <th>Estado operativo</th>
@@ -90,13 +89,13 @@
             data-search="{{ m.display_name }} {{ m.model_key }} {{ m.physical_model }} {{ m.provider }}"
             id="model-row-{{ m.id }}">
           <td>
-            <button class="ai-icon-btn" type="button" data-toggle-detail="model-detail-{{ m.id }}" title="Ver detalles y capacidades" aria-expanded="false">
+            <button class="ai-btn-icon" type="button" data-toggle-detail="model-detail-{{ m.id }}" title="Ver detalles y capacidades" aria-expanded="false">
               <i class="bi bi-chevron-right"></i>
             </button>
           </td>
           <td>
             <div class="ai-cell-title">{{ m.display_name }}</div>
-            <code>{{ m.model_key }}</code>
+            <code class="small">{{ m.model_key }}</code>
           </td>
           <td>
             <strong class="text-capitalize">{{ m.provider }}</strong>
@@ -105,48 +104,49 @@
             {% endif %}
           </td>
           <td>
-            <code class="text-muted">{{ m.physical_model }}</code>
+            <code class="text-muted small">{{ m.physical_model }}</code>
           </td>
           <td>
-            <span class="ai-badge tone-{{ st.tone }}">
-              <span class="ai-dot tone-{{ st.tone }}"></span>{{ st.label }}
+            <span class="ai-status tone-{{ st.tone }}">
+              <span class="ai-status-dot"></span>
+              <span>{{ st.label }}</span>
             </span>
             {% if not m.enabled %}
-              <span class="ai-badge tone-neutral ms-1">off</span>
+              <span class="ai-pill tone-neutral ms-1">off</span>
             {% endif %}
           </td>
           <td>
             {% if r.credential_configured %}
-              <span class="ai-badge tone-success"><i class="bi bi-check2"></i>Configurada</span>
+              <span class="ai-status tone-success"><span class="ai-status-dot"></span><span>Configurada</span></span>
             {% else %}
-              <span class="ai-badge tone-danger"><i class="bi bi-x"></i>Faltante</span>
+              <span class="ai-status tone-danger"><span class="ai-status-dot"></span><span>Faltante</span></span>
             {% endif %}
           </td>
           <td>
             {% if r.pricing_configured %}
-              <span class="ai-badge tone-success"><i class="bi bi-check2"></i>Configurado</span>
+              <span class="ai-status tone-success"><span class="ai-status-dot"></span><span>Configurado</span></span>
             {% else %}
-              <span class="ai-badge tone-danger"><i class="bi bi-x"></i>Incompleto</span>
+              <span class="ai-status tone-danger"><span class="ai-status-dot"></span><span>Incompleto</span></span>
             {% endif %}
           </td>
           <td>
             <div class="d-flex flex-wrap gap-1">
               {% if m.supports_tools %}
-                <span class="badge bg-light text-dark border" title="Soporte de Tools / Function Calling">tools</span>
+                {{ pill('tools', 'neutral', title='Soporte de Tools / Function Calling') }}
               {% endif %}
               {% if m.supports_reasoning %}
-                <span class="badge bg-light text-primary border" title="Reasoning / Pensamiento analítico">reasoning</span>
+                {{ pill('reasoning', 'primary', title='Reasoning / Pensamiento analítico') }}
               {% endif %}
               {% if m.supports_flex %}
-                <span class="badge bg-light text-success border" title="Soporte de Service Tier Flex">flex</span>
+                {{ pill('flex', 'success', title='Soporte de Service Tier Flex') }}
               {% endif %}
               {% if m.supports_cache_key %}
-                <span class="badge bg-light text-info border" title="Cache contextual">cache</span>
+                {{ pill('cache', 'info', title='Cache contextual') }}
               {% endif %}
             </div>
           </td>
           <td class="text-end nowrap">
-            <a class="btn btn-sm btn-outline-primary" href="{{ url_for('model_catalog.catalog_edit', model_key=m.model_key) }}">
+            <a class="ai-btn-ghost btn-sm" href="{{ url_for('model_catalog.catalog_edit', model_key=m.model_key) }}">
               <i class="bi bi-pencil me-1"></i>Editar
             </a>
           </td>
@@ -155,12 +155,13 @@
         <tr class="ai-detail-row" id="model-detail-{{ m.id }}" data-detail-for="model-row-{{ m.id }}" hidden>
           <td></td>
           <td colspan="8">
-            <div class="row g-3 py-1">
+            <div class="row g-3 py-2">
               <div class="col-md-3">
                 <div class="ai-cell-sub">Validación</div>
                 <div>
-                  <span class="ai-badge tone-{{ 'success' if m.validation_status == 'passed' else 'warning' }}">
-                    {{ m.validation_status }}
+                  <span class="ai-status tone-{{ 'success' if m.validation_status == 'passed' else 'warning' }}">
+                    <span class="ai-status-dot"></span>
+                    <span>{{ m.validation_status }}</span>
                   </span>
                   {% if m.validated_at %}
                     <div class="ai-cell-sub">{{ m.validated_at.strftime('%d/%m/%Y %H:%M') }}</div>
@@ -169,7 +170,7 @@
               </div>
               <div class="col-md-3">
                 <div class="ai-cell-sub">Ventana de contexto</div>
-                <div>{{ m.context_window|string }} tokens</div>
+                <div class="font-monospace small">{{ m.context_window|string }} tokens</div>
                 <div class="ai-cell-sub">Max output: {{ m.max_output_tokens|string }}</div>
               </div>
               <div class="col-md-3">
@@ -188,7 +189,7 @@
                 <div class="ai-cell-sub mb-1">Bloqueos detectados:</div>
                 <div class="d-flex flex-wrap gap-1">
                   {% for b in st.blockers %}
-                    <span class="ai-badge tone-{{ b.tone }}"><i class="bi bi-exclamation-circle me-1"></i>{{ b.label }}</span>
+                    <span class="ai-pill tone-{{ b.tone }}"><i class="bi bi-exclamation-circle me-1"></i>{{ b.label }}</span>
                   {% endfor %}
                 </div>
               </div>

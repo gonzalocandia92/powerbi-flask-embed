@@ -1,9 +1,9 @@
 {# Left navigation of the AI console (Gobierno / Agente KLARA / Calidad / Reporting). #}
-{% set current_ai_section = active_ai_section|default(active_tab|default('', true), true) %}
+{% set current_ai_section = active_ai_section|default(active_section|default(active_tab|default('', true), true), true) %}
 {% set ai_nav = [
   ('Gobierno', [
     ('limits', 'Límites de consumo', 'speedometer2', url_for('ai_config.index', tab='limits')),
-    ('pricing', 'Pricing de modelos', 'tags', url_for('ai_config.index', tab='pricing')),
+    ('pricing', 'Pricing de modelos', 'tag', url_for('ai_config.index', tab='pricing')),
     ('catalog', 'Catálogo de modelos', 'cpu', url_for('model_catalog.catalog_page')),
   ]),
   ('Agente KLARA', [
@@ -19,16 +19,22 @@
     ('reporting_history', 'Historial de informes', 'clock-history', url_for('ai_reporting.history_page')),
   ]),
 ] %}
-<nav class="ai-sidenav" aria-label="Configuración AI">
-  <div class="ai-sidenav-title"><i class="bi bi-stars"></i>Configuración AI</div>
+<nav class="ai-sidenav" aria-label="Consola AI">
+  <div class="ai-sidenav-brand">
+    <span class="ai-sidenav-logo"><i class="bi bi-stars"></i></span>
+    <span class="ai-sidenav-app">Configuración AI</span>
+  </div>
   {% for group, links in ai_nav %}
   <div class="ai-sidenav-group">
     <div class="ai-sidenav-heading">{{ group }}</div>
-    {% for key, label, icon, href in links %}
-    <a class="ai-nav-link {% if current_ai_section == key %}active{% endif %}" href="{{ href }}"{% if current_ai_section == key %} aria-current="page"{% endif %}>
-      <i class="bi bi-{{ icon }}"></i>{{ label }}
-    </a>
-    {% endfor %}
+    <div class="ai-sidenav-list">
+      {% for key, label, icon, href in links %}
+      <a class="ai-nav-link {% if current_ai_section == key %}active{% endif %}" href="{{ href }}"{% if current_ai_section == key %} aria-current="page"{% endif %}>
+        <i class="bi bi-{{ icon }}"></i>
+        <span>{{ label }}</span>
+      </a>
+      {% endfor %}
+    </div>
   </div>
   {% endfor %}
 </nav>
