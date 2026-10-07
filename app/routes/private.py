@@ -131,6 +131,17 @@ def report_config():
             'reportId': rid,
             'accessToken': embed_token,
             'workspaceId': report.workspace.workspace_id,
+            # Merge into the powerbi-client embed `settings`. Persistent filters can
+            # only be set at load time and are required by resetPersistentFilters().
+            'settings': {
+                'persistentFiltersEnabled': bool(report.allow_reset_to_default),
+            },
+            # Buttons the client may show. Both run in the browser through the
+            # Power BI client SDK: report.resetPersistentFilters() and report.refresh().
+            'actions': {
+                'resetToDefault': bool(report.allow_reset_to_default),
+                'refreshVisuals': bool(report.allow_refresh_visuals),
+            },
         }), 200
     except Exception as e:
         logging.error(f"Error generating embed token for report {report_id}: {e}")

@@ -13,13 +13,38 @@ import logging
 from datetime import datetime, timezone
 
 from flask import Blueprint, current_app, jsonify, request
+from flask_login import current_user
+from sqlalchemy import or_
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink
 from app.services import ai_billing, chatbot_service, model_catalog
+from app.services.report_access import (
+    access_denied_json,
+    active_link_report,
+    has_backoffice_access,
+    login_required_slugs,
+    user_can_view_report,
+)
 from app.utils.chatbot_context import get_all_active_reports, get_workspace_info
 
 bp = Blueprint("chatbot", __name__)
+
+
+def _slug_access_error(slug):
+    """Error response when `slug` belongs to a report that requires a login the caller lacks."""
+    try:
+        report = active_link_report(slug)
+        if report is None or user_can_view_report(current_user, report):
+            return None
+        return access_denied_json(current_user)
+    except Exception:
+        return None
+
+
+def _hidden_slugs():
+    """Slugs of reports that require a login, hidden from callers without backoffice access."""
+    return set() if has_backoffice_access(current_user) else login_required_slugs()
 
 
 @bp.route("/chat", methods=["POST"])
@@ -35,6 +60,10 @@ async def chat():
     slug = (data.get("slug") or "").strip() or None
     if not slug:
         return jsonify({"error": "slug is required"}), 400
+
+    denied = _slug_access_error(slug)
+    if denied is not None:
+        return denied
 
     conversation_id = data.get("conversation_id") or data.get("session_id")
     conversation_id_value = str(conversation_id).strip() if conversation_id is not None else None
@@ -90,6 +119,8 @@ def chat_models():
     if link is None:
         return jsonify({"error": "Slug not found or inactive"}), 404
     report = link.report
+    if not user_can_view_report(current_user, report):
+        return access_denied_json(current_user)
     billing = ai_billing.resolve_report_billing_context(report)
     models = model_catalog.available_client_models(
         report_id=report.id, empresa_id=billing.empresa_id, config=dict(current_app.config)
@@ -107,6 +138,9 @@ def chat_models():
 
 @bp.route("/api/chatbot/context/<slug>", methods=["GET"])
 def report_context(slug):
+    denied = _slug_access_error(slug)
+    if denied is not None:
+        return denied
     info = get_workspace_info(slug)
     if not info:
         return jsonify({"error": "Slug not found or inactive"}), 404
@@ -115,7 +149,8 @@ def report_context(slug):
 
 @bp.route("/api/chatbot/reports", methods=["GET"])
 def active_reports():
-    return jsonify(get_all_active_reports())
+    hidden = _hidden_slugs()
+    return jsonify([report for report in get_all_active_reports() if report["slug"] not in hidden])
 
 
 @bp.route("/api/chatbot/test-agent", methods=["POST"])
@@ -237,6 +272,9 @@ def list_sessions():
     q = ChatSession.query.order_by(ChatSession.created_at.desc())
     if slug:
         q = q.filter_by(slug=slug)
+    hidden = _hidden_slugs()
+    if hidden:
+        q = q.filter(or_(ChatSession.slug.is_(None), ChatSession.slug.notin_(hidden)))
     sessions = q.limit(limit).all()
     return jsonify(
         [
@@ -258,7 +296,7 @@ def list_sessions():
 @bp.route("/api/chatbot/sessions/<int:session_id>", methods=["GET"])
 def get_session(session_id):
     session = db.session.get(ChatSession, session_id)
-    if not session:
+    if not session or session.slug in _hidden_slugs():
         return jsonify({"error": "Session not found"}), 404
     messages = session.messages.order_by(ChatMessage.created_at.asc()).all()
     return jsonify(

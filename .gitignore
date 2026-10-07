@@ -57,3 +57,7 @@ services/mcp_aklara/lib/
 Microsoft.AnalysisServices*.zip
 # Local Pi runtime state
 .atl/
+
+# Database backups (contain production data)
+backups/
+*.dump
