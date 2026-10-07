@@ -14,9 +14,9 @@ validated ``FinalReport``, never client-supplied HTML. As defense in depth the U
 fetcher (WeasyPrint's own, limited to the ``data`` protocol) refuses everything else: the HTML is self-contained, so nothing
 legitimate needs the network or the filesystem.
 
-WeasyPrint does not implement ``repeat(auto-fit, minmax(...))``, which the versioned
-HTML renderers use for their grids. Those renderers are historical and stay untouched;
-``PDF_COMPAT_CSS`` is applied here, on top of the document, with explicit columns.
+WeasyPrint implements less of CSS Grid/Flexbox than the browser the HTML was designed against.
+The compensations are a separate, named stylesheet (``weasyprint_print_styles``) applied on top
+of the canonical document; the HTML renderers stay untouched and another engine ignores it.
 """
 from __future__ import annotations
 
@@ -25,21 +25,11 @@ import logging
 import os
 from typing import Any, Mapping, Protocol
 
+from .weasyprint_print_styles import weasyprint_print_css
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_TIMEOUT_MS = 30_000
-
-# Print layout of the grids that use ``auto-fit`` (V1/V2 ``.kpis``; V3 ``.strip``, ``.cards``
-# and ``.attn-grid``). Explicit column counts mirror the previous browser layout on A4. Only
-# overrides: everything else (``@page``, ``break-*``, theme variables) comes from the document.
-PDF_COMPAT_CSS = """
-.kpis{grid-template-columns:repeat(3,minmax(0,1fr)) !important}
-.strip{grid-template-columns:repeat(4,minmax(0,1fr)) !important}
-.cards{grid-template-columns:repeat(3,minmax(0,1fr)) !important}
-.rail .cards{grid-template-columns:minmax(0,1fr) !important}
-.attn-grid{grid-template-columns:repeat(3,minmax(0,1fr)) !important}
-.metric-value{font-size:1.1rem !important;overflow-wrap:anywhere}
-"""
 
 
 class PdfRenderer(Protocol):
@@ -104,7 +94,7 @@ class WeasyPrintPdfRenderer:
     @staticmethod
     def _print(weasyprint: Any, html: str) -> bytes:
         document = weasyprint.HTML(string=html, url_fetcher=_inline_only_url_fetcher(weasyprint))
-        return document.write_pdf(stylesheets=[weasyprint.CSS(string=PDF_COMPAT_CSS)])
+        return document.write_pdf(stylesheets=[weasyprint.CSS(string=weasyprint_print_css())])
 
 
 def build_pdf_renderer(env: Mapping[str, str] | None = None) -> PdfRenderer:

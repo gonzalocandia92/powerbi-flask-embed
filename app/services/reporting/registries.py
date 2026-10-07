@@ -27,9 +27,10 @@ from .final_report_v131 import FinalReportV131
 from .html_renderer import HtmlReportRenderer
 from .html_renderer_v2 import HtmlReportRendererV2
 from .html_renderer_v3 import HtmlReportRendererV3
+from .html_renderer_v4 import HtmlReportRendererV4
 from .versions import (
     FINAL_REPORT_SCHEMA_1_1, FINAL_REPORT_SCHEMA_1_2, FINAL_REPORT_SCHEMA_1_3, FINAL_REPORT_SCHEMA_1_3_1,
-    HTML_RENDERER_V1, HTML_RENDERER_V2, HTML_RENDERER_V3,
+    HTML_RENDERER_V1, HTML_RENDERER_V2, HTML_RENDERER_V3, HTML_RENDERER_V4,
 )
 
 
@@ -190,6 +191,10 @@ def build_default_html_renderers() -> HtmlRendererRegistry:
     both = (FINAL_REPORT_SCHEMA_1_3, FINAL_REPORT_SCHEMA_1_3_1)
     registry.register(HTML_RENDERER_V3, HtmlReportRendererV3, schema_versions=both, default_for=both,
                       original_for=both)
+    # html-v4 presents 1.3.1 only and is its recommended renderer for NEW output; html-v3 remains its original renderer
+    # (legacy runs without stored HTML) and the renderer of every artifact stored as html-v3. 1.3 keeps html-v3.
+    registry.register(HTML_RENDERER_V4, HtmlReportRendererV4, schema_versions=(FINAL_REPORT_SCHEMA_1_3_1,),
+                      default_for=(FINAL_REPORT_SCHEMA_1_3_1,))
     return registry
 
 

@@ -26,7 +26,8 @@ from .visual_content import MAX_CHART_ITEMS
 from .visual_validation_v131 import materialize_visuals_v131
 from .writer import MAX_VALIDATION_ERRORS, _strip_fences
 
-STRUCTURED_WRITER_PROMPT_VERSION_131 = "structured-writer-v131"
+# "r2": same 1.3.1 schema and code path; the editorial policy for section layouts and repetition was added to the rules.
+STRUCTURED_WRITER_PROMPT_VERSION_131 = "structured-writer-v131.2"
 MAX_PROMPT_FACTS = 20
 MAX_ERROR_CHARS_131 = 1600     # evidence inventories must survive into the repair message
 
@@ -62,6 +63,11 @@ COMPONENTES (vocabulario cerrado; no existe ningún otro)
 - metric_strip (para kpi_grid): 0 a max_kpis metrics {key, label, value_ref, secondary_value_ref, trend, impact, source_section_keys}. max_kpis es un TOPE, no una cuota: preferí 3 KPIs excelentes a 8 forzados. Prioridad: (1) facts fuertes y ejecutivos; (2) series_item sólo si una fila concreta es especialmente significativa; (3) si no hay una métrica clara, no la crees (metrics puede ser []). trend es la dirección ("up","down","stable","neutral") y debe coincidir con el signo de la evidencia si es una variación; impact indica si es favorable ("positive","negative","neutral").
 - section: key, title, status, summary, layout, bloques y source_section_keys (las keys de las evidencias que respaldan la sección; si lo omitís, el sistema lo completa con las de sus bloques).
   layout "standard": una columna (blocks). "feature": contenido principal en blocks + columna de apoyo en secondary_blocks. "split": dos columnas equivalentes. En "standard" secondary_blocks debe estar vacío. No hay otros layouts ni anchos ni colores.
+  POLÍTICA EDITORIAL DE LAYOUTS
+  - feature: hay una historia principal (blocks) y un complemento. secondary_blocks es contenido COMPLEMENTARIO y BREVE; no es una segunda narrativa. Preferí 1 o 2 bloques secundarios compactos (una tarjeta, un bar_chart corto, una annotation breve o una lista corta); evitá varios párrafos largos; un bullet_list secundario tiene como máximo 3 bullets breves; no pongas annotations metodológicas extensas en la columna de apoyo salvo que expliquen específicamente el dato secundario.
+  - Si ambos lados tienen peso narrativo equivalente, usá "split". Si la narrativa es extensa y esencialmente lineal, usá "standard".
+  - Una annotation que aclara una limitación o la comparabilidad de TODA la sección va junto a la narrativa principal (blocks), no en secondary_blocks.
+  - summary expresa el insight principal de la sección. Los bloques posteriores aportan evidencia, desagregación, explicación o caveats: no repitas las mismas cifras y conclusiones en summary, primer paragraph y paragraphs siguientes. Orden recomendado: summary (insight) -> evidencia cuantitativa -> interpretación -> caveat. No elimines información necesaria sólo para evitar repetir.
   Bloques: paragraph {text}; bullet_list {items}; table {caption, columns, rows} (celdas de texto; las cifras deben existir en la evidencia); callout {severity info|warning|critical, title, text}; pull_quote {text, stat opcional (una tarjeta con value_ref), source_section_keys}; annotation {text, source_section_keys} para aclaraciones metodológicas o caveats junto al dato; metric_cards {cards:[{label, value_ref, secondary_value_ref, supporting_text, source_section_keys}]} (máximo 6); bar_chart {variant, title, series_ref, secondary_series_ref opcional, secondary_label, items, source_section_keys}.
   bar_chart: variant "bars" (proporcional al máximo), "ranking" (lista numerada con columna secundaria opcional, p. ej. variación junto a participación; secondary_series_ref debe ser una serie con las mismas etiquetas) o "distribution" (participación sobre el total mostrado). series_ref es un SeriesRef. DEJÁ items VACÍO ([]): el sistema lo completa con los valores exactos de la serie. Máximo 3 bar_chart por sección.
 - attention_grid (para attention_points): points {severity "high"|"medium"|"low", title, text, source_section_keys}. La severidad es criterio editorial pero no puede cambiar los hechos. Puede quedar vacío.

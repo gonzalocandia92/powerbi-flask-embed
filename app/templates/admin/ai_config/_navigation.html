@@ -22,7 +22,11 @@
 <nav class="ai-sidenav" aria-label="Consola AI">
   <div class="ai-sidenav-brand">
     <span class="ai-sidenav-logo"><i class="bi bi-stars"></i></span>
-    <span class="ai-sidenav-app">Configuración AI</span>
+    <span class="ai-sidenav-app">KLARA AI</span>
+  </div>
+  <div class="ai-sidenav-workspace">
+    <small>Consola administrativa</small>
+    <b>Configuración AI</b>
   </div>
   {% for group, links in ai_nav %}
   <div class="ai-sidenav-group">
@@ -30,11 +34,14 @@
     <div class="ai-sidenav-list">
       {% for key, label, icon, href in links %}
       <a class="ai-nav-link {% if current_ai_section == key %}active{% endif %}" href="{{ href }}"{% if current_ai_section == key %} aria-current="page"{% endif %}>
-        <i class="bi bi-{{ icon }}"></i>
+        <span class="ai-nav-icon"><i class="bi bi-{{ icon }}"></i></span>
         <span>{{ label }}</span>
       </a>
       {% endfor %}
     </div>
   </div>
   {% endfor %}
+  <div class="ai-sidenav-foot">
+    <span>Sudata PBI &middot; Consola AI</span>
+  </div>
 </nav>

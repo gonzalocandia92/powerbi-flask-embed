@@ -258,7 +258,13 @@
           });
         }
       });
-      if (counter) counter.textContent = shown === total ? `${total} en total` : `${shown} de ${total}`;
+      if (counter) {
+        const unit = counter.dataset.filterCountUnit;
+        const suffix = unit ? ` ${unit}` : '';
+        counter.textContent = shown === total
+          ? (unit ? `${total}${suffix}` : `${total} en total`)
+          : `${shown} de ${total}${suffix}`;
+      }
       if (emptyRow) emptyRow.hidden = shown !== 0 || total === 0;
     }
 

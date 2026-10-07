@@ -4,7 +4,7 @@
 {% macro page_header(title, subtitle=none, crumb=none) -%}
 <header class="ai-page-header">
   <div>
-    {% if crumb %}<div class="ai-breadcrumb">{{ crumb }}</div>{% endif %}
+    {% if crumb %}<div class="ai-kicker">{{ crumb }}</div>{% endif %}
     <h1 class="ai-page-title">{{ title }}</h1>
     {% if subtitle %}<p class="ai-page-subtitle">{{ subtitle }}</p>{% endif %}
   </div>
@@ -17,9 +17,17 @@
   {%- set icon = tone -%}
   {%- set tone = none -%}
 {%- endif -%}
+{# Icono por defecto derivado del estado cuando el caller no pasa uno. #}
+{%- set default_icons = {'success': 'bi-check2', 'warning': 'bi-exclamation-lg', 'danger': 'bi-x-lg', 'primary': 'bi-stars', 'info': 'bi-info-lg'} -%}
+{%- set icon = icon or default_icons.get(tone, 'bi-app') -%}
 <div class="ai-kpi{% if tone and tone != 'default' %} tone-{{ tone }}{% endif %}">
-  <div class="ai-kpi-label">{% if icon %}<i class="bi {{ icon if not icon.startswith('bi-') else icon }} me-1"></i>{% endif %}{{ label }}</div>
-  <div class="ai-kpi-value">{{ value }}</div>
+  <div class="ai-kpi-top">
+    <div>
+      <div class="ai-kpi-label">{{ label }}</div>
+      <div class="ai-kpi-value">{{ value }}</div>
+    </div>
+    <span class="ai-kpi-icon" aria-hidden="true"><i class="bi {{ icon }}"></i></span>
+  </div>
   {% if hint %}<div class="ai-kpi-hint">{{ hint }}</div>{% endif %}
 </div>
 {%- endmacro %}

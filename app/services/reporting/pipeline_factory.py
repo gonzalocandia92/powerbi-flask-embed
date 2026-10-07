@@ -31,6 +31,7 @@ from .composer import ReportComposer
 from .html_renderer import HtmlReportRenderer
 from .html_renderer_v2 import HtmlReportRendererV2
 from .html_renderer_v3 import HtmlReportRendererV3
+from .html_renderer_v4 import HtmlReportRendererV4
 from .generator import ReportGenerator
 from .pipeline import ReportPipeline
 from .usage import record_coordinator_usage, record_extra_analysis_usage, record_section_usage, record_writer_usage
@@ -73,7 +74,7 @@ _STRUCTURED_FLOWS = {
         lambda config, report_id: resolve_structured_report_writer_v13(config, report_id), True, HtmlReportRendererV3),
     FINAL_REPORT_SCHEMA_1_3_1: _StructuredFlow(
         lambda config, report_id: resolve_structured_report_writer_v131(config, report_id), True,
-        HtmlReportRendererV3, fallback=FallbackReportBuilder),
+        HtmlReportRendererV4, fallback=FallbackReportBuilder),
 }
 
 

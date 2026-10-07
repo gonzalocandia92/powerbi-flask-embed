@@ -160,23 +160,28 @@
         Detalle de todas las corridas de evaluación ejecutadas. Accede al drill-down para revisar casos individuales y trazas.
       </p>
     </div>
+    <div class="ai-surface-actions">
+      <span class="ai-filter-count" data-filter-count></span>
+    </div>
   </div>
 
-  <div class="ai-toolbar">
-    <div class="ai-field grow">
-      <input type="search" class="form-control" data-filter-search placeholder="Buscar evaluación o reporte...">
+  <div class="ai-filter-layout">
+    <div class="ai-filter-primary">
+      <div class="ai-field">
+        <input type="search" class="form-control" data-filter-search placeholder="Buscar evaluación o reporte..." aria-label="Buscar evaluación o reporte">
+      </div>
+      <div class="ai-field">
+        <select class="form-select" data-filter="status" aria-label="Estado">
+          <option value="">Todos los estados</option>
+          <option value="completed">completed</option>
+          <option value="running">running</option>
+          <option value="queued">queued</option>
+          <option value="completed_with_errors">completed_with_errors</option>
+          <option value="failed">failed</option>
+          <option value="cancelled">cancelled</option>
+        </select>
+      </div>
     </div>
-    <div class="ai-field">
-      <select class="form-select" data-filter="status">
-        <option value="">Todos los estados</option>
-        <option value="completed">completed</option>
-        <option value="running">running</option>
-        <option value="queued">queued</option>
-        <option value="failed">failed</option>
-        <option value="cancelled">cancelled</option>
-      </select>
-    </div>
-    <div class="ai-toolbar-count" data-filter-count></div>
   </div>
 
   <div class="ai-table-wrap">

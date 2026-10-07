@@ -330,6 +330,26 @@
   }
   function clearMessage() { message.className = 'alert d-none mb-4'; message.textContent = ''; }
 
+  let savedDefinitionId = null;
+  function buildDefinitionPayload() {
+    const rows = [...questions.querySelectorAll('.reporting-row')];
+    const items = rows.map((row, index) => ({
+      key: row.dataset.key || `p${index + 1}`,
+      title: row.querySelector('.reporting-title').value.trim() || null,
+      question: row.querySelector('.reporting-question').value.trim(),
+      required_skill_keys: selectedSkills(row),
+    })).filter(row => row.question);
+    return {
+      report_id: Number(byId('reporting-report').value),
+      name: byId('reporting-name').value.trim() || 'Informe analítico',
+      questions: items,
+      strategy: 'coordinated',
+      analysis_model_key: model.value,
+      analysis_service_tier: tier.value || null,
+      structure_prompt: byId('reporting-structure-prompt').value.trim() || null,
+    };
+  }
+
   let defaultStructureTimer = null, defaultStructureSeq = 0;
   function refreshDefaultStructure() {
     clearTimeout(defaultStructureTimer);
@@ -910,29 +930,36 @@
       preview.textContent = 'Escribí una instrucción antes de interpretar la estructura.';
       return;
     }
+    const payload = buildDefinitionPayload();
+    if (!payload.questions.length) { preview.textContent = 'Ingresá al menos una pregunta analítica antes de interpretar la estructura.'; return; }
+    if (!payload.analysis_model_key) { preview.textContent = 'Seleccioná un modelo de análisis antes de interpretar la estructura.'; return; }
+    if (!payload.report_id) { preview.textContent = 'Seleccioná un reporte habilitado antes de interpretar la estructura.'; return; }
     btn.disabled = true;
     preview.classList.remove('d-none');
     preview.textContent = 'Interpretando estructura con structure_planner…';
     try {
-      const titles = [...questions.querySelectorAll('.reporting-row')].map(row => row.querySelector('.reporting-title').value.trim());
-      const data = await api.compileStructure(prompt, titles);
+      // The endpoint works on a saved definition: save (or update) it first, then compile.
+      const def = await api.saveDefinition({definitionId: savedDefinitionId, payload});
+      savedDefinitionId = def.id;
+      const data = await api.compileStructure({definitionId: def.id, force: true});
       preview.replaceChildren();
+      const items = Array.isArray(data.preview) ? data.preview : [];
       const title = document.createElement('strong');
-      title.textContent = `Estructura planificada (${data.sections.length} secciones):`;
+      title.textContent = `Estructura planificada (${items.length} secciones):`;
       preview.append(title);
       const list = document.createElement('ol');
       list.className = 'mb-1 mt-1 ps-3';
-      data.sections.forEach(s => {
+      items.forEach(item => {
         const li = document.createElement('li');
-        li.textContent = `${s.title} (${s.kind || 'analysis'})`;
+        li.textContent = item.label;
         list.append(li);
       });
       preview.append(list);
-      if (data.coordination_intent) {
-        const intent = document.createElement('div');
-        intent.className = 'text-muted';
-        intent.textContent = `Enfoque del coordinador: ${data.coordination_intent}`;
-        preview.append(intent);
+      if (data.fallback_used || data.error) {
+        const warn = document.createElement('div');
+        warn.className = 'text-danger';
+        warn.textContent = `No se pudo interpretar el prompt; se usa la estructura estándar.${data.error ? ' ' + data.error : ''}`;
+        preview.append(warn);
       }
     } catch (error) {
       preview.textContent = `Error al interpretar la estructura: ${error.message}`;
@@ -989,27 +1016,11 @@
 
   byId('reporting-generate').addEventListener('click', async () => {
     clearMessage();
-    const rows = [...questions.querySelectorAll('.reporting-row')];
-    const items = rows.map((row, index) => ({
-      key: row.dataset.key || `p${index + 1}`,
-      title: row.querySelector('.reporting-title').value.trim() || null,
-      question: row.querySelector('.reporting-question').value.trim(),
-      pinned_skill_keys: selectedSkills(row),
-    })).filter(row => row.question);
+    const payload = buildDefinitionPayload();
 
-    if (!items.length) { showMessage('Debes ingresar al menos una pregunta analítica.'); return; }
+    if (!payload.questions.length) { showMessage('Debes ingresar al menos una pregunta analítica.'); return; }
     if (!model.value) { showMessage('Debes seleccionar un modelo de análisis.'); return; }
     if (!byId('reporting-report').value) { showMessage('Debes seleccionar un reporte habilitado.'); return; }
-
-    const reportName = byId('reporting-name').value.trim() || 'Informe analítico';
-    const payload = {
-      report_id: Number(byId('reporting-report').value),
-      name: reportName,
-      questions: items,
-      model: model.value,
-      service_tier: tier.value || null,
-      structure_prompt: byId('reporting-structure-prompt').value.trim() || null,
-    };
 
     byId('reporting-generate').disabled = true;
     byId('reporting-spinner').classList.remove('d-none');
@@ -1017,7 +1028,8 @@
 
     try {
       await controller.launch(async () => {
-        const def = await api.saveDefinition({definitionId: null, payload});
+        const def = await api.saveDefinition({definitionId: savedDefinitionId, payload});
+        savedDefinitionId = def.id;
         return api.createRun({definitionId: def.id});
       });
     } catch (error) {
