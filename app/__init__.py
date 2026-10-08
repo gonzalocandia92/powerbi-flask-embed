@@ -251,8 +251,10 @@ def create_app():
             abort(403)
 
     # ── Background scheduler for dataset refresh monitoring ──────────────────
-    # Avoid double-start in Flask debug/reloader mode
-    if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    # Avoid double-start in Flask debug/reloader mode. DISABLE_BACKGROUND_SCHEDULER=1
+    # keeps pollers out of processes that must stay single-threaded (the test suite).
+    scheduler_disabled = os.getenv('DISABLE_BACKGROUND_SCHEDULER', '').lower() in ('1', 'true', 'yes')
+    if not scheduler_disabled and (not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'):
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
             from app.services.refresh_monitor import poll_all_reports

@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 
 from app.services import ai_billing
-from app.services.analytics import build_analytics_engine
+from app.services.analytics import RetryingAnalyticsExecutor, build_analytics_engine, build_retry_policy
 
 from .analysis_execution import build_analysis_execution, resolve_analysis_concurrency
 from .contracts import ReportDefinition
@@ -102,7 +102,10 @@ def build_structured_report_pipeline(config: dict, definition: ReportDefinition,
 
 def _assemble(config: dict, definition: ReportDefinition, *, writer, writing, renderer,
               analytics_engine=None, analysis_concurrency: int = 1) -> ReportPipeline:
-    analytics_engine = analytics_engine if analytics_engine is not None else build_analytics_engine(config)
+    base_analytics = analytics_engine if analytics_engine is not None else build_analytics_engine(config)
+    # Transient provider failures repeat the whole question (policy from server config); the generator, the
+    # coordinator's extra analyses and the concurrency strategy only see an ``AnalyticsExecutor``.
+    analytics_engine = RetryingAnalyticsExecutor(base_analytics, policy=build_retry_policy(config))
     report_id = definition.report_id
 
     async def record_usage(section):

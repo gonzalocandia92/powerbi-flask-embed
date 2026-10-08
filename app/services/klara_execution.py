@@ -165,6 +165,9 @@ class KlaraExecutionService:
         if context.requested_model_key and context.requested_model_key != main.model_key:
             raise ValueError("Model selection is not enabled for this execution")
         cache = context.cache_policy or CachePolicy(scope=report_cache_scope(context.empresa_id, context.report_id))
+        # Runtime-wide switch: an explicit policy can only narrow caching, never re-enable it.
+        cache = replace(cache, enabled=cache.enabled and bool(getattr(settings, "prompt_caching_enabled", True)))
+        context = replace(context, cache_policy=cache)
         default = context.execution_policy or ExecutionPolicy(
             main_model_key=main.model_key, max_tool_rounds=settings.max_tool_rounds,
             schema_table_limit=_coerce_positive_int(context.schema_table_context_limit, 6),

@@ -22,6 +22,7 @@ from app.utils.powerbi import get_current_dataset_id
 from .contracts import (
     AnalyticsBillingLimitExceededError,
     AnalyticsConfigurationError,
+    AnalyticsFailure,
     AnalyticsModelError,
     AnalyticsReportNotFoundError,
     AnalyticsRequest,
@@ -73,6 +74,22 @@ class KlaraAnalyticsEngine:
             raise AnalyticsConfigurationError("service_tier must be a non-empty string")
 
     @staticmethod
+    def _map_failure(payload: dict[str, Any]) -> AnalyticsFailure | None:
+        """Failures without explicit agent classification are NOT retryable (when in doubt, no retry)."""
+        if not payload.get("had_error"):
+            return None
+        raw = payload.get("failure") if isinstance(payload.get("failure"), dict) else {}
+        status = raw.get("http_status")
+        return AnalyticsFailure(
+            reason=raw.get("reason") or payload.get("failure_reason"),
+            scope=raw.get("scope") or payload.get("failure_scope"),
+            retryable=raw.get("retryable") is True,
+            provider=raw.get("provider"),
+            http_status=status if isinstance(status, int) and not isinstance(status, bool) else None,
+            provider_error_code=raw.get("provider_error_code"),
+        )
+
+    @staticmethod
     def _map_result(request: AnalyticsRequest, payload: dict[str, Any]) -> AnalyticsResult:
         """Explicitly translate the agent payload into the public result contract."""
         return AnalyticsResult(
@@ -95,6 +112,7 @@ class KlaraAnalyticsEngine:
             error_message=payload.get("error_message"),
             failure_reason=payload.get("failure_reason"),
             recovered_errors=list(payload.get("recovered_errors") or []),
+            failure=KlaraAnalyticsEngine._map_failure(payload),
             route_metadata_json=payload.get("route_metadata_json"),
             route_validation_warnings=list(payload.get("route_validation_warnings") or []),
             semantic_notes=normalize_semantic_notes(payload.get("semantic_notes")),

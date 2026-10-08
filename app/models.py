@@ -365,7 +365,7 @@ class Visit(db.Model):
 
     __tablename__ = 'visits'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     link_slug = db.Column(db.String(120), nullable=False, index=True)
     timestamp = db.Column(db.DateTime, default=_utcnow, nullable=False, index=True)
     visitor_id = db.Column(db.String(36), nullable=True, index=True)

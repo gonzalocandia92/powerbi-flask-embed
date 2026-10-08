@@ -20,6 +20,7 @@ HTML_RENDERER_V1 = "html-v1"
 HTML_RENDERER_V2 = "html-v2"
 HTML_RENDERER_V3 = "html-v3"
 HTML_RENDERER_V4 = "html-v4"
+HTML_RENDERER_V4 = "html-v4"
 
 # New persisted runs (ReportRun) produce 1.3.1 / html-v4 (html-v4 presents 1.3.1 only; html-v3 stays the original renderer
 # of 1.3.1, the default of 1.3, and keeps presenting every stored html-v3 artifact). 1.1 / html-v1 and 1.2 / html-v2 stay readable and

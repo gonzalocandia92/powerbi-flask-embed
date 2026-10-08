@@ -46,6 +46,22 @@ class AnalyticsRequest:
     role_configuration: Any | None = None
 
 
+@dataclass(frozen=True)
+class AnalyticsFailure:
+    """Provider-neutral, sanitized description of why an execution failed (never a raw provider message).
+
+    ``retryable`` is the Analytics layer's own verdict that the SAME execution may succeed if repeated
+    (temporary provider condition); consumers decide whether and how often to act on it.
+    """
+
+    reason: str | None = None
+    scope: str | None = None  # e.g. "main_model"
+    retryable: bool = False
+    provider: str | None = None
+    http_status: int | None = None
+    provider_error_code: str | None = None
+
+
 @dataclass
 class AnalyticsResult:
     answer: str
@@ -69,6 +85,8 @@ class AnalyticsResult:
     error_message: str | None = None
     failure_reason: str | None = None
     recovered_errors: list[dict[str, Any]] = field(default_factory=list)
+    # Structured companion of ``failure_reason`` (set whenever ``had_error``); ``None`` on success.
+    failure: AnalyticsFailure | None = None
     route_metadata_json: dict[str, Any] | None = None
     route_validation_warnings: list[str] = field(default_factory=list)
     # Curated notes from the skills of the active route; empty when none apply.

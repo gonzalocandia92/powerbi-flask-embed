@@ -41,14 +41,15 @@ from app.services.skill_router import (
 from .powerbi_tools import execute_dax_query_local
 from .llm import (CachePolicy, LLMMessage, LLMRequest, LLMRuntime, LiteLLMRuntime,
                   ModelConfig, ToolDefinition, ToolResult, LLMError,
-                  provider_error_type, safe_error_metadata)
+                  is_transient_llm_error, provider_error_type, safe_error_metadata,
+                  dynamic_section, stable_section)
 from .llm.compat import normalize_history
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_TOKENS = 4096
-DEFAULT_HISTORY_LIMIT = 4
+DEFAULT_HISTORY_LIMIT = 14
 DEFAULT_MAX_TOOL_ROUNDS = 10
 DEFAULT_DEBUG_ENABLED = True
 DEFAULT_PROMPT_CACHING_ENABLED = True
@@ -996,9 +997,9 @@ def _build_system_prompt(
     )
     route_block = _render_route_context(route_decision)
     skills_block = _render_routed_skills(route_decision, max_skill_chars=max_skill_chars)
-    return [
-        {
-            "text": (
+    # Stable prefix first (base + global/empresa/report instructions), per-turn
+    # content last, so providers can reuse the longest possible cached prefix.
+    base_prompt = (
                 """Tu nombre es Klara. Sos un asistente experto en analítica sobre reportes Power BI.
 
 Tu función es responder usando el modelo semántico activo y las herramientas disponibles. ¡NUNCA inventes datos, métricas, fechas, relaciones ni conclusiones de negocio!
@@ -1125,16 +1126,16 @@ Hipótesis a validar: explicación posible que no puede confirmarse con la evide
 
 No atribuir causalidad, fraude, eficiencia, demanda, estacionalidad, errores de registración, problemas operativos o decisiones comerciales sin evidencia directa.
 """
-                f"{temporal_context_line}"
-                f"{custom_instruction_block}"
-                f"{route_block}"
-                f"{skills_block}"
-            ),
-        },
-        {
-            "text": f"Contexto del modelo semántico actual:{schema_block}",
-            "cache_boundary": True,
-        },
+    )
+    dynamic_text = (
+        f"{temporal_context_line}"
+        f"{route_block}"
+        f"{skills_block}"
+        f"\nContexto del modelo semántico actual:{schema_block}"
+    )
+    return [
+        stable_section(f"{base_prompt}{custom_instruction_block}"),
+        dynamic_section(dynamic_text),
     ]
 
 
@@ -1697,6 +1698,8 @@ class AgentOrchestrator:
         error_message: Optional[str] = None
         failure_reason: Optional[str] = None
         recovered_errors: List[Dict[str, Any]] = []
+        # Normalized, provider-neutral description of the failure that set ``failure_reason`` (provider errors only).
+        failure_info: Optional[Dict[str, Any]] = None
         usage_totals = cast(Dict[str, int], context["usage_totals"])
         ai_usage_events = cast(List[Dict[str, Any]], context["ai_usage_events"])
         messages = cast(Any, turn_history)
@@ -1746,6 +1749,7 @@ class AgentOrchestrator:
                 "recovered_errors": list(recovered_errors),
                 "failure_scope": "main_model" if had_error else None,
                 "recoverable": False if had_error else None,
+                "failure": dict(failure_info) if had_error and failure_info else None,
             }
 
         async def build_provider_error_result(
@@ -1794,6 +1798,17 @@ class AgentOrchestrator:
                     "error_type": reason,
                 },
             )
+            nonlocal failure_info
+            if failure_reason is None:
+                error_metadata = safe_error_metadata(exc, provider=self.model.provider)
+                failure_info = {
+                    "reason": reason,
+                    "scope": "main_model",
+                    "retryable": is_transient_llm_error(exc),
+                    "provider": getattr(exc, "provider", None) or self.model.provider,
+                    "http_status": error_metadata.get("provider_http_status"),
+                    "provider_error_code": error_metadata.get("provider_error_code"),
+                }
             mark_functional_failure(reason, str(exc))
             return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
