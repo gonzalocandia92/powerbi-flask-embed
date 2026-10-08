@@ -19,7 +19,7 @@ from __future__ import annotations
 import asyncio
 
 from app.services import ai_billing
-from app.services.analytics import build_analytics_engine
+from app.services.analytics import RetryingAnalyticsExecutor, build_analytics_engine, build_retry_policy
 
 from .analysis_execution import build_analysis_execution, resolve_analysis_concurrency
 from .contracts import ReportDefinition
@@ -31,6 +31,7 @@ from .composer import ReportComposer
 from .html_renderer import HtmlReportRenderer
 from .html_renderer_v2 import HtmlReportRendererV2
 from .html_renderer_v3 import HtmlReportRendererV3
+from .html_renderer_v4 import HtmlReportRendererV4
 from .generator import ReportGenerator
 from .pipeline import ReportPipeline
 from .usage import record_coordinator_usage, record_extra_analysis_usage, record_section_usage, record_writer_usage
@@ -73,7 +74,7 @@ _STRUCTURED_FLOWS = {
         lambda config, report_id: resolve_structured_report_writer_v13(config, report_id), True, HtmlReportRendererV3),
     FINAL_REPORT_SCHEMA_1_3_1: _StructuredFlow(
         lambda config, report_id: resolve_structured_report_writer_v131(config, report_id), True,
-        HtmlReportRendererV3, fallback=FallbackReportBuilder),
+        HtmlReportRendererV4, fallback=FallbackReportBuilder),
 }
 
 
@@ -101,7 +102,10 @@ def build_structured_report_pipeline(config: dict, definition: ReportDefinition,
 
 def _assemble(config: dict, definition: ReportDefinition, *, writer, writing, renderer,
               analytics_engine=None, analysis_concurrency: int = 1) -> ReportPipeline:
-    analytics_engine = analytics_engine if analytics_engine is not None else build_analytics_engine(config)
+    base_analytics = analytics_engine if analytics_engine is not None else build_analytics_engine(config)
+    # Transient provider failures repeat the whole question (policy from server config); the generator, the
+    # coordinator's extra analyses and the concurrency strategy only see an ``AnalyticsExecutor``.
+    analytics_engine = RetryingAnalyticsExecutor(base_analytics, policy=build_retry_policy(config))
     report_id = definition.report_id
 
     async def record_usage(section):

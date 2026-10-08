@@ -5,6 +5,7 @@ from .contracts import (
     AnalyticsConfigurationError,
     AnalyticsError,
     AnalyticsExecutor,
+    AnalyticsFailure,
     AnalyticsModelError,
     AnalyticsReportNotFoundError,
     AnalyticsRequest,
@@ -12,6 +13,12 @@ from .contracts import (
     PreparedAnalyticsExecution,
 )
 from .engine import KlaraAnalyticsEngine, build_analytics_engine
+from .retry import (
+    AnalyticsRetryPolicy,
+    RetryingAnalyticsExecutor,
+    TransientFailureRetryPolicy,
+    build_retry_policy,
+)
 from .report_skills import ReportSkillCatalog, list_effective_skills_for_report
 
 __all__ = [
@@ -19,6 +26,11 @@ __all__ = [
     "AnalyticsConfigurationError",
     "AnalyticsError",
     "AnalyticsExecutor",
+    "AnalyticsFailure",
+    "AnalyticsRetryPolicy",
+    "RetryingAnalyticsExecutor",
+    "TransientFailureRetryPolicy",
+    "build_retry_policy",
     "AnalyticsModelError",
     "AnalyticsReportNotFoundError",
     "AnalyticsRequest",

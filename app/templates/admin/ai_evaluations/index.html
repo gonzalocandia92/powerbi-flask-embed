@@ -1,13 +1,260 @@
-{% extends "layout.html" %}
-{% block title %}Evaluaciones AI - Sudata PBI{% endblock %}
-{% block body %}
-<div class="container-fluid py-2">
-  {% set active_ai_section = 'evaluations' %}
-  {% include "admin/ai_config/_navigation.html" %}
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4"><div><h2 class="fw-bold mb-1">Evaluaciones de modelos</h2><p class="text-muted mb-0">Ejecuciones reproducibles con costos, latencia y revisión manual.</p></div><a class="btn btn-primary" href="{{ url_for('evaluations.new_page') }}"><i class="bi bi-plus-lg me-1"></i>Nueva evaluación</a></div>
-  <div class="card"><div class="table-responsive"><table class="table align-middle mb-0"><thead><tr><th>Evaluación</th><th>Reporte</th><th>Estado</th><th>Progreso</th><th>Creada</th><th class="text-end">Acción</th></tr></thead><tbody>
-    {% for run in runs %}<tr><td><div class="fw-semibold">{{ run.name }}</div><span class="text-muted small">#{{ run.id }} · {{ run.mode }} · {{ run.cache_mode }}</span></td><td>{{ run.report.name if run.report else 'Reporte eliminado' }}</td><td><span class="badge {{ 'bg-success' if run.status == 'completed' else ('bg-danger' if run.status == 'failed' else 'bg-info text-dark') }}">{{ run.status }}</span></td><td style="min-width:160px"><div class="progress" role="progressbar" aria-valuenow="{{ run.completed_cases }}" aria-valuemin="0" aria-valuemax="{{ run.total_cases or 1 }}"><div class="progress-bar" style="width:{{ ((run.completed_cases or 0) * 100 / run.total_cases)|round if run.total_cases else 0 }}%"></div></div><div class="small text-muted mt-1">{{ run.completed_cases }}/{{ run.total_cases }}</div></td><td>{{ run.created_at.strftime('%d/%m/%Y %H:%M') if run.created_at else '--' }}</td><td class="text-end"><a class="btn btn-sm btn-outline-primary" href="{{ url_for('evaluations.detail_page', run_id=run.id) }}">Ver resultados</a></td></tr>
-    {% else %}<tr><td colspan="6" class="text-center text-muted py-5">Todavía no hay evaluaciones.</td></tr>{% endfor %}
-  </tbody></table></div></div>
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
+
+{% set active_ai_section = 'evaluations' %}
+{% set page_crumb = 'Calidad' %}
+{% set page_title = 'Evaluaciones de modelos' %}
+{% set page_subtitle = 'Consola de benchmarks, comparación de rendimiento y control de calidad entre modelos de IA.' %}
+
+{% block header_actions %}
+<a class="ai-btn-primary" href="{{ url_for('evaluations.new_page') }}">
+  <i class="bi bi-plus-lg me-1"></i>Nueva evaluación
+</a>
+{% endblock %}
+
+{% block ai_content %}
+<!-- KPI strip -->
+<div class="ai-kpis">
+  {{ ui.kpi('Evaluaciones', runs_overview.kpis.runs, 'Ejecuciones registradas', icon='bi-speedometer2') }}
+  {{ ui.kpi('Completadas', runs_overview.kpis.completed, 'Benchmarks finalizados', tone='success', icon='bi-check-circle') }}
+  {{ ui.kpi('Casos evaluados', runs_overview.kpis.cases, 'Preguntas procesadas', icon='bi-list-check') }}
+  {{ ui.kpi('Costo acumulado', 'USD $' ~ '%.4f'|format(runs_overview.kpis.cost or 0), 'Consumo registrado', icon='bi-cash-stack') }}
+  {{ ui.kpi('Errores de ejecución', runs_overview.kpis.errors, 'Casos fallidos', tone='danger' if runs_overview.kpis.errors else none, icon='bi-exclamation-triangle') }}
+</div>
+
+<!-- Comparison-First Section -->
+<div class="ai-surface mb-4">
+  <div class="ai-surface-header">
+    <div>
+      <h3 class="ai-surface-title">
+        <i class="bi bi-bar-chart-steps me-2 text-primary"></i>Comparativa consolidada por modelo
+      </h3>
+      <p class="ai-surface-subtitle">
+        Métricas agregadas a lo largo de las evaluaciones. Identifica rápidamente trade-offs entre calidad, latencia y costo por inferencia.
+      </p>
+    </div>
+  </div>
+
+  {% if model_comparison %}
+  <div class="ai-table-wrap">
+    <table class="ai-table">
+      <thead>
+        <tr>
+          <th>Modelo</th>
+          <th class="text-center">Ejecuciones / Casos</th>
+          <th class="text-center">Calidad (revisión)</th>
+          <th class="text-center">Tasa éxito</th>
+          <th class="text-end">Costo prom. / caso</th>
+          <th class="text-end">Latencia prom.</th>
+          <th class="text-end">Cache hit</th>
+          <th class="text-end">Reasoning tokens</th>
+          <th class="text-center">Tool rounds</th>
+          <th class="text-center">Revisión manual</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for m in model_comparison %}
+        <tr>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <span class="fw-bold font-monospace text-dark">{{ m.model_key }}</span>
+              {% if m.best.quality and m.quality %}
+                {{ ui.pill('Mejor calidad', 'success') }}
+              {% elif m.best.cost_per_case and m.cost_per_case %}
+                {{ ui.pill('Más económico', 'info') }}
+              {% endif %}
+            </div>
+            <div class="ai-cell-sub">{{ m.errors }} fallos registrados</div>
+          </td>
+          <td class="text-center">
+            <span class="fw-semibold">{{ m.runs }}</span> runs · <span class="text-muted">{{ m.cases }} casos</span>
+          </td>
+          <td class="text-center">
+            {% if m.quality is not none %}
+              {% set q_val = m.quality|round(1) %}
+              <span class="fw-semibold {{ 'text-success' if q_val >= 90 else ('text-warning' if q_val >= 70 else 'text-danger') }}">
+                {{ q_val }}%
+              </span>
+            {% else %}
+              <span class="text-muted small">Sin revisar</span>
+            {% endif %}
+          </td>
+          <td class="text-center">
+            {% if m.success_rate is not none %}
+              {% set s_val = m.success_rate|round(1) %}
+              <span class="fw-semibold {{ 'text-success' if s_val >= 95 else ('text-warning' if s_val >= 80 else 'text-danger') }}">
+                {{ s_val }}%
+              </span>
+              <div class="mt-1 mx-auto" style="width: 60px;">
+                {{ ui.progress(s_val, 'success' if s_val >= 95 else 'warning') }}
+              </div>
+            {% else %}
+              <span class="text-muted">--</span>
+            {% endif %}
+          </td>
+          <td class="text-end font-monospace">
+            {% if m.cost_per_case is not none %}
+              <span class="{{ 'text-success fw-bold' if m.best.cost_per_case else 'text-dark' }}">
+                ${{ '%.5f'|format(m.cost_per_case) }}
+              </span>
+            {% else %}
+              <span class="text-muted">--</span>
+            {% endif %}
+          </td>
+          <td class="text-end font-monospace">
+            {% if m.latency_ms is not none %}
+              <span class="{{ 'text-success fw-bold' if m.best.latency_ms else 'text-dark' }}">
+                {{ (m.latency_ms)|round|int }} ms
+              </span>
+            {% else %}
+              <span class="text-muted">--</span>
+            {% endif %}
+          </td>
+          <td class="text-end font-monospace">
+            {% if m.cache_ratio is not none %}
+              <span class="text-muted">{{ '%.1f'|format(m.cache_ratio) }}%</span>
+            {% else %}
+              <span class="text-muted">0%</span>
+            {% endif %}
+          </td>
+          <td class="text-end font-monospace text-muted">
+            {{ '{:,}'.format(m.reasoning_tokens) if m.reasoning_tokens else '0' }}
+          </td>
+          <td class="text-center font-monospace">
+            {{ '%.2f'|format(m.tool_rounds) if m.tool_rounds is not none else '--' }}
+          </td>
+          <td class="text-center">
+            <div class="small">
+              <span class="text-success fw-semibold" title="Correctos">{{ m.correct }}</span> /
+              <span class="text-warning" title="Parciales">{{ m.partial }}</span> /
+              <span class="text-danger" title="Incorrectos">{{ m.incorrect }}</span>
+            </div>
+            {% if m.pending_review > 0 %}
+              <div class="ai-cell-sub text-warning">{{ m.pending_review }} pendientes</div>
+            {% else %}
+              <div class="ai-cell-sub text-success">Completada</div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="ai-surface-body text-center py-5 text-muted">
+    <i class="bi bi-bar-chart fs-1 d-block mb-2 text-secondary"></i>
+    <p class="mb-1">Todavía no hay casos evaluados para construir la comparativa.</p>
+    <small>Ejecuta una evaluación para comparar modelos de forma reproducible.</small>
+  </div>
+  {% endif %}
+</div>
+
+<!-- Evaluation Runs History Section -->
+<div class="ai-surface" data-ai-filter-scope>
+  <div class="ai-surface-header">
+    <div>
+      <h3 class="ai-surface-title">
+        <i class="bi bi-clock-history me-2 text-primary"></i>Historial de ejecuciones
+      </h3>
+      <p class="ai-surface-subtitle">
+        Detalle de todas las corridas de evaluación ejecutadas. Accede al drill-down para revisar casos individuales y trazas.
+      </p>
+    </div>
+    <div class="ai-surface-actions">
+      <span class="ai-filter-count" data-filter-count></span>
+    </div>
+  </div>
+
+  <div class="ai-filter-layout">
+    <div class="ai-filter-primary">
+      <div class="ai-field">
+        <input type="search" class="form-control" data-filter-search placeholder="Buscar evaluación o reporte..." aria-label="Buscar evaluación o reporte">
+      </div>
+      <div class="ai-field">
+        <select class="form-select" data-filter="status" aria-label="Estado">
+          <option value="">Todos los estados</option>
+          <option value="completed">completed</option>
+          <option value="running">running</option>
+          <option value="queued">queued</option>
+          <option value="completed_with_errors">completed_with_errors</option>
+          <option value="failed">failed</option>
+          <option value="cancelled">cancelled</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <div class="ai-table-wrap">
+    <table class="ai-table" id="runs-table">
+      <thead>
+        <tr>
+          <th>Evaluación</th>
+          <th>Reporte</th>
+          <th>Estado</th>
+          <th style="min-width: 170px;">Progreso</th>
+          <th class="text-end">Costo total</th>
+          <th>Creada</th>
+          <th class="text-end">Acción</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for run in runs %}
+        {% set run_stat = runs_overview.per_run.get(run.id, {}) %}
+        <tr data-filter-row data-status="{{ run.status }}" data-search="{{ run.name }} {{ run.report.name if run.report else '' }} {{ run.id }}">
+          <td>
+            <div class="fw-bold text-dark">{{ run.name }}</div>
+            <div class="ai-cell-sub">
+              <span class="font-monospace">#{{ run.id }}</span> ·
+              <span>{{ run.mode }}</span> ·
+              <span>caché {{ run.cache_mode }}</span>
+              {% if run_stat.models %}
+                · <span class="text-primary">{{ run_stat.models }} modelo(s)</span>
+              {% endif %}
+            </div>
+          </td>
+          <td>
+            <span class="fw-semibold">{{ run.report.name if run.report else 'Reporte eliminado' }}</span>
+          </td>
+          <td>
+            {{ ui.status_badge(run.status) }}
+            {% if run_stat.errors > 0 %}
+              <div class="ai-cell-sub text-danger">{{ run_stat.errors }} errores</div>
+            {% endif %}
+          </td>
+          <td>
+            {% set pct = ((run.completed_cases or 0) * 100 / run.total_cases)|round|int if run.total_cases else 0 %}
+            <div class="d-flex justify-content-between align-items-center mb-1 small">
+              <span class="fw-semibold">{{ run.completed_cases }}/{{ run.total_cases }}</span>
+              <span class="text-muted">{{ pct }}%</span>
+            </div>
+            {{ ui.progress(pct, 'success' if run.status == 'completed' else 'primary') }}
+          </td>
+          <td class="text-end font-monospace">
+            ${{ '%.5f'|format(run_stat.cost or 0) }}
+          </td>
+          <td class="small text-muted">
+            {{ run.created_at.strftime('%d/%m/%Y %H:%M') if run.created_at else '--' }}
+          </td>
+          <td class="text-end">
+            <a class="ai-btn-ghost btn-sm" href="{{ url_for('evaluations.detail_page', run_id=run.id) }}">
+              <i class="bi bi-eye me-1"></i>Drill-down
+            </a>
+          </td>
+        </tr>
+        {% else %}
+        <tr>
+          <td colspan="7" class="text-center text-muted py-5">
+            No hay evaluaciones registradas.
+          </td>
+        </tr>
+        {% endfor %}
+        <tr data-filter-empty hidden>
+          <td colspan="7">
+            {{ ui.empty_state('search', 'No se encontraron evaluaciones con los filtros seleccionados.') }}
+          </td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
 </div>
 {% endblock %}

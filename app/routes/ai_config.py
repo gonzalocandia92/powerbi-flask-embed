@@ -14,7 +14,7 @@ from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
 from app import db
 from app.forms import AgentPromptConfigForm, AIModelPricingForm, AnalyticsSkillForm, BillingLimitForm
 from app.models import AgentPromptConfig, AIModelPricing, AIUsageEvent, AnalyticsSkill, BillingLimit, Empresa, Report
-from app.services import ai_billing
+from app.services import ai_billing, ai_console
 from app.services.semantic_notes import normalize_semantic_notes
 from app.services.llm.profiles import PROFILES, profile_catalog, profile_for
 from app.services.skill_vector_service import trigger_all_skill_reindex_update, trigger_skill_embedding_update
@@ -1327,6 +1327,16 @@ def index():
         )
         .all()
     )
+    context = {}
+    if active_tab == 'limits':
+        context['limits_view'] = ai_console.limits_overview(limits_by_scope, companies)
+    elif active_tab == 'pricing':
+        context['pricing_filters'] = ai_console.pricing_filters(pricings)
+    elif active_tab == 'prompts':
+        context.update(_prompt_editor_context(companies, reports, prompts_by_scope))
+    elif active_tab == 'skills':
+        context['skill_view'] = ai_console.skill_catalog_view(skills)
+
     return render_template(
         'admin/ai_config/index.html',
         active_tab=active_tab,
@@ -1341,7 +1351,51 @@ def index():
         skills=skills,
         skill_groups=_build_skill_groups(skills),
         skill_index_summary=_build_skill_index_summary(skills),
+        **context,
     )
+
+
+def _prompt_editor_context(companies, reports, prompts_by_scope):
+    """Scope-oriented prompt editor: selected scope/target, additive chain and picker options."""
+    scope = request.args.get('scope', 'global')
+    if scope not in {'global', 'empresa', 'report'}:
+        scope = 'global'
+    target_id = request.args.get('scope_id', type=int)
+    target = None
+    if scope == 'empresa' and target_id is not None:
+        target = next((item for item in companies if item.id == target_id), None)
+    elif scope == 'report' and target_id is not None:
+        target = next((item for item in reports if item.id == target_id), None)
+    if scope != 'global' and target is None:
+        target_id = None
+
+    def has_prompt(scope_type, item_id):
+        config = prompts_by_scope.get((scope_type, str(item_id)))
+        return 'con prompt' if config is not None and config.is_active else ''
+
+    editor = None
+    if scope == 'global' or target is not None:
+        editor = {
+            'prompt': prompts_by_scope.get((scope, None if scope == 'global' else str(target_id))),
+            'chain': ai_console.prompt_chain(scope, target_id),
+            'action': (
+                url_for('ai_config.global_prompt') if scope == 'global'
+                else url_for('ai_config.company_prompt', empresa_id=target_id) if scope == 'empresa'
+                else url_for('ai_config.report_prompt', report_id=target_id)
+            ),
+            'target': target,
+        }
+    return {
+        'prompt_scope': scope,
+        'prompt_scope_id': target_id,
+        'prompt_editor': editor,
+        'prompt_company_options': [
+            {'value': item.id, 'label': item.nombre, 'meta': has_prompt('empresa', item.id)} for item in companies
+        ],
+        'prompt_report_options': [
+            {'value': item.id, 'label': item.name, 'meta': has_prompt('report', item.id)} for item in reports
+        ],
+    }
 
 
 def _populate_skill_choices(form):
@@ -1907,7 +1961,7 @@ def global_prompt():
             )
             db.session.commit()
             flash("Prompt global actualizado.", "success")
-            return redirect(url_for('ai_config.index', tab='prompts'))
+            return redirect(url_for('ai_config.index', tab='prompts', scope='global'))
 
     return render_template(
         'admin/ai_config/prompt_form.html',
@@ -1945,7 +1999,7 @@ def company_prompt(empresa_id):
             )
             db.session.commit()
             flash(f"Prompt de {company.nombre} actualizado.", "success")
-            return redirect(url_for('ai_config.index', tab='prompts'))
+            return redirect(url_for('ai_config.index', tab='prompts', scope='empresa', scope_id=company.id))
 
     return render_template(
         'admin/ai_config/prompt_form.html',
@@ -1985,7 +2039,7 @@ def report_prompt(report_id):
             _save_report_retrieval_form(form, report)
             db.session.commit()
             flash(f"Prompt de {report.name} actualizado.", "success")
-            return redirect(url_for('ai_config.index', tab='prompts'))
+            return redirect(url_for('ai_config.index', tab='prompts', scope='report', scope_id=report.id))
 
     return render_template(
         'admin/ai_config/prompt_form.html',

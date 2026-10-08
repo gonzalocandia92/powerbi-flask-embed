@@ -1,119 +1,160 @@
-{% extends "layout.html" %}
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
 
-{% block title %}{{ title }} - Sudata PBI{% endblock %}
+{% set active_ai_section = 'pricing' %}
+{% set page_crumb = 'Gobierno' %}
+{% set page_title = title %}
+{% set page_subtitle = 'Configuración de tarifas en USD por millón de tokens para facturación de inferencia' %}
 
-{% block body %}
-<div class="container-fluid">
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-    <div>
-      <h2 class="fw-bold mb-1"><i class="bi bi-tags text-primary me-2"></i>{{ title }}</h2>
-      <p class="text-muted mb-0">Los importes se expresan en USD por cada millon de tokens.</p>
-    </div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='pricing') }}">
-      <i class="bi bi-arrow-left me-1"></i>Volver
-    </a>
-  </div>
+{% block header_actions %}
+<a class="ai-btn-secondary" href="{{ url_for('ai_config.index', tab='pricing') }}">
+  <i class="bi bi-arrow-left me-1"></i>Volver a pricing
+</a>
+{% endblock %}
 
-  <div class="card">
-    <div class="card-header">
-      <h5><i class="bi bi-currency-dollar me-2"></i>Datos del pricing</h5>
-    </div>
-    <div class="card-body">
-      <form method="post" novalidate>
-        {{ form.hidden_tag() }}
-        <div class="row g-3">
-          <div class="col-lg-4 col-md-6">
-            {{ form.provider.label(class="form-label") }}
-            {{ form.provider(class="form-control" + (" is-invalid" if form.provider.errors else ""), placeholder="anthropic") }}
-            {% for error in form.provider.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-5 col-md-6">
-            {{ form.model.label(class="form-label") }}
-            {{ form.model(class="form-control" + (" is-invalid" if form.model.errors else ""), placeholder="claude-haiku-4-5-20251001") }}
-            {% for error in form.model.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6">
-            {{ form.event_type.label(class="form-label") }}
-            {{ form.event_type(class="form-select" + (" is-invalid" if form.event_type.errors else "")) }}
-            {% for error in form.event_type.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6">
-            {{ form.service_tier.label(class="form-label") }}
-            {{ form.service_tier(class="form-control" + (" is-invalid" if form.service_tier.errors else ""), placeholder="vacío / flex") }}
-            {% for error in form.service_tier.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6">
-            {{ form.pricing_tier.label(class="form-label") }}
-            {{ form.pricing_tier(class="form-control" + (" is-invalid" if form.pricing_tier.errors else ""), placeholder="peak / off-peak") }}
-            {% for error in form.pricing_tier.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6">
-            {{ form.gateway.label(class="form-label") }}{{ form.gateway(class="form-select" + (" is-invalid" if form.gateway.errors else "")) }}
-            {% for error in form.gateway.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6" id="context-band-wrap">
-            {{ form.context_band.label(class="form-label") }}{{ form.context_band(class="form-select") }}
-            {% for error in form.context_band.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-6 col-md-6">
-            {{ form.source_url.label(class="form-label") }}{{ form.source_url(class="form-control" + (" is-invalid" if form.source_url.errors else ""), placeholder="https://...") }}
-            {% for error in form.source_url.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
+{% block ai_content %}
+<div class="row justify-content-center">
+  <div class="col-xl-10">
+    <div class="ai-surface">
+      <div class="ai-surface-header">
+        <div>
+          <h3 class="ai-surface-title">
+            <i class="bi bi-currency-dollar me-2 text-primary"></i>Datos del tarifario de modelo
+          </h3>
+          <p class="ai-surface-subtitle">
+            Define el costo de entrada, salida, caché y vigencia temporal.
+          </p>
+        </div>
+      </div>
+      <div class="ai-surface-body">
+        <form method="post" novalidate>
+          {{ form.hidden_tag() }}
+          <div class="row g-3">
+            <div class="col-lg-4 col-md-6">
+              {{ form.provider.label(class="form-label") }}
+              {{ form.provider(class="form-control" + (" is-invalid" if form.provider.errors else ""), placeholder="anthropic") }}
+              {% for error in form.provider.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-5 col-md-6">
+              {{ form.model.label(class="form-label") }}
+              {{ form.model(class="form-control" + (" is-invalid" if form.model.errors else ""), placeholder="claude-haiku-4-5-20251001") }}
+              {% for error in form.model.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6">
+              {{ form.event_type.label(class="form-label") }}
+              {{ form.event_type(class="form-select" + (" is-invalid" if form.event_type.errors else "")) }}
+              {% for error in form.event_type.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6">
+              {{ form.service_tier.label(class="form-label") }}
+              {{ form.service_tier(class="form-control" + (" is-invalid" if form.service_tier.errors else ""), placeholder="vacío / flex") }}
+              {% for error in form.service_tier.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6">
+              {{ form.pricing_tier.label(class="form-label") }}
+              {{ form.pricing_tier(class="form-control" + (" is-invalid" if form.pricing_tier.errors else ""), placeholder="peak / off-peak") }}
+              {% for error in form.pricing_tier.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6">
+              {{ form.gateway.label(class="form-label") }}
+              {{ form.gateway(class="form-select" + (" is-invalid" if form.gateway.errors else "")) }}
+              {% for error in form.gateway.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6" id="context-band-wrap">
+              {{ form.context_band.label(class="form-label") }}
+              {{ form.context_band(class="form-select") }}
+              {% for error in form.context_band.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-6 col-md-6">
+              {{ form.source_url.label(class="form-label") }}
+              {{ form.source_url(class="form-control" + (" is-invalid" if form.source_url.errors else ""), placeholder="https://...") }}
+              {% for error in form.source_url.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
 
-          <div class="col-lg-3 col-md-6">
-            {{ form.input_cost_per_million_usd.label(class="form-label") }}
-            {{ form.input_cost_per_million_usd(class="form-control" + (" is-invalid" if form.input_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
-            {% for error in form.input_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6">
-            {{ form.output_cost_per_million_usd.label(class="form-label") }}
-            {{ form.output_cost_per_million_usd(class="form-control" + (" is-invalid" if form.output_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
-            {% for error in form.output_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6">
-            {{ form.cache_write_cost_per_million_usd.label(class="form-label") }}
-            {{ form.cache_write_cost_per_million_usd(class="form-control" + (" is-invalid" if form.cache_write_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
-            {% for error in form.cache_write_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-lg-3 col-md-6">
-            {{ form.cache_read_cost_per_million_usd.label(class="form-label") }}
-            {{ form.cache_read_cost_per_million_usd(class="form-control" + (" is-invalid" if form.cache_read_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
-            {% for error in form.cache_read_cost_per_million_usd.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
+            <div class="col-12"><hr class="my-2"></div>
 
-          <div class="col-md-4">
-            {{ form.effective_from.label(class="form-label") }}
-            {{ form.effective_from(class="form-control" + (" is-invalid" if form.effective_from.errors else "")) }}
-            {% for error in form.effective_from.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-md-4">
-            {{ form.effective_to.label(class="form-label") }}
-            {{ form.effective_to(class="form-control" + (" is-invalid" if form.effective_to.errors else "")) }}
-            {% for error in form.effective_to.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
-          </div>
-          <div class="col-md-4 d-flex align-items-end">
-            <div class="form-check form-switch mb-2">
-              {{ form.is_active(class="form-check-input") }}
-              {{ form.is_active.label(class="form-check-label fw-semibold") }}
+            <div class="col-lg-3 col-md-6">
+              {{ form.input_cost_per_million_usd.label(class="form-label") }}
+              <div class="input-group">
+                <span class="input-group-text">$</span>
+                {{ form.input_cost_per_million_usd(class="form-control font-monospace" + (" is-invalid" if form.input_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
+              </div>
+              {% for error in form.input_cost_per_million_usd.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6">
+              {{ form.output_cost_per_million_usd.label(class="form-label") }}
+              <div class="input-group">
+                <span class="input-group-text">$</span>
+                {{ form.output_cost_per_million_usd(class="form-control font-monospace" + (" is-invalid" if form.output_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
+              </div>
+              {% for error in form.output_cost_per_million_usd.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6">
+              {{ form.cache_write_cost_per_million_usd.label(class="form-label") }}
+              <div class="input-group">
+                <span class="input-group-text">$</span>
+                {{ form.cache_write_cost_per_million_usd(class="form-control font-monospace" + (" is-invalid" if form.cache_write_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
+              </div>
+              {% for error in form.cache_write_cost_per_million_usd.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-lg-3 col-md-6">
+              {{ form.cache_read_cost_per_million_usd.label(class="form-label") }}
+              <div class="input-group">
+                <span class="input-group-text">$</span>
+                {{ form.cache_read_cost_per_million_usd(class="form-control font-monospace" + (" is-invalid" if form.cache_read_cost_per_million_usd.errors else ""), step="0.000000001", min="0") }}
+              </div>
+              {% for error in form.cache_read_cost_per_million_usd.errors %}<div class="invalid-feedback d-block">{{ error }}</div>{% endfor %}
+            </div>
+
+            <div class="col-12"><hr class="my-2"></div>
+
+            <div class="col-md-4">
+              {{ form.effective_from.label(class="form-label") }}
+              {{ form.effective_from(class="form-control" + (" is-invalid" if form.effective_from.errors else "")) }}
+              {% for error in form.effective_from.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-md-4">
+              {{ form.effective_to.label(class="form-label") }}
+              {{ form.effective_to(class="form-control" + (" is-invalid" if form.effective_to.errors else "")) }}
+              {% for error in form.effective_to.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-md-4 d-flex align-items-end">
+              <div class="form-check form-switch mb-2">
+                {{ form.is_active(class="form-check-input") }}
+                {{ form.is_active.label(class="form-check-label fw-semibold") }}
+              </div>
             </div>
           </div>
-        </div>
 
-        <div class="alert alert-info mt-4 mb-0">
-          <i class="bi bi-info-circle me-2"></i>DeepSeek directo requiere dos tarifas vigentes (peak y off-peak). GPT-5.6 requiere contexto corto y largo por service tier. Los importes se administran aquí; la banda se selecciona automáticamente en cada llamada.
-        </div>
-        {% if referenced %}<div class="alert alert-warning mt-3">Esta tarifa ya fue usada. Al guardar se creará una versión nueva y los eventos anteriores conservarán la tarifa original.</div>{% endif %}
+          <div class="ai-callout tone-info mt-4 mb-0 small">
+            <i class="bi bi-info-circle me-1"></i>
+            <div class="ai-callout-body">
+              DeepSeek directo requiere dos tarifas vigentes (peak y off-peak). GPT-5.6 requiere contexto corto y largo por service tier. Los importes se administran aquí; la banda se selecciona automáticamente en cada llamada.
+            </div>
+          </div>
+          {% if referenced %}
+            <div class="ai-callout tone-warning mt-3 small">
+              <i class="bi bi-exclamation-triangle me-1"></i>
+              <div class="ai-callout-body">
+                Esta tarifa ya fue usada en cálculos previos. Al guardar se creará una versión nueva y los eventos anteriores conservarán la tarifa original inmutable.
+              </div>
+            </div>
+          {% endif %}
 
-        <div class="d-flex justify-content-end gap-2 mt-4">
-          <a class="btn btn-outline-secondary" href="{{ url_for('ai_config.index', tab='pricing') }}">Cancelar</a>
-          {{ form.submit(class="btn btn-primary") }}
-        </div>
-      </form>
+          <div class="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
+            <a class="ai-btn-ghost" href="{{ url_for('ai_config.index', tab='pricing') }}">Cancelar</a>
+            {{ form.submit(class="ai-btn-primary px-4") }}
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script>
+
+{% block scripts %}
+{{ super() }}
+<script>
 (() => {
   const model = document.getElementById('model');
   const gateway = document.getElementById('gateway');
@@ -126,6 +167,8 @@
     context.hidden = !gpt56;
     tier.placeholder = deepseek ? 'peak / off-peak' : 'Tarifa adicional (si aplica)';
   };
-  [model, gateway, document.getElementById('provider')].forEach(el => el.addEventListener('change', update)); update();
+  [model, gateway, document.getElementById('provider')].forEach(el => el.addEventListener('change', update));
+  update();
 })();
-</script>{% endblock %}
+</script>
+{% endblock %}

@@ -3,6 +3,6 @@ from .contracts import (
     CachePolicy, CacheScope, LLMMessage, LLMRequest, LLMResponse, LLMRuntime,
     LLMUsage, ModelCapabilities, ModelConfig, ProviderState, ToolCall,
     ToolDefinition, ToolResult, LLMError, provider_error_type, safe_error_metadata,
-    report_cache_scope,
+    report_cache_scope, is_transient_llm_error, stable_section, dynamic_section,
 )
 from .runtime import LiteLLMRuntime

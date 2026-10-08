@@ -219,11 +219,12 @@ def page():
     models, default_model_key, luna_warning = _available_models(dict(current_app.config))
     # ``?run_id=`` reopens a persisted run (refresh, shared link, runs created elsewhere).
     run_id = request.args.get("run_id", "")
+    from app.services import ai_console
     return render_template(
         "admin/ai_reporting.html",
         initial_run_id=_log_run_id(run_id),
         run_endpoints=_run_endpoints(),
-        reports=Report.query.order_by(Report.name.asc()).all(),
+        reports=ai_console.klara_enabled_reports(),
         models=models, default_model_key=default_model_key,
         luna_warning=luna_warning, max_questions=MAX_QUESTIONS,
     )
@@ -545,9 +546,10 @@ _HISTORY_ACTIVE_STATUSES = ("queued", "running", "cancel_requested")
 @login_required
 @admin_required
 def history_page():
+    from app.services import ai_console
     return render_template(
         "admin/ai_reporting_history.html",
-        reports=Report.query.order_by(Report.name.asc()).all(),
+        reports=ai_console.klara_enabled_reports(),
         statuses=sorted(_HISTORY_ACTIVE_STATUSES + TERMINAL_STATUSES),
         history_endpoint=url_for("ai_reporting.list_report_runs"),
         run_url=url_for("ai_reporting.page"),
@@ -796,7 +798,7 @@ def render_pdf():
     A run with stored artifacts is authoritative: its stored HTML (and the schema/renderer
     versions it was produced with) is used. Otherwise the ``FinalReport`` JSON is validated
     with the model of its declared version and rendered by that schema's registered renderer
-    (``ArtifactService.export_source``) before Chromium sees it. No LLM, analytics,
+    (``ArtifactService.export_source``) before the PDF engine sees it. No LLM, analytics,
     coordinator or writer is involved, and nothing is stored.
     """
     if (request.content_length or 0) > MAX_PDF_PAYLOAD_BYTES:

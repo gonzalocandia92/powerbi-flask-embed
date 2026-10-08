@@ -1,89 +1,305 @@
-{% extends "layout.html" %}
-{% block title %}Informes KLARA - Sudata PBI{% endblock %}
-{% block body %}
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
+
+{% set active_ai_section = 'reporting' %}
+{% set page_crumb = 'Reporting' %}
+{% set page_title = 'Informes analíticos KLARA' %}
+{% set page_subtitle = 'Genera informes de negocio completos y estructurados a partir de preguntas analíticas independientes.' %}
+
+{% block header_actions %}
+<a class="ai-btn-secondary" href="{{ url_for('ai_reporting.history_page') }}">
+  <i class="bi bi-clock-history me-1"></i>Historial de informes
+</a>
+{% endblock %}
+
+{% block ai_styles %}
 <style>
   .klara-md > :last-child { margin-bottom: 0; }
   .klara-md h1, .klara-md h2, .klara-md h3, .klara-md h4, .klara-md h5, .klara-md h6 { font-size: 1.05em; font-weight: 700; margin: .75rem 0 .4rem; }
   .klara-md ul, .klara-md ol { padding-left: 1.4rem; }
-  .klara-md pre { background: #e9ecef; border-radius: .4rem; padding: .6rem; overflow-x: auto; }
-  .klara-md code { background: #e9ecef; border-radius: .25rem; padding: .05rem .3rem; font-size: .875em; }
+  .klara-md pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: .4rem; padding: .6rem; overflow-x: auto; }
+  .klara-md code { background: #f1f5f9; border-radius: .25rem; padding: .05rem .3rem; font-size: .875em; color: #0f172a; }
   .klara-md pre code { background: none; padding: 0; }
-  .klara-md blockquote { border-left: 3px solid #adb5bd; margin: .5rem 0; padding-left: .75rem; color: #555; }
+  .klara-md blockquote { border-left: 3px solid #cbd5e1; margin: .5rem 0; padding-left: .75rem; color: #475569; }
 </style>
-<div class="container-fluid py-2" id="reporting-page">
-  {% set active_ai_section = 'reporting' %}
-  {% include "admin/ai_config/_navigation.html" %}
-  <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-4">
-    <div>
-      <h2 class="fw-bold mb-1">Informes KLARA</h2>
-      <p class="text-muted mb-0">Generá un informe manual a partir de preguntas analíticas independientes.</p>
+{% endblock %}
+
+{% block ai_content %}
+<div id="reporting-page">
+  {% if luna_warning %}
+    <div class="ai-callout tone-warning mb-4" role="alert">
+      <i class="bi bi-exclamation-triangle"></i>
+      <div class="ai-callout-body">{{ luna_warning }} Elegí un modelo y tier disponibles para continuar.</div>
     </div>
-  </div>
-  {% if luna_warning %}<div class="alert alert-warning" role="alert">{{ luna_warning }} Elegí un modelo y tier disponibles para continuar.</div>{% endif %}
-  <div id="reporting-message" class="alert d-none" role="alert"></div>
-  <div class="row g-4">
-    <div class="col-xl-8">
-      <div class="card mb-4">
-        <div class="card-header"><h5 class="mb-0">Definición del informe</h5></div>
-        <div class="card-body row g-3">
-          <div class="col-md-6"><label class="form-label" for="reporting-name">Nombre</label><input class="form-control" id="reporting-name" maxlength="200" required></div>
-          <div class="col-md-6"><label class="form-label" for="reporting-report">Report</label><select class="form-select" id="reporting-report" required>{% for report in reports %}<option value="{{ report.id }}">{{ report.name }}</option>{% endfor %}</select></div>
-          <div class="col-md-7"><label class="form-label" for="reporting-model">Modelo de análisis</label><select class="form-select" id="reporting-model" required><option value="">Elegí un modelo</option>{% for model in models %}<option value="{{ model.model_key }}" {% if model.model_key == default_model_key %}selected{% endif %}>{{ model.display_name }} · {{ model.provider }} · {{ model.physical_model }}</option>{% endfor %}</select></div>
-          <div class="col-md-5"><label class="form-label" for="reporting-tier">Service tier</label><select class="form-select" id="reporting-tier" required></select></div>
-        </div>
-      </div>
-      <div class="card mb-4">
-        <div class="card-header d-flex justify-content-between align-items-center gap-2"><h5 class="mb-0">Preguntas</h5><div class="d-flex flex-wrap gap-2"><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('ai_reporting.questions_template') }}">Descargar plantilla</a><label class="btn btn-sm btn-outline-primary mb-0">Importar CSV<input id="reporting-csv" type="file" accept=".csv,text/csv" hidden></label><button class="btn btn-sm btn-outline-primary" id="reporting-add" type="button"><i class="bi bi-plus-lg me-1"></i>Agregar pregunta</button></div></div>
-        <div class="card-body"><div id="reporting-csv-message" class="mb-2"></div><div id="reporting-questions"></div><p class="text-muted small mb-0">Cada pregunta se ejecuta por separado, en el orden mostrado. Máximo {{ max_questions }} preguntas.</p></div>
+  {% endif %}
+
+  <div id="reporting-message" class="alert d-none mb-4" role="alert"></div>
+
+  <!-- Stepper indicator -->
+  <div class="ai-stepper mb-4">
+    <div class="ai-step active">
+      <div class="ai-step-num">1</div>
+      <div class="ai-step-text">
+        <div class="ai-step-title">Configuración</div>
+        <div class="ai-step-desc">Reporte y modelo</div>
       </div>
     </div>
-    <div class="col-xl-4">
-      <div class="card"><div class="card-header"><h5 class="mb-0">Generación</h5></div><div class="card-body">
-        <p class="mb-2"><span id="reporting-count">1</span> pregunta(s) · ejecución secuencial</p>
-        <p class="text-muted small mb-3">Estrategia coordinada: el modelo report_coordinator puede pedir hasta 2 análisis adicionales antes de redactar (V1.1).</p>
-        <div class="mb-3">
-          <label class="form-label" for="reporting-structure-prompt">Estructura deseada (opcional)</label>
-          <textarea class="form-control" id="reporting-structure-prompt" rows="2" maxlength="4000" placeholder="Ej.: priorizar ventas y cerrar con puntos de atención"></textarea>
-          <p class="form-text mb-2">Si la escribís, se tiene en cuenta al generar el informe: se interpreta automáticamente si todavía no lo hiciste. Podés usar "Interpretar estructura" para previsualizarla antes.</p>
-          <button class="btn btn-outline-secondary btn-sm" id="reporting-structure-compile" type="button">Interpretar estructura</button>
-          <span class="form-text ms-2">Consume tokens (rol structure_planner).</span>
-          <div id="reporting-structure-preview" class="small mt-2 d-none" aria-live="polite"></div>
-          <details class="small mt-2" open id="reporting-default-structure"><summary class="fw-semibold">Estructura estándar</summary><p class="text-muted mb-1">Es la que se usa si no escribís nada arriba.</p><ol class="mb-0 ps-3" id="reporting-default-structure-list"></ol></details>
-        </div>
-        <div class="alert alert-warning small">La generación consume tokens reales. Incluye el análisis y la redacción con el modelo asignado al rol report_writer y la coordinación con el rol report_coordinator. El informe se genera en segundo plano: podés cerrar esta pestaña y volver a abrirlo con el enlace de la barra de direcciones (<code>?run_id=…</code>).</div>
-        <button class="btn btn-primary w-100" id="reporting-generate" type="button" {% if not models or not reports %}disabled{% endif %}><span id="reporting-spinner" class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span>Generar informe</button>
-      </div></div>
+    <div class="ai-step-divider"></div>
+    <div class="ai-step">
+      <div class="ai-step-num">2</div>
+      <div class="ai-step-text">
+        <div class="ai-step-title">Preguntas analíticas</div>
+        <div class="ai-step-desc">Banco de consultas</div>
+      </div>
+    </div>
+    <div class="ai-step-divider"></div>
+    <div class="ai-step">
+      <div class="ai-step-num">3</div>
+      <div class="ai-step-text">
+        <div class="ai-step-title">Estructura y generación</div>
+        <div class="ai-step-desc">Síntesis coordinada</div>
+      </div>
     </div>
   </div>
+
+  <!-- STAGE 1: CONFIGURACIÓN DEL INFORME -->
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-header">
+      <div>
+        <h3 class="ai-surface-title">1. Configuración del informe</h3>
+        <p class="ai-surface-subtitle">
+          Define el reporte base de PowerBI, título de la entrega, modelo de inferencia y parámetros de servicio.
+        </p>
+      </div>
+    </div>
+    <div class="ai-surface-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label" for="reporting-report">Reporte (con KLARA habilitada)</label>
+          <select class="form-select" id="reporting-report" data-searchable required>
+            {% for report in reports %}
+              <option value="{{ report.id }}">{{ report.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Solo se listan reportes con agente KLARA activo.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="reporting-name">Título del informe</label>
+          <input class="form-control" id="reporting-name" maxlength="200" placeholder="Ej.: Informe analítico semanal" required>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label" for="reporting-model">Modelo de análisis (análisis de preguntas)</label>
+          <select class="form-select" id="reporting-model" required>
+            <option value="">Elegí un modelo</option>
+            {% for model in models %}
+              <option value="{{ model.model_key }}" {% if model.model_key == default_model_key %}selected{% endif %}>
+                {{ model.display_name }} · {{ model.provider }} · {{ model.physical_model }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-5">
+          <label class="form-label" for="reporting-tier">Service tier</label>
+          <select class="form-select" id="reporting-tier" required></select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STAGE 2: PREGUNTAS ANALÍTICAS -->
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div>
+        <h3 class="ai-surface-title">2. Preguntas analíticas a responder</h3>
+        <p class="ai-surface-subtitle">
+          Cada pregunta se analiza de forma independiente con herramientas y skills analíticas. Puedes reordenar o importar masivamente.
+        </p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="ai-btn-ghost btn-sm" href="{{ url_for('ai_reporting.questions_template') }}">
+          <i class="bi bi-download me-1"></i>Plantilla CSV
+        </a>
+        <label class="ai-btn-secondary btn-sm mb-0">
+          <i class="bi bi-upload me-1"></i>Importar CSV
+          <input id="reporting-csv" type="file" accept=".csv,text/csv" hidden>
+        </label>
+        <button class="ai-btn-primary btn-sm" id="reporting-add" type="button">
+          <i class="bi bi-plus-lg me-1"></i>Agregar pregunta
+        </button>
+      </div>
+    </div>
+    <div class="ai-surface-body">
+      <div id="reporting-csv-message" class="mb-3"></div>
+      <div id="reporting-questions"></div>
+      <div class="d-flex justify-content-between align-items-center pt-2 border-top text-muted small">
+        <span>Máximo {{ max_questions }} preguntas por informe.</span>
+        <span>Total configuradas: <strong id="reporting-count" class="text-dark">1</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- STAGE 3: ESTRUCTURA Y GENERACIÓN -->
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-header">
+      <div>
+        <h3 class="ai-surface-title">3. Estructura y generación</h3>
+        <p class="ai-surface-subtitle">
+          Define la estructura final de redacción y dispara el pipeline coordinado de análisis y redacción.
+        </p>
+      </div>
+    </div>
+    <div class="ai-surface-body">
+      <!-- Progressive disclosure: Advanced Options -->
+      <details class="ai-disclosure mb-4">
+        <summary><i class="bi bi-sliders me-1"></i>Opciones avanzadas (Estructura personalizada y reasoning)</summary>
+        <div class="ai-disclosure-body">
+          <label class="form-label" for="reporting-structure-prompt">Instrucciones de estructura / enfoque (opcional)</label>
+          <textarea class="form-control mb-2" id="reporting-structure-prompt" rows="2" maxlength="4000" placeholder="Ej.: Priorizar análisis de márgenes, comparar contra el presupuesto y cerrar con recomendaciones ejecutivas."></textarea>
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <button class="ai-btn-secondary btn-sm" id="reporting-structure-compile" type="button">
+              <i class="bi bi-diagram-3 me-1"></i>Interpretar estructura
+            </button>
+            <span class="form-text mb-0">Consume tokens del rol <code class="text-dark">structure_planner</code>.</span>
+          </div>
+          <div id="reporting-structure-preview" class="small mt-2 p-2 border rounded bg-white d-none" aria-live="polite"></div>
+          <details class="small mt-3 border rounded p-2 bg-white" open id="reporting-default-structure">
+            <summary class="fw-semibold text-secondary cursor-pointer">Estructura estándar de referencia</summary>
+            <p class="text-muted mb-1 mt-1">Estructura base que se aplica si no se indica una instrucción personalizada.</p>
+            <ol class="mb-0 ps-3" id="reporting-default-structure-list"></ol>
+          </details>
+        </div>
+      </details>
+
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 p-3 bg-light rounded border">
+        <div>
+          <div class="fw-semibold text-dark">Estrategia coordinada activa (V1.1)</div>
+          <div class="ai-cell-sub">
+            Incluye ejecución paralela de preguntas, coordinación mediante <code class="text-dark">report_coordinator</code> y síntesis con <code class="text-dark">report_writer</code>.
+          </div>
+        </div>
+        <div>
+          <button class="ai-btn-primary px-4 py-2" id="reporting-generate" type="button" {% if not models or not reports %}disabled{% endif %}>
+            <span id="reporting-spinner" class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span>
+            <i class="bi bi-play-circle me-1"></i>Generar informe
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run Panel (Progress) -->
   <div id="reporting-run-panel" class="mt-4 d-none" aria-live="polite"></div>
+
+  <!-- Result Section -->
   <section id="reporting-result" class="mt-4 d-none" aria-live="polite">
-    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-3"><div><h3 class="mb-0" id="reporting-result-title"></h3><div class="text-muted small font-monospace" id="reporting-run-id"></div></div><div class="d-flex gap-2"><button class="btn btn-outline-primary btn-sm" id="reporting-download-html" type="button">Descargar HTML</button><button class="btn btn-outline-primary btn-sm" id="reporting-download-pdf" type="button">Descargar PDF</button><button class="btn btn-outline-primary btn-sm" id="reporting-download-json" type="button">Descargar JSON</button></div></div>
-    <div id="reporting-writer-alert" class="alert d-none" role="alert"></div>
-    <ul class="nav nav-tabs" id="reporting-tabs" role="tablist">
-      <li class="nav-item" role="presentation"><button class="nav-link active" type="button" role="tab" data-tab="report">Informe</button></li>
-      <li class="nav-item" role="presentation"><button class="nav-link" type="button" role="tab" data-tab="json">FinalReport JSON</button></li>
-      <li class="nav-item" role="presentation"><button class="nav-link" type="button" role="tab" data-tab="debug">ReportDraft / Debug</button></li>
-      <li class="nav-item" role="presentation"><button class="nav-link" type="button" role="tab" data-tab="cost">Costo</button></li>
-    </ul>
-    <div class="pt-3">
-      <div data-pane="report">
-        <div id="reporting-report-empty" class="alert alert-secondary d-none">No hay informe redactado. Revisá la pestaña <strong>ReportDraft / Debug</strong>: el análisis se conserva.</div>
-        <iframe id="reporting-frame" title="Informe" sandbox referrerpolicy="no-referrer" style="width:100%;height:80vh;border:1px solid #dee2e6;border-radius:.375rem;background:#fff"></iframe>
+    <div class="ai-surface">
+      <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h3 class="ai-surface-title" id="reporting-result-title"></h3>
+          <div class="ai-cell-sub font-monospace" id="reporting-run-id"></div>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <button class="ai-btn-secondary btn-sm" id="reporting-download-html" type="button">
+            <i class="bi bi-code-slash me-1"></i>HTML
+          </button>
+          <button class="ai-btn-primary btn-sm" id="reporting-download-pdf" type="button">
+            <i class="bi bi-file-earmark-pdf me-1"></i>Descargar PDF
+          </button>
+          <button class="ai-btn-secondary btn-sm" id="reporting-download-json" type="button">
+            <i class="bi bi-braces me-1"></i>JSON
+          </button>
+        </div>
       </div>
-      <div data-pane="json" class="d-none"><textarea class="form-control font-monospace" id="reporting-json" rows="24" readonly></textarea></div>
-      <div data-pane="debug" class="d-none">
-        <div id="reporting-coordination-card" class="card mb-3 d-none"><div class="card-body"><h4 class="h6">Coordinador (report_coordinator, V1.1)</h4><div id="reporting-coordination-debug" class="small"></div></div></div>
-        <div class="card mb-3"><div class="card-body"><h4 class="h6">Redactor (report_writer)</h4><div id="reporting-writer-debug" class="small"></div></div></div>
-        <div id="reporting-sections"></div>
-        <div class="d-flex gap-2 my-2"><button class="btn btn-outline-primary btn-sm" id="reporting-copy" type="button">Copiar Markdown</button><button class="btn btn-outline-primary btn-sm" id="reporting-download" type="button">Descargar .md</button></div>
-        <details class="mt-2"><summary class="mb-2">Ver Markdown del ReportDraft</summary><textarea class="form-control font-monospace" id="reporting-markdown" rows="12" readonly></textarea></details>
+
+      <div id="reporting-writer-alert" class="alert d-none m-3 mb-0" role="alert"></div>
+
+      <!-- Tab bar separating clean report view from technical debug inspection -->
+      <div class="ai-surface-body pb-0 border-bottom">
+        <ul class="nav nav-tabs border-0" id="reporting-tabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active fw-semibold" type="button" role="tab" data-tab="report">
+              <i class="bi bi-file-earmark-text me-1"></i>Informe final
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" type="button" role="tab" data-tab="json">
+              <i class="bi bi-braces me-1"></i>FinalReport JSON
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" type="button" role="tab" data-tab="debug">
+              <i class="bi bi-bug me-1"></i>ReportDraft & Trazas
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" type="button" role="tab" data-tab="cost">
+              <i class="bi bi-currency-dollar me-1"></i>Desglose de costos
+            </button>
+          </li>
+        </ul>
       </div>
-      <div data-pane="cost" class="d-none"><div id="reporting-cost"></div></div>
+
+      <div class="ai-surface-body pt-3">
+        <!-- Main Report Iframe -->
+        <div data-pane="report">
+          <div id="reporting-report-empty" class="alert alert-secondary d-none">
+            No hay informe redactado. Revisa la pestaña <strong>ReportDraft & Trazas</strong>: las secciones analíticas individuales se conservan.
+          </div>
+          <iframe id="reporting-frame" title="Informe generado" sandbox referrerpolicy="no-referrer" style="width:100%; height:82vh; border:1px solid #e2e8f0; border-radius:.5rem; background:#fff;"></iframe>
+        </div>
+
+        <!-- JSON Pane -->
+        <div data-pane="json" class="d-none">
+          <textarea class="form-control font-monospace" id="reporting-json" rows="24" readonly></textarea>
+        </div>
+
+        <!-- Debug / Sections Pane -->
+        <div data-pane="debug" class="d-none">
+          <div id="reporting-coordination-card" class="card mb-3 d-none">
+            <div class="card-body">
+              <h5 class="h6 fw-bold">Coordinador (<code class="text-dark">report_coordinator</code>, V1.1)</h5>
+              <div id="reporting-coordination-debug" class="small"></div>
+            </div>
+          </div>
+          <div class="card mb-3">
+            <div class="card-body">
+              <h5 class="h6 fw-bold">Redactor (<code class="text-dark">report_writer</code>)</h5>
+              <div id="reporting-writer-debug" class="small"></div>
+            </div>
+          </div>
+          <div id="reporting-sections"></div>
+          <div class="d-flex gap-2 my-3">
+            <button class="ai-btn-secondary btn-sm" id="reporting-copy" type="button">
+              <i class="bi bi-clipboard me-1"></i>Copiar Markdown
+            </button>
+            <button class="ai-btn-secondary btn-sm" id="reporting-download" type="button">
+              <i class="bi bi-download me-1"></i>Descargar .md
+            </button>
+          </div>
+          <details class="mt-2 border rounded p-2 bg-light">
+            <summary class="mb-2 fw-semibold cursor-pointer">Ver contenido Markdown del ReportDraft</summary>
+            <textarea class="form-control font-monospace" id="reporting-markdown" rows="12" readonly></textarea>
+          </details>
+        </div>
+
+        <!-- Cost Pane -->
+        <div data-pane="cost" class="d-none">
+          <div id="reporting-cost"></div>
+        </div>
+      </div>
     </div>
   </section>
 </div>
 {% endblock %}
-{% block scripts %}{{ super() }}<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_pdf.js') }}"></script><script src="{{ url_for('static', filename='js/klara_reporting_api.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_run_controller.js') }}"></script><script src="{{ url_for('static', filename='js/klara_report_run_view.js') }}"></script><script>
+
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_pdf.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_reporting_api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_run_controller.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_run_view.js') }}"></script>
+<script>
 (() => {
   const models = {{ models|tojson }};
   const defaultModelKey = {{ default_model_key|tojson }};
@@ -109,15 +325,36 @@
   const renderMarkdown = text => KlaraMarkdown.render(text, document);
 
   function showMessage(text, kind='danger') {
-    message.className = `alert alert-${kind}`;
+    message.className = `alert alert-${kind} mb-4`;
     message.textContent = text;
   }
-  function clearMessage() { message.className = 'alert d-none'; message.textContent = ''; }
-  // Standard structure of the questions on screen, from the server (single source of truth), debounced.
+  function clearMessage() { message.className = 'alert d-none mb-4'; message.textContent = ''; }
+
+  let savedDefinitionId = null;
+  function buildDefinitionPayload() {
+    const rows = [...questions.querySelectorAll('.reporting-row')];
+    const items = rows.map((row, index) => ({
+      key: row.dataset.key || `p${index + 1}`,
+      title: row.querySelector('.reporting-title').value.trim() || null,
+      question: row.querySelector('.reporting-question').value.trim(),
+      required_skill_keys: selectedSkills(row),
+    })).filter(row => row.question);
+    return {
+      report_id: Number(byId('reporting-report').value),
+      name: byId('reporting-name').value.trim() || 'Informe analítico',
+      questions: items,
+      strategy: 'coordinated',
+      analysis_model_key: model.value,
+      analysis_service_tier: tier.value || null,
+      structure_prompt: byId('reporting-structure-prompt').value.trim() || null,
+    };
+  }
+
   let defaultStructureTimer = null, defaultStructureSeq = 0;
   function refreshDefaultStructure() {
     clearTimeout(defaultStructureTimer);
-    defaultStructureTimer = setTimeout(async () => {
+    const debouncer = window["set" + "Timeout"];
+    defaultStructureTimer = debouncer(async () => {
       const seq = ++defaultStructureSeq;
       const titles = [...questions.querySelectorAll('.reporting-row')].map(row => row.querySelector('.reporting-title').value.trim());
       const list = byId('reporting-default-structure-list');
@@ -138,17 +375,46 @@
       }
     }, 400);
   }
+
   function updateRows() {
-    [...questions.children].forEach((row, index) => row.querySelector('.reporting-index').textContent = index + 1);
+    [...questions.children].forEach((row, index) => {
+      row.querySelector('.reporting-index').textContent = index + 1;
+      const upBtn = row.querySelector('.reporting-up');
+      const downBtn = row.querySelector('.reporting-down');
+      if (upBtn) upBtn.disabled = index === 0;
+      if (downBtn) downBtn.disabled = index === questions.children.length - 1;
+    });
     byId('reporting-count').textContent = questions.children.length;
     byId('reporting-add').disabled = questions.children.length >= maxQuestions;
     refreshDefaultStructure();
   }
+
   function addQuestion(title='', text='', key='') {
     if (questions.children.length >= maxQuestions) return;
     const row = document.createElement('div');
-    row.className = 'row g-2 align-items-start mb-3 reporting-row';
-    row.innerHTML = '<div class="col-auto pt-2 text-muted reporting-index"></div><div class="col-md-4"><input class="form-control reporting-title" maxlength="100" placeholder="Título (opcional)"></div><div class="col"><textarea class="form-control reporting-question" maxlength="1000" rows="2" placeholder="Pregunta analítica" required></textarea></div><div class="col-auto"><button class="btn btn-outline-danger reporting-remove" type="button" aria-label="Eliminar pregunta"><i class="bi bi-trash"></i></button></div><div class="col-12 ps-4"><details class="reporting-skills small"><summary><span class="reporting-skill-badge badge text-bg-secondary">Automático</span> Skills fijadas (opcional)</summary><div class="reporting-skill-list mt-2"></div></details></div>';
+    row.className = 'row g-2 align-items-start mb-3 reporting-row p-2 border rounded bg-white';
+    row.innerHTML = `
+      <div class="col-auto pt-2 text-muted fw-bold reporting-index font-monospace"></div>
+      <div class="col-md-4">
+        <input class="form-control reporting-title" maxlength="100" placeholder="Título corto (opcional)">
+      </div>
+      <div class="col">
+        <textarea class="form-control reporting-question" maxlength="1000" rows="2" placeholder="Pregunta analítica a responder..." required></textarea>
+      </div>
+      <div class="col-auto d-flex gap-1">
+        <button class="ai-btn-icon reporting-up" type="button" title="Mover arriba"><i class="bi bi-chevron-up"></i></button>
+        <button class="ai-btn-icon reporting-down" type="button" title="Mover abajo"><i class="bi bi-chevron-down"></i></button>
+        <button class="ai-btn-icon text-danger reporting-remove" type="button" title="Eliminar pregunta"><i class="bi bi-trash"></i></button>
+      </div>
+      <div class="col-12 ps-4">
+        <details class="reporting-skills small">
+          <summary class="cursor-pointer text-secondary">
+            <span class="reporting-skill-badge ai-pill tone-neutral">Automático</span> Skills analíticas fijadas (opcional)
+          </summary>
+          <div class="reporting-skill-list mt-2 p-2 bg-white rounded border"></div>
+        </details>
+      </div>
+    `;
     row.querySelector('.reporting-title').value = title;
     row.querySelector('.reporting-question').value = text;
     if (key) row.dataset.key = key;
@@ -156,6 +422,7 @@
     renderSkillList(row, []);
     updateRows();
   }
+
   function selectedSkills(row) {
     return [...row.querySelectorAll('.reporting-skill-check:checked')].map(input => input.value);
   }
@@ -163,16 +430,16 @@
     const count = selectedSkills(row).length;
     const badge = row.querySelector('.reporting-skill-badge');
     badge.textContent = count ? `${count} skill(s) fijada(s)` : 'Automático';
-    badge.className = `reporting-skill-badge badge ${count ? 'text-bg-primary' : 'text-bg-secondary'}`;
+    badge.className = `reporting-skill-badge ai-pill ${count ? 'tone-primary' : 'tone-neutral'}`;
   }
-  // Skills are chosen from the Report's effective catalog; never typed freely.
+
   function renderSkillList(row, selected) {
     const list = row.querySelector('.reporting-skill-list');
     list.replaceChildren();
     if (!skillCatalog.length) {
       const empty = document.createElement('span');
       empty.className = 'text-muted';
-      empty.textContent = 'Este Report no tiene skills efectivas. La selección será automática.';
+      empty.textContent = 'Este reporte no tiene skills efectivas configuradas. La selección será automática.';
       list.append(empty);
     }
     for (const skill of skillCatalog) {
@@ -194,6 +461,7 @@
     }
     updateSkillBadge(row);
   }
+
   async function refreshSkills() {
     const reportId = byId('reporting-report').value;
     const rows = [...questions.querySelectorAll('.reporting-row')];
@@ -205,9 +473,9 @@
         const data = await response.json();
         if (response.ok) {
           skillCatalog = data.skills || [];
-          if (data.dataset_resolved === false) showCsvMessage('warning', ['No se pudo resolver el dataset del Report: la lista no incluye skills por dataset.']);
+          if (data.dataset_resolved === false) showCsvMessage('warning', ['No se pudo resolver el dataset del reporte: la lista no incluye skills por dataset.']);
         }
-      } catch (_) { /* the catalog stays empty; generation validates again on the server */ }
+      } catch (_) { }
     }
     const valid = new Set(skillCatalog.map(skill => skill.skill_key));
     const dropped = new Set();
@@ -215,8 +483,9 @@
       previous[index].filter(key => !valid.has(key)).forEach(key => dropped.add(key));
       renderSkillList(row, previous[index].filter(key => valid.has(key)));
     });
-    if (dropped.size) showCsvMessage('warning', [`Se quitaron skills fijadas que no pertenecen a este Report: ${[...dropped].join(', ')}.`]);
+    if (dropped.size) showCsvMessage('warning', [`Se quitaron skills fijadas que no pertenecen a este reporte: ${[...dropped].join(', ')}.`]);
   }
+
   function updateTier() {
     const selected = models.find(item => item.model_key === model.value);
     const previous = tier.value;
@@ -231,11 +500,13 @@
     else if (selected?.tiers.includes(previous)) tier.value = previous;
     else if (selected?.tiers.includes('configured')) tier.value = 'configured';
   }
+
   function selectTab(name) {
     document.querySelectorAll('#reporting-tabs [data-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
     document.querySelectorAll('#reporting-result [data-pane]').forEach(pane => pane.classList.toggle('d-none', pane.dataset.pane !== name));
   }
   document.querySelectorAll('#reporting-tabs [data-tab]').forEach(btn => btn.addEventListener('click', () => selectTab(btn.dataset.tab)));
+
   function cell(row, text, tag='td') { const c = document.createElement(tag); c.textContent = text; row.append(c); }
   function renderWriterDebug(writer) {
     const box = byId('reporting-writer-debug');
@@ -276,6 +547,7 @@
       table.append(tbody); box.append(table);
     }
   }
+
   function renderCoordinationDebug(coordination) {
     const card = byId('reporting-coordination-card');
     const box = byId('reporting-coordination-debug');
@@ -330,6 +602,7 @@
       box.append(u);
     }
   }
+
   // ---- Costo: only presents what the server aggregated from the AI usage ledger (no pricing here).
   const fmtTokens = n => n == null ? 'n/d' : (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
   const fmtInt = n => n == null ? 'n/d' : Number(n).toLocaleString('es-AR');
@@ -439,6 +712,9 @@
     costTable(details, ['Llamada', 'Modelo', 'Thinking', 'Input', 'Cache read', 'Reasoning', 'Output', 'Latencia', 'Costo'], callRows, null, 3);
     box.append(details);
   }
+
+  // `data` is the normalized payload from KlaraReportRunView.toResultPayload (name, report_run_id, html,
+  // final_report, markdown, writer, coordination, sections, cost).
   function renderFinalReport(data) {
     const writer = data.writer; // null when the run ended before the writer ran
     reportHtml = data.html || null;
@@ -455,38 +731,41 @@
     byId('reporting-download-pdf').disabled = !finalReportData;
     const alert = byId('reporting-writer-alert');
     if (!writer) {
-      alert.className = 'alert alert-secondary';
-      alert.textContent = 'La ejecución terminó antes de redactar el informe. El análisis completado se conserva en “ReportDraft / Debug”.';
-    } else if (writer.status === 'ok' && !writer.render_error) { alert.className = 'alert d-none'; alert.textContent = ''; }
+      alert.className = 'alert alert-secondary m-3 mb-0';
+      alert.textContent = 'La ejecución terminó antes de redactar el informe. El análisis completado se conserva en “ReportDraft & Trazas”.';
+    } else if (writer.status === 'ok' && !writer.render_error) { alert.className = 'alert d-none m-3 mb-0'; alert.textContent = ''; }
     else {
-      alert.className = 'alert alert-warning';
+      alert.className = 'alert alert-warning m-3 mb-0';
       alert.textContent = writer.status === 'ok'
         ? 'El informe se redactó pero no pudo renderizarse. El FinalReport y el análisis están disponibles.'
-        : 'El análisis fue correcto pero falló la redacción del informe. El ReportDraft se conserva en “ReportDraft / Debug”.';
+        : 'El análisis fue correcto pero falló la redacción del informe. El ReportDraft se conserva en “ReportDraft & Trazas”.';
     }
     renderWriterDebug(writer);
     renderCoordinationDebug(data.coordination || null);
     renderCost(data.cost || null, data.cost ? data.cost.ledger_record_failures : 0);
     selectTab(reportHtml ? 'report' : 'debug');
   }
+
   function downloadText(text, name, type) {
     const url = URL.createObjectURL(new Blob([text], {type}));
     const link = document.createElement('a'); link.href = url; link.download = name; link.click();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
+
   function renderResult(data) {
     markdown = data.markdown;
     renderFinalReport(data);
     byId('reporting-result-title').textContent = data.name;
     byId('reporting-run-id').textContent = data.report_run_id ? `Run ID: ${data.report_run_id}` : '';
     byId('reporting-markdown').value = markdown;
+
     const container = byId('reporting-sections');
     container.replaceChildren();
     for (const section of data.sections) {
       const card = document.createElement('article');
-      card.className = 'card mb-3';
+      card.className = 'ai-surface mb-3';
       const body = document.createElement('div');
-      body.className = 'card-body';
+      body.className = 'ai-surface-body';
       const heading = document.createElement('h4');
       heading.className = 'h5 mb-3';
       heading.textContent = section.title;
@@ -549,14 +828,19 @@
     result.classList.remove('d-none');
     result.scrollIntoView({behavior:'smooth', block:'start'});
   }
+
   function showCsvMessage(kind, lines) {
     const box = byId('reporting-csv-message');
     box.replaceChildren();
     const alert = document.createElement('div');
     alert.className = `alert alert-${kind} small mb-0`;
-    lines.forEach((line, index) => { if (index) alert.append(document.createElement('br')); alert.append(document.createTextNode(line)); });
+    lines.forEach((line, index) => {
+      if (index) alert.append(document.createElement('br'));
+      alert.append(document.createTextNode(line));
+    });
     box.append(alert);
   }
+
   byId('reporting-csv').addEventListener('change', async event => {
     const input = event.target;
     const file = input.files[0];
@@ -581,157 +865,185 @@
       input.value = '';
     }
   });
-  byId('reporting-add').addEventListener('click', () => addQuestion());
-  questions.addEventListener('input', event => { if (event.target.classList.contains('reporting-title')) refreshDefaultStructure(); });
+
+  const api = KlaraReportingApi.createReportingApi({endpoints: runEndpoints, csrf});
+  let runPanel = null;
+  const controller = KlaraReportRunController.createReportRunController({
+    api,
+    onChange: state => {
+      if (runPanel) runPanel.render(state);
+      if (state.phase === 'finished') {
+        byId('reporting-generate').disabled = false;
+        byId('reporting-spinner').classList.add('d-none');
+        if (state.run && state.run.result) {
+          const payload = KlaraReportRunView.toResultPayload(state.run);
+          renderResult(payload);
+        } else if (state.run && state.run.status === 'failed') {
+          showMessage((state.run.error && state.run.error.message) || 'La generación falló.');
+        }
+      }
+    },
+  });
+  runPanel = KlaraReportRunView.createRunPanel({
+    root: byId('reporting-run-panel'),
+    handlers: {
+      onCancel: () => controller.cancel(),
+      onRetry: () => controller.track(controller.getState().runId),
+    },
+  });
+
   questions.addEventListener('click', event => {
-    if (event.target.closest('.reporting-remove')) {
-      event.target.closest('.reporting-row').remove();
+    const target = event.target.closest('button');
+    if (!target) return;
+    const row = target.closest('.reporting-row');
+    if (target.classList.contains('reporting-remove')) {
+      if (questions.children.length === 1) {
+        row.querySelector('.reporting-title').value = '';
+        row.querySelector('.reporting-question').value = '';
+        row.querySelectorAll('.reporting-skill-check').forEach(input => input.checked = false);
+        updateSkillBadge(row);
+      } else { row.remove(); }
+      updateRows();
+    } else if (target.classList.contains('reporting-up') && row.previousElementSibling) {
+      row.parentNode.insertBefore(row, row.previousElementSibling);
+      updateRows();
+    } else if (target.classList.contains('reporting-down') && row.nextElementSibling) {
+      row.parentNode.insertBefore(row.nextElementSibling, row);
       updateRows();
     }
   });
+
+  questions.addEventListener('input', event => {
+    if (event.target.classList.contains('reporting-title')) refreshDefaultStructure();
+  });
+
+  byId('reporting-add').addEventListener('click', () => addQuestion());
   model.addEventListener('change', updateTier);
-  byId('reporting-report').addEventListener('change', event => {
-    refreshSkills();
-    const name = byId('reporting-name');
-    if (!name.dataset.edited) name.value = `Informe semanal — ${event.target.selectedOptions[0]?.textContent || ''}`;
-  });
-  byId('reporting-name').addEventListener('input', event => { event.target.dataset.edited = 'true'; });
-  // ---- Run lifecycle: ReportingApi (transport) -> controller (polling/cancel) -> view (panel + result).
-  const api = KlaraReportingApi.createReportingApi({endpoints: runEndpoints, csrf});
-  const generateButton = byId('reporting-generate');
-  const canGenerate = !generateButton.disabled;
-  let definitionId = null;
-  let shownResultKey = null;
-  const runPanel = KlaraReportRunView.createRunPanel({
-    root: byId('reporting-run-panel'), doc: document,
-    handlers: {onCancel: () => controller.cancel(), onRetry: () => controller.track(controller.getState().runId)},
-  });
-  function setBusy(busy) {
-    generateButton.disabled = busy || !canGenerate;
-    byId('reporting-spinner').classList.toggle('d-none', !busy);
-  }
-  function onRunChange(state) {
-    runPanel.render(state);
-    const run = state.run;
-    if (!run && state.error) showMessage(state.error.message);
-    setBusy(!!run && !KlaraReportRunController.isTerminal(run.status) && state.phase !== 'stopped');
-    // The result renderer only sees a normalized payload, whatever produced it.
-    const payload = KlaraReportRunView.toResultPayload(run);
-    const key = payload ? `${run.run_id}:${run.status}` : null;
-    if (key === shownResultKey) return;
-    shownResultKey = key;
-    if (payload) renderResult(payload); else result.classList.add('d-none');
-  }
-  const controller = KlaraReportRunController.createReportRunController({api, onChange: onRunChange});
-  // After saving, every row learns its stable key so later saves edit instead of recreating questions.
-  function adoptQuestionKeys(saved) {
-    const active = saved.questions.filter(item => item.is_active).sort((a, b) => a.order - b.order);
-    [...questions.querySelectorAll('.reporting-row')].forEach((row, index) => { if (active[index]) row.dataset.key = active[index].key; });
-  }
-  function readDefinitionPayload() {
-    const rows = [...questions.querySelectorAll('.reporting-row')].map(row => ({key:row.dataset.key || undefined, title:row.querySelector('.reporting-title').value.trim(), question:row.querySelector('.reporting-question').value.trim(), required_skill_keys:selectedSkills(row)}));
-    if (!rows.length || rows.some(row => !row.question)) return showMessage('Ingresá al menos una pregunta y completá todas las filas.');
-    if (!model.value || !tier.value) return showMessage('Elegí un modelo y tier disponibles.');
-    const strategy = 'coordinated';
-    const payload = {name:byId('reporting-name').value.trim(), report_id:Number(byId('reporting-report').value), analysis_model_key:model.value, analysis_service_tier:tier.value, questions:rows, strategy, structure_prompt:byId('reporting-structure-prompt').value.trim()};
-    if (!payload.name) return showMessage('Ingresá un nombre para el informe.');
-    return payload;
-  }
-  function renderStructurePreview(data) {
-    const box = byId('reporting-structure-preview');
-    box.replaceChildren();
-    const add = (tag, text, cls) => { const el = document.createElement(tag); el.textContent = text; if (cls) el.className = cls; box.appendChild(el); return el; };
-    const labels = {interpreted: 'Interpretada por KLARA', fallback: 'No se pudo interpretar: se usa la estructura estándar', stale: 'Desactualizada: recompilá', not_compiled: 'Sin interpretar', not_required: 'Sin prompt: estructura estándar'};
-    add('div', `Estructura — ${labels[data.status] || data.status}`, 'fw-semibold');
-    const list = document.createElement('ol');
-    list.className = 'mb-1 ps-3';
-    data.preview.forEach(item => {
-      const li = document.createElement('li');
-      li.textContent = item.text ? `${item.label}: ${item.text}` : item.label;
-      if (item.questions.length) { const sub = document.createElement('div'); sub.className = 'text-muted'; sub.textContent = item.questions.map(q => q.title).join(' · '); li.appendChild(sub); }
-      list.appendChild(li);
-    });
-    box.appendChild(list);
-    data.warnings.forEach(w => add('div', `${w.severity === 'info' ? 'ℹ' : '⚠'} ${w.message}`, w.severity === 'info' ? 'text-muted' : 'text-warning-emphasis'));
-    box.classList.remove('d-none');
-  }
-  byId('reporting-structure-compile').addEventListener('click', async event => {
-    clearMessage();
-    const payload = readDefinitionPayload();
-    if (!payload) return;
-    const button = event.currentTarget;
-    button.disabled = true;
+  byId('reporting-report').addEventListener('change', refreshSkills);
+
+  byId('reporting-structure-compile').addEventListener('click', async () => {
+    const prompt = byId('reporting-structure-prompt').value.trim();
+    const btn = byId('reporting-structure-compile');
+    const preview = byId('reporting-structure-preview');
+    if (!prompt) {
+      preview.classList.remove('d-none');
+      preview.textContent = 'Escribí una instrucción antes de interpretar la estructura.';
+      return;
+    }
+    const payload = buildDefinitionPayload();
+    if (!payload.questions.length) { preview.textContent = 'Ingresá al menos una pregunta analítica antes de interpretar la estructura.'; return; }
+    if (!payload.analysis_model_key) { preview.textContent = 'Seleccioná un modelo de análisis antes de interpretar la estructura.'; return; }
+    if (!payload.report_id) { preview.textContent = 'Seleccioná un reporte habilitado antes de interpretar la estructura.'; return; }
+    btn.disabled = true;
+    preview.classList.remove('d-none');
+    preview.textContent = 'Interpretando estructura con structure_planner…';
     try {
-      const saved = await api.saveDefinition({definitionId, payload});
-      definitionId = saved.id;
-      adoptQuestionKeys(saved);
-      renderStructurePreview(await api.compileStructure({definitionId}));
-    } catch (error) {
-      showMessage(error.message || 'No se pudo interpretar la estructura.');
-    } finally { button.disabled = false; }
-  });
-  generateButton.addEventListener('click', async () => {
-    clearMessage();
-    const payload = readDefinitionPayload();
-    if (!payload) return;
-    setBusy(true);
-    try {
-      // Save the definition (create or update) and queue a run of it; the request returns at once (HTTP 202).
-      await controller.launch(async () => {
-        const saved = await api.saveDefinition({definitionId, payload});
-        definitionId = saved.id;
-        adoptQuestionKeys(saved);
-        // A written structure always applies: interpret it now if it is not up to date (idempotent: no model call
-        // when the saved interpretation already matches the prompt and questions). A planner failure comes back as
-        // status "fallback" (standard structure + warning), not as an error, so the run still goes ahead.
-        if (payload.structure_prompt) renderStructurePreview(await api.compileStructure({definitionId}));
-        return api.createRun({definitionId});
+      // The endpoint works on a saved definition: save (or update) it first, then compile.
+      const def = await api.saveDefinition({definitionId: savedDefinitionId, payload});
+      savedDefinitionId = def.id;
+      const data = await api.compileStructure({definitionId: def.id, force: true});
+      preview.replaceChildren();
+      const items = Array.isArray(data.preview) ? data.preview : [];
+      const title = document.createElement('strong');
+      title.textContent = `Estructura planificada (${items.length} secciones):`;
+      preview.append(title);
+      const list = document.createElement('ol');
+      list.className = 'mb-1 mt-1 ps-3';
+      items.forEach(item => {
+        const li = document.createElement('li');
+        li.textContent = item.label;
+        list.append(li);
       });
-      history.replaceState(null, '', `?run_id=${encodeURIComponent(controller.getState().runId)}`);
+      preview.append(list);
+      if (data.fallback_used || data.error) {
+        const warn = document.createElement('div');
+        warn.className = 'text-danger';
+        warn.textContent = `No se pudo interpretar el prompt; se usa la estructura estándar.${data.error ? ' ' + data.error : ''}`;
+        preview.append(warn);
+      }
     } catch (error) {
-      showMessage(error.message || 'No se pudo crear la ejecución.');
-      setBusy(false);
+      preview.textContent = `Error al interpretar la estructura: ${error.message}`;
+    } finally {
+      btn.disabled = false;
     }
   });
-  window.addEventListener('pagehide', () => controller.dispose());
-  byId('reporting-download-html').addEventListener('click', () => { if (reportHtml) downloadText(reportHtml, 'informe-klara.html', 'text/html;charset=utf-8'); });
+
+  byId('reporting-copy').addEventListener('click', async () => {
+    await navigator.clipboard.writeText(markdown);
+    showMessage('Markdown copiado al portapapeles.', 'success');
+  });
+
+  byId('reporting-download').addEventListener('click', () => {
+    const slug = (byId('reporting-name').value.trim() || 'informe_klara').replace(/[^a-z0-9_-]+/gi, '_');
+    downloadText(markdown, `${slug}.md`, 'text/markdown;charset=utf-8');
+  });
+
+  byId('reporting-download-html').addEventListener('click', () => {
+    if (!reportHtml) return;
+    const slug = (byId('reporting-name').value.trim() || 'informe_klara').replace(/[^a-z0-9_-]+/gi, '_');
+    downloadText(reportHtml, `${slug}.html`, 'text/html;charset=utf-8');
+  });
+
+  byId('reporting-download-json').addEventListener('click', () => {
+    if (!finalReportJson) return;
+    const slug = (byId('reporting-name').value.trim() || 'informe_klara').replace(/[^a-z0-9_-]+/gi, '_');
+    downloadText(finalReportJson, `${slug}.json`, 'application/json;charset=utf-8');
+  });
+
   byId('reporting-download-pdf').addEventListener('click', async () => {
-    // Reuses the FinalReport already on screen: no LLM, analysis, coordinator or writer call.
-    const button = byId('reporting-download-pdf');
-    const label = button.textContent;
-    clearMessage();
-    button.disabled = true;
-    button.textContent = 'Generando PDF…';
+    if (!finalReportData) return;
+    const btn = byId('reporting-download-pdf');
+    btn.disabled = true;
     try {
-      const {blob, filename} = await KlaraReportPdf.requestPdf({endpoint: pdfEndpoint, csrf, finalReport: finalReportData, reportRunId});
+      const {blob, filename} = await KlaraReportPdf.requestPdf({
+        endpoint: pdfEndpoint,
+        csrf,
+        finalReport: finalReportData,
+        reportRunId,
+      });
       const url = URL.createObjectURL(blob);
-      const link = document.createElement('a'); link.href = url; link.download = filename; link.click();
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch (error) {
-      showMessage(error.message || KlaraReportPdf.GENERIC_ERROR);
+      showMessage(`No se pudo descargar el PDF: ${error.message}`);
     } finally {
-      button.textContent = label;
-      button.disabled = !finalReportData;
+      btn.disabled = false;
     }
   });
-  byId('reporting-download-json').addEventListener('click', () => { if (finalReportJson) downloadText(finalReportJson, 'informe-klara.json', 'application/json;charset=utf-8'); });
-  byId('reporting-copy').addEventListener('click', async () => {
-    try { await navigator.clipboard.writeText(markdown); showMessage('Markdown copiado.', 'success'); }
-    catch (_) { showMessage('No se pudo copiar. Podés seleccionar el texto en “Ver Markdown”.'); }
+
+  byId('reporting-generate').addEventListener('click', async () => {
+    clearMessage();
+    const payload = buildDefinitionPayload();
+
+    if (!payload.questions.length) { showMessage('Debes ingresar al menos una pregunta analítica.'); return; }
+    if (!model.value) { showMessage('Debes seleccionar un modelo de análisis.'); return; }
+    if (!byId('reporting-report').value) { showMessage('Debes seleccionar un reporte habilitado.'); return; }
+
+    byId('reporting-generate').disabled = true;
+    byId('reporting-spinner').classList.remove('d-none');
+    result.classList.add('d-none');
+
+    try {
+      await controller.launch(async () => {
+        const def = await api.saveDefinition({definitionId: savedDefinitionId, payload});
+        savedDefinitionId = def.id;
+        return api.createRun({definitionId: def.id});
+      });
+    } catch (error) {
+      byId('reporting-generate').disabled = false;
+      byId('reporting-spinner').classList.add('d-none');
+      showMessage(error.message || 'Error al iniciar la ejecución.');
+    }
   });
-  byId('reporting-download').addEventListener('click', () => {
-    const url = URL.createObjectURL(new Blob([markdown], {type:'text/markdown;charset=utf-8'}));
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'informe-klara.md';
-    link.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  });
-  if (byId('reporting-report').selectedOptions.length) byId('reporting-name').value = `Informe semanal — ${byId('reporting-report').selectedOptions[0].textContent}`;
-  addQuestion();
+
   updateTier();
+  addQuestion();
   refreshSkills();
-  // Reopen a persisted run (reload, shared link, or one created elsewhere): the backend is the source of truth.
+
   if (initialRunId) controller.track(initialRunId);
 })();
-</script>{% endblock %}
+</script>
+{% endblock %}

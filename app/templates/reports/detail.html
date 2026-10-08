@@ -95,7 +95,12 @@
               <h6>Público:</h6>
               {% if report.es_publico %}
               <span class="badge bg-success fs-6"><i class="bi bi-check-circle me-1"></i>Habilitado</span>
+              {% if report.requires_login %}
+              <span class="badge bg-warning text-dark fs-6"><i class="bi bi-lock-fill me-1"></i>Requiere login</span>
+              <p class="text-muted small mt-2">Los links públicos piden iniciar sesión con un usuario de la aplicación asociado a una de las empresas del reporte</p>
+              {% else %}
               <p class="text-muted small mt-2">El reporte puede ser accedido mediante links públicos sin autenticación</p>
+              {% endif %}
               {% else %}
               <span class="badge bg-secondary fs-6"><i class="bi bi-x-circle me-1"></i>Deshabilitado</span>
               {% endif %}

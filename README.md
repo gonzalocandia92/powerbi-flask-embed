@@ -206,21 +206,62 @@ The application will be available at `http://localhost:2052`
 2. Find the configuration you want to share
 3. Click **New Link**
 4. Enter a custom slug (e.g., `sales-report-2024`)
-5. Optionally enable **Permitir restablecer a valores predeterminados** only when the report supports Power BI Persistent Filters
-6. Optionally enable **Permitir actualización de datos** if you want public viewers to trigger dataset refreshes
-7. Share the generated URL: `https://yourdomain.com/p/sales-report-2024`
+5. Share the generated URL: `https://yourdomain.com/p/sales-report-2024`
 
-#### Reset to Default for Public Links
+The user actions are configured on the **report** (edit the report, section **Acciones para usuarios**) and apply to all of its public links and to the private API:
 
-The public viewer can show a **Restablecer** button only when all of the following are true:
+| Report setting | Applies to | What it does |
+| --- | --- | --- |
+| `allow_reset_to_default` | Public links, private API | **Restablecer**: `report.resetPersistentFilters()` (see below) |
+| `allow_refresh_visuals` | Private API | **Actualizar objetos visuales**: `report.refresh()` in the client. Microsoft documents it as working only on DirectQuery models |
+| `allow_refresh` | Public links | **Actualizar datos**: server-side dataset refresh, 30 minute cooldown per link |
 
-- The public link has `allow_reset_to_default` enabled
+#### Reset to Default
+
+The viewer can show a **Restablecer** button only when all of the following are true:
+
+- The report has `allow_reset_to_default` enabled
 - The application is embedding the report with Azure AD (`TokenType.Aad`)
 - The embed config enables `persistentFiltersEnabled: true`
 - Power BI Persistent Filters are enabled for the report
 - The Azure AD app has the permissions required by Microsoft for persistent user state (for example `UserState.ReadWrite.All`)
 
 When those prerequisites are not met, the application keeps the button hidden instead of showing a non-functional control.
+
+#### Login-Protected Public Reports
+
+A public report can require a login with an application user. Edit the report and enable **Requiere login para abrir los links públicos**.
+
+A visitor can then open the report's public links (`/p/<slug>`) only if they are signed in, their account is active, and either:
+
+- they have backoffice access (`backoffice.access`, includes administrators), or
+- they have the `reports.read` permission **and** belong to an active empresa associated with the report.
+
+To give an external user access:
+
+1. In **Administración → Usuarios → Accesos** assign the **Lector de reportes** role (it holds `reports.read`). Do not give report viewers roles with backoffice access.
+2. On the same screen assign the user to the empresas whose reports they may open.
+3. Make sure those empresas are associated with the report (report edit screen, **Empresas Asociadas**). A login-protected report with no empresas can only be opened by backoffice staff.
+
+Anonymous visitors are redirected to `/login` and returned to the report afterwards. Users without backoffice access land on `/cuenta` after signing in without a destination, and every backoffice screen answers 403 for them.
+
+The same check protects the report's other entry points: the dataset refresh (`POST /p/<slug>/refresh`) and the KLARA endpoints (`/chat`, `/api/chatbot/context/<slug>`). Login-protected reports are also left out of `/api/chatbot/reports` and of the chat session endpoints unless the caller has backoffice access. WhatsApp keeps using its own authorized-number control.
+
+Because access relies on the session cookie, a login-protected link does not work when it is embedded in a third-party iframe.
+
+### Database Backups
+
+`backup_db.py` (next to `.env`) creates a `pg_dump` backup of the database in `SQLALCHEMY_DATABASE_URI`:
+
+```bash
+python backup_db.py --label pre-hotfix
+python backup_db.py --dry-run
+```
+
+- The database is only read (the connection check opens a read-only session). It prints the PostgreSQL version, the size and the current alembic revision, so you can confirm the migration state before upgrading.
+- The dump goes to `./backups` (ignored by git) in custom format, with a `<file>.info.txt` manifest (revision, size, SHA-256). Restore it with `pg_restore -d <empty database> --no-owner <file>`.
+- It uses a local `pg_dump` when it is at least as new as the server; otherwise it runs `pg_dump` from a `postgres` Docker image (a matching one that is already on the machine is preferred, `--docker` forces it).
+- It holds production data and password hashes: keep it private and never commit it.
 
 ### Viewing Reports
 
@@ -400,7 +441,9 @@ curl -X POST https://yourdomain.com/private/report-config \
   "reportId": "abcd-1234",
   "accessToken": "AAD-token-for-powerbi",
   "workspaceId": "wxyz-9876",
-  "datasetId": "data-5555"
+  "datasetId": "data-5555",
+  "settings": { "persistentFiltersEnabled": true },
+  "actions": { "resetToDefault": true, "refreshVisuals": false }
 }
 ```
 
@@ -409,6 +452,11 @@ curl -X POST https://yourdomain.com/private/report-config \
 - `401`: Invalid or expired token
 - `403`: Configuration is not private or doesn't belong to this client
 - `404`: Configuration not found
+
+**User actions**: `actions` tells the client which buttons it may show, based on the report settings above. Both run in the browser with the Power BI client SDK, so there are no extra endpoints:
+
+- `resetToDefault` → `report.resetPersistentFilters()`. Embed with `tokenType: Aad` and merge `settings` into the embed `settings`: `persistentFiltersEnabled` can only be set when the report loads.
+- `refreshVisuals` → `report.refresh()`.
 
 ### Integration Example
 

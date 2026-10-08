@@ -64,6 +64,20 @@ def report_cache_scope(empresa_id: int | None, report_id: int | None) -> CacheSc
     return CacheScope(key=f"empresa{int(empresa_id)}_reporte{int(report_id)}")
 
 
+def stable_section(text: str) -> dict[str, Any]:
+    """Instruction section that is identical across turns of the same scope.
+
+    `cache_boundary` marks the last block of the stable prefix; runtimes decide
+    how (or whether) to turn that boundary into a provider cache hint.
+    """
+    return {"text": text, "cache_boundary": True}
+
+
+def dynamic_section(text: str) -> dict[str, Any]:
+    """Instruction section that varies per turn; always placed after the stable prefix."""
+    return {"text": text}
+
+
 @dataclass(frozen=True)
 class ToolDefinition:
     name: str
@@ -186,6 +200,19 @@ def provider_error_type(provider: str | None, kind: str) -> str:
     if kind == "missing_api_key":
         return f"missing_{provider_slug}_api_key"
     return f"{provider_slug}_{kind}"
+
+
+# Single source of truth for "this model failure is worth another attempt". Conservative on purpose: anything
+# not listed here (context too large, missing key, invalid request, unknown errors...) is NOT transient.
+TRANSIENT_HTTP_STATUSES = frozenset({408, 429, 500, 502, 503, 504})
+TRANSIENT_ERROR_KINDS = frozenset({"timeout", "connection_error", "rate_limit", "service_unavailable"})
+
+
+def is_transient_llm_error(exc: Exception) -> bool:
+    """True only for provider-neutral evidence of a temporary failure (status code or normalized kind)."""
+    if getattr(exc, "kind", None) in TRANSIENT_ERROR_KINDS:
+        return True
+    return getattr(exc, "status_code", None) in TRANSIENT_HTTP_STATUSES
 
 
 def safe_error_metadata(

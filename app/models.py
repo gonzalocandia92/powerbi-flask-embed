@@ -273,6 +273,19 @@ class Report(db.Model):
     # Whether to show DAX queries in the chat (off by default for clients)
     show_dax_query = db.Column(db.Boolean, default=False, nullable=False)
 
+    # User-facing actions. They apply to every public link and to the private API.
+    # allow_refresh: dataset refresh through the backend (public links only).
+    # allow_reset_to_default / allow_refresh_visuals: Power BI client SDK actions
+    # (report.resetPersistentFilters() / report.refresh()).
+    allow_refresh = db.Column(db.Boolean, default=False, nullable=False)
+    allow_reset_to_default = db.Column(db.Boolean, default=False, nullable=False)
+    allow_refresh_visuals = db.Column(db.Boolean, default=False, nullable=False)
+
+    # When true, the public links of this report ask for a login with an application
+    # user: one with the reports.read permission who belongs to an active empresa
+    # associated with the report, or one with backoffice access.
+    requires_login = db.Column(db.Boolean, default=False, nullable=False)
+
     # Fixed schema retrieval limits for KLARA. Null values use runtime defaults.
     schema_retrieval_prompt = db.Column(db.Text, nullable=True)
     schema_table_context_limit = db.Column(db.Integer, nullable=True)
@@ -342,8 +355,6 @@ class PublicLink(db.Model):
     custom_slug = db.Column(db.String(120), unique=True, nullable=True)
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
-    allow_refresh = db.Column(db.Boolean, default=False, nullable=False)
-    allow_reset_to_default = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow)
 
     report = db.relationship('Report', back_populates='public_links')
@@ -354,7 +365,7 @@ class Visit(db.Model):
 
     __tablename__ = 'visits'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     link_slug = db.Column(db.String(120), nullable=False, index=True)
     timestamp = db.Column(db.DateTime, default=_utcnow, nullable=False, index=True)
     visitor_id = db.Column(db.String(36), nullable=True, index=True)

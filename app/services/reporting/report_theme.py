@@ -13,7 +13,7 @@ reads no environment variables and no global mutable state.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 _COLOR = re.compile(r"^#[0-9a-fA-F]{6}$")
 _FONT = re.compile(r"^[A-Za-z0-9 ,'\"_-]{1,200}$")
@@ -104,7 +104,12 @@ AKLARA_EDITORIAL = ReportTheme(
     font_display="Georgia, 'Times New Roman', serif",
 )
 
-_THEMES: dict[str, ReportTheme] = {AKLARA_EDITORIAL.theme_id: AKLARA_EDITORIAL}
+# html-v4 theme: same palette and typography; the feature layout gives the complementary column ~40% of the width.
+# ``aklara-editorial`` stays untouched for the historical html-v3.
+AKLARA_EDITORIAL_V2 = replace(AKLARA_EDITORIAL, theme_id="aklara-editorial-v2", feature_columns="1.30fr 0.90fr")
+
+_THEMES: dict[str, ReportTheme] = {AKLARA_EDITORIAL.theme_id: AKLARA_EDITORIAL,
+                                   AKLARA_EDITORIAL_V2.theme_id: AKLARA_EDITORIAL_V2}
 DEFAULT_THEME_ID = AKLARA_EDITORIAL.theme_id
 
 

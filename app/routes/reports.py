@@ -30,6 +30,16 @@ from app.utils.powerbi import get_current_dataset_id, get_embed_for_report, pars
 bp = Blueprint('reports', __name__, url_prefix='/reports')
 
 
+def _warn_if_login_without_empresas(report):
+    """Warn when a login-protected report has no empresa that could grant access to users."""
+    if report.requires_login and not report.empresas:
+        flash(
+            "El reporte requiere login pero no tiene empresas asociadas: "
+            "solo el personal de backoffice podrá abrirlo. Asociá empresas editando el reporte.",
+            "warning",
+        )
+
+
 def _get_latest_successful_dataset_id(report_id):
     """Return the most recent successful dataset_id for a report."""
     latest_success = (
@@ -173,6 +183,10 @@ def new():
             es_privado=es_privado,
             chatbot_enabled=form.chatbot_enabled.data,
             show_dax_query=form.show_dax_query.data,
+            allow_refresh=form.allow_refresh.data,
+            allow_reset_to_default=form.allow_reset_to_default.data,
+            allow_refresh_visuals=form.allow_refresh_visuals.data,
+            requires_login=form.requires_login.data,
             empresa_facturadora_id=form.empresa_facturadora_id.data or None,
             filter_enabled=form.filter_enabled.data,
             filter_table=form.filter_table.data or None,
@@ -184,8 +198,9 @@ def new():
             _queue_embeddings_if_available(report)
         
         flash("Report creado", "success")
+        _warn_if_login_without_empresas(report)
         return redirect(url_for('reports.detail', report_id=report.id))
-    
+
     return render_template('reports/form.html', form=form, title='Nuevo Report')
 
 
@@ -230,6 +245,10 @@ def edit(report_id):
         report.es_privado = es_privado
         report.chatbot_enabled = form.chatbot_enabled.data
         report.show_dax_query = form.show_dax_query.data
+        report.allow_refresh = form.allow_refresh.data
+        report.allow_reset_to_default = form.allow_reset_to_default.data
+        report.allow_refresh_visuals = form.allow_refresh_visuals.data
+        report.requires_login = form.requires_login.data
         report.empresa_facturadora_id = form.empresa_facturadora_id.data or None
         report.filter_enabled = form.filter_enabled.data
         report.filter_table = form.filter_table.data or None
@@ -248,6 +267,7 @@ def edit(report_id):
         if not was_chatbot_enabled and report.chatbot_enabled:
             _queue_embeddings_if_available(report)
         flash("Report actualizado", "success")
+        _warn_if_login_without_empresas(report)
         return redirect(url_for('reports.list'))
     
     return render_template('reports/form.html', form=form, report=report, all_empresas=all_empresas, title='Editar Report')
@@ -384,12 +404,10 @@ def new_link(report_id):
             custom_slug=custom_slug,
             report_id_fk=report.id,
             is_active=True,
-            allow_refresh=form.allow_refresh.data,
-            allow_reset_to_default=form.allow_reset_to_default.data,
         )
         db.session.add(link)
         db.session.commit()
-        
+
         base_url = f"https://{request.host}"
         public_url = f"{base_url}/p/{custom_slug}"
         flash(f"Link público creado: {public_url}", "success")
@@ -421,8 +439,6 @@ def edit_link(report_id, link_id):
             return render_template('edit_public_link.html', form=form, report=report, link=link)
         
         link.custom_slug = new_slug
-        link.allow_refresh = form.allow_refresh.data
-        link.allow_reset_to_default = form.allow_reset_to_default.data
         db.session.commit()
         logging.debug(f"Public link edited: {link.custom_slug} (ID: {link.id})")
         flash(f"Link público actualizado: /p/{new_slug}", "success")
@@ -598,7 +614,10 @@ def from_url_report():
             workspace_id_fk=workspace_id,
             usuario_pbi_id=form.usuario_pbi.data,
             es_publico=es_publico,
-            es_privado=es_privado
+            es_privado=es_privado,
+            allow_refresh=form.allow_refresh.data,
+            allow_reset_to_default=form.allow_reset_to_default.data,
+            allow_refresh_visuals=form.allow_refresh_visuals.data,
         )
         db.session.add(report)
         db.session.commit()
@@ -645,8 +664,6 @@ def from_url_link():
             custom_slug=link_name,
             report_id_fk=report.id,
             is_active=True,
-            allow_refresh=form.allow_refresh.data,
-            allow_reset_to_default=form.allow_reset_to_default.data,
         )
         db.session.add(link)
         db.session.commit()

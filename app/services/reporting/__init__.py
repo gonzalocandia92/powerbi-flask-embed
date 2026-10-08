@@ -29,7 +29,7 @@ from .generator import ReportGenerator
 from .html_renderer import HtmlReportRenderer
 from .pdf_export import report_pdf_filename
 from .pdf_renderer import (
-    PdfBrowserUnavailableError, PdfRenderer, PdfRenderError, PdfRenderFailedError, PlaywrightPdfRenderer,
+    PdfBrowserUnavailableError, PdfRenderer, PdfRenderError, PdfRenderFailedError, WeasyPrintPdfRenderer,
     build_pdf_renderer,
 )
 from .pipeline import ReportPipeline, ReportPipelineResult
@@ -45,7 +45,7 @@ __all__ = [
     "CoordinatorExecutionError", "CoordinatorInput", "CoordinatorInvalidDecisionError", "CoordinatorSection",
     "CoordinatorSemanticNote", "FinalReport", "HtmlReportRenderer", "LLMReportCoordinator", "LLMReportWriter",
     "MAX_COORDINATOR_ROUNDS", "MAX_EXTRA_ANALYSES", "PdfBrowserUnavailableError", "PdfRenderError",
-    "PdfRenderFailedError", "PdfRenderer", "PlaywrightPdfRenderer", "ReportCoordinator", "ReportDefinition", "ReportDraft",
+    "PdfRenderFailedError", "PdfRenderer", "WeasyPrintPdfRenderer", "ReportCoordinator", "ReportDefinition", "ReportDraft",
     "ReportCostService", "ReportCostSummary", "ReportGenerator", "ReportPipeline", "ReportPipelineResult", "ReportQuestion", "RequestedAnalysis",
     "ReportSection", "ReportWriter", "ReportWriterConfigurationError", "ReportWriterError",
     "ReportWriterExecutionError", "ReportWriterInvalidOutputError", "build_coordinator_input",

@@ -10,7 +10,7 @@ from app import db
 from app.forms import AIModelConfigForm
 from app.models import AIModelConfig, AIModelGrant, AIModelRoleAssignment, Empresa, Report
 from app.services.agent_core import build_runtime_settings
-from app.services import model_catalog as catalog_service
+from app.services import model_catalog as catalog_service, ai_console
 from app.services.llm.profiles import PROFILES, CONTROLLED_OPTIONS, profile_catalog
 from app.utils.decorators import admin_required
 
@@ -452,8 +452,14 @@ def _form_payload(form, *, include_key=True):
 @admin_required
 def catalog_page():
     models = AIModelConfig.query.order_by(AIModelConfig.display_name.asc()).all()
-    return render_template('admin/ai_models/catalog.html', models=models,
-                           readiness={item.id: catalog_service.model_readiness(item, config=dict(current_app.config)) for item in models})
+    readiness = {item.id: catalog_service.model_readiness(item, config=dict(current_app.config)) for item in models}
+    catalog_view = ai_console.model_catalog_view(models, readiness)
+    return render_template(
+        'admin/ai_models/catalog.html',
+        models=models,
+        readiness=readiness,
+        catalog_view=catalog_view,
+    )
 
 
 @bp.route('/ui/new', methods=['GET', 'POST'])
@@ -526,6 +532,7 @@ def catalog_edit(model_key):
 @login_required
 @admin_required
 def components_page():
+    klara_reports = ai_console.klara_enabled_reports()
     return render_template(
         'admin/ai_models/components.html',
         component_defs=[{
@@ -535,5 +542,5 @@ def components_page():
         } for role, meta in COMPONENT_REGISTRY.items()],
         models=AIModelConfig.query.order_by(AIModelConfig.display_name.asc()).all(),
         companies=Empresa.query.order_by(Empresa.nombre.asc()).all(),
-        reports=Report.query.order_by(Report.name.asc()).all(),
+        reports=klara_reports,
     )

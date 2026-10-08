@@ -32,9 +32,7 @@ def login():
         if user and user.is_active and user.check_password(form.password.data):
             login_user(user, remember=form.remember.data)
             next_url = request.args.get('next') or request.form.get('next')
-            if next_url and _is_safe_redirect(next_url):
-                return redirect(next_url)
-            return redirect(url_for('main.index'))
+            return redirect(_after_login_url(user, next_url))
         
         flash('Usuario o contraseña inválidos', 'danger')
     
@@ -48,6 +46,26 @@ def _is_safe_redirect(target):
     reference = urlparse(request.host_url)
     candidate = urlparse(urljoin(request.host_url, target))
     return candidate.scheme in ('http', 'https') and candidate.netloc == reference.netloc
+
+
+def _after_login_url(user, next_url):
+    """Where to send a user right after signing in.
+
+    Users without backoffice access (report viewers) must not land on the backoffice,
+    which would answer 403, so they go to their account page unless a safe `next` is given.
+    """
+    if next_url and _is_safe_redirect(next_url):
+        return next_url
+    if user.has_permission('backoffice.access'):
+        return url_for('main.index')
+    return url_for('auth.account')
+
+
+@bp.route('/cuenta')
+@login_required
+def account():
+    """Landing page for users who sign in without a destination and have no backoffice."""
+    return render_template('account_home.html')
 
 
 @bp.route('/login/google')
@@ -147,7 +165,7 @@ def google_callback():
 
     login_user(user)
     next_url = session.pop('login_next', None)
-    return redirect(next_url if next_url and _is_safe_redirect(next_url) else url_for('main.index'))
+    return redirect(_after_login_url(user, next_url))
 
 
 @bp.route('/logout')

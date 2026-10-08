@@ -6,9 +6,16 @@ import time
 import requests as _requests_lib
 
 from flask import Blueprint, render_template, request, make_response, jsonify, url_for, redirect
+from flask_login import current_user
 
 
 from app.models import PublicLink, Report, Workspace, Tenant
+from app.services.report_access import (
+    access_denied_json,
+    is_logged_in,
+    login_redirect,
+    user_can_view_report,
+)
 from app.utils.decorators import retry_on_db_error
 from app.utils.powerbi import get_embed_for_report, refresh_dataset
 from app.utils.analytics import track_visit, generate_visitor_id
@@ -43,9 +50,9 @@ def _cleanup_refresh_timestamps():
         del _refresh_timestamps[slug]
 
 
-def _supports_public_reset_to_default(link, report):
-    """Return whether reset-to-default can be offered for this public link."""
-    if not link.allow_reset_to_default or not report.es_publico:
+def _supports_public_reset_to_default(report):
+    """Return whether reset-to-default can be offered for this public report."""
+    if not report.allow_reset_to_default or not report.es_publico:
         return False
 
     workspace = report.workspace
@@ -66,7 +73,14 @@ def view(custom_slug):
     """View a report via public link (no authentication required)."""
     link = PublicLink.query.filter_by(custom_slug=custom_slug, is_active=True).first_or_404()
     report = link.report
-    
+
+    # Reports that require a login are checked before anything else happens: no visit
+    # is tracked and no Power BI token is generated for visitors who may not see them.
+    if not user_can_view_report(current_user, report):
+        if not is_logged_in(current_user):
+            return login_redirect()
+        return render_template('report_access_denied.html', config_name=report.name), 403
+
     import re
     existing_visitor_id = request.cookies.get('visitor_id')
     visitor_id_is_valid = (
@@ -98,8 +112,8 @@ def view(custom_slug):
         report_id=report_id,
         config_name=report.name,
         is_public=True,
-        allow_refresh=link.allow_refresh,
-        show_reset_to_default=_supports_public_reset_to_default(link, report),
+        allow_refresh=report.allow_refresh,
+        show_reset_to_default=_supports_public_reset_to_default(report),
         refresh_url=url_for('public.refresh', custom_slug=custom_slug),
         slug=custom_slug,
         chatbot_enabled=report.chatbot_enabled,
@@ -114,7 +128,11 @@ def view(custom_slug):
             secure=request.is_secure,
             samesite='Lax'
         )
-    
+
+    if report.requires_login:
+        # The page embeds a Power BI access token: keep it out of shared caches.
+        response.headers['Cache-Control'] = 'private, no-store'
+
     return response
 
 
@@ -124,7 +142,10 @@ def refresh(custom_slug):
     """Trigger dataset refresh from a public link (if allowed)."""
     link = PublicLink.query.filter_by(custom_slug=custom_slug, is_active=True).first_or_404()
 
-    if not link.allow_refresh:
+    if not user_can_view_report(current_user, link.report):
+        return access_denied_json(current_user)
+
+    if not link.report.allow_refresh:
         return jsonify({"error": "Refresh not allowed for this link"}), 403
 
     # Rate limiting: enforce minimum cooldown between refreshes
