@@ -19,10 +19,33 @@ except ImportError as e:
 from sqlalchemy import func, extract
 from sqlalchemy.exc import SQLAlchemyError
 
+from flask_login import current_user
+
 from app import db
 from app.models import Visit
+from app.services.report_access import is_staff_actor
 
 logger = logging.getLogger(__name__)
+
+# Visit audiences: client visitors only, Sudata staff only, or everyone.
+AUDIENCE_CLIENTS = 'clients'
+AUDIENCE_STAFF = 'staff'
+AUDIENCE_ALL = 'all'
+AUDIENCES = (AUDIENCE_CLIENTS, AUDIENCE_STAFF, AUDIENCE_ALL)
+
+
+def normalize_audience(value: Optional[str], default: str = AUDIENCE_ALL) -> str:
+    value = (value or '').strip().lower()
+    return value if value in AUDIENCES else default
+
+
+def audience_filters(audience: str) -> list:
+    """SQL criteria that keep only the visits of the requested audience."""
+    if audience == AUDIENCE_CLIENTS:
+        return [Visit.is_staff == False]  # noqa: E712
+    if audience == AUDIENCE_STAFF:
+        return [Visit.is_staff == True]  # noqa: E712
+    return []
 
 # Environment configuration
 ANALYTICS_ENABLED = os.getenv('ANALYTICS_ENABLED', 'true').lower() == 'true'
@@ -191,7 +214,8 @@ def track_visit(
             device_type=ua_info['device_type'],
             browser=ua_info['browser'],
             os=ua_info['os'],
-            is_bot=is_bot_visit
+            is_bot=is_bot_visit,
+            is_staff=is_staff_actor(current_user),
         )
         
         db.session.add(visit)
@@ -222,7 +246,8 @@ def generate_visitor_id() -> str:
 def get_visit_stats(
     link_slug: Optional[str] = None,
     start_date: Optional[datetime] = None,
-    end_date: Optional[datetime] = None
+    end_date: Optional[datetime] = None,
+    audience: str = AUDIENCE_ALL
 ) -> Dict[str, Any]:
     """
     Get aggregated visit statistics.
@@ -247,7 +272,9 @@ def get_visit_stats(
         
         if end_date:
             query = query.filter(Visit.timestamp <= end_date)
-        
+
+        query = query.filter(*audience_filters(audience))
+
         # Filter out bots for most stats
         human_query = query.filter(Visit.is_bot == False)
         
@@ -267,7 +294,8 @@ def get_visit_stats(
             unique_visitors = unique_visitors.filter(Visit.timestamp >= start_date)
         if end_date:
             unique_visitors = unique_visitors.filter(Visit.timestamp <= end_date)
-        
+        unique_visitors = unique_visitors.filter(*audience_filters(audience))
+
         unique_visitors = unique_visitors.scalar() or 0
         
         # Bot visits
@@ -294,7 +322,8 @@ def get_visit_stats(
 
 def get_visits_by_hour(
     link_slug: Optional[str] = None,
-    days: int = 7
+    days: int = 7,
+    audience: str = AUDIENCE_ALL
 ) -> List[Dict[str, Any]]:
     """
     Get visit distribution by hour of day.
@@ -314,7 +343,8 @@ def get_visits_by_hour(
             func.count(Visit.id).label('visits')
         ).filter(
             Visit.timestamp >= start_date,
-            Visit.is_bot == False
+            Visit.is_bot == False,
+            *audience_filters(audience)
         )
         
         if link_slug:
@@ -338,7 +368,8 @@ def get_visits_by_hour(
 
 def get_visits_by_day(
     link_slug: Optional[str] = None,
-    days: int = 30
+    days: int = 30,
+    audience: str = AUDIENCE_ALL
 ) -> List[Dict[str, Any]]:
     """
     Get visit distribution by day.
@@ -358,7 +389,8 @@ def get_visits_by_day(
             func.count(Visit.id).label('visits')
         ).filter(
             Visit.timestamp >= start_date,
-            Visit.is_bot == False
+            Visit.is_bot == False,
+            *audience_filters(audience)
         )
         
         if link_slug:
@@ -381,7 +413,8 @@ def get_visits_by_day(
 def get_top_referrers(
     link_slug: Optional[str] = None,
     days: int = 30,
-    limit: int = 10
+    limit: int = 10,
+    audience: str = AUDIENCE_ALL
 ) -> List[Dict[str, Any]]:
     """
     Get top referrers.
@@ -404,7 +437,8 @@ def get_top_referrers(
             Visit.timestamp >= start_date,
             Visit.is_bot == False,
             Visit.referrer.isnot(None),
-            Visit.referrer != ''
+            Visit.referrer != '',
+            *audience_filters(audience)
         )
         
         if link_slug:
@@ -426,7 +460,8 @@ def get_top_referrers(
 
 def get_utm_stats(
     link_slug: Optional[str] = None,
-    days: int = 30
+    days: int = 30,
+    audience: str = AUDIENCE_ALL
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Get UTM parameter statistics.
@@ -443,7 +478,8 @@ def get_utm_stats(
         
         base_filter = [
             Visit.timestamp >= start_date,
-            Visit.is_bot == False
+            Visit.is_bot == False,
+            *audience_filters(audience)
         ]
         
         if link_slug:
@@ -492,7 +528,8 @@ def get_utm_stats(
 
 def get_device_browser_stats(
     link_slug: Optional[str] = None,
-    days: int = 30
+    days: int = 30,
+    audience: str = AUDIENCE_ALL
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     Get device and browser statistics.
@@ -509,7 +546,8 @@ def get_device_browser_stats(
         
         base_filter = [
             Visit.timestamp >= start_date,
-            Visit.is_bot == False
+            Visit.is_bot == False,
+            *audience_filters(audience)
         ]
         
         if link_slug:

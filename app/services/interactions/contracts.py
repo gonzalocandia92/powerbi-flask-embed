@@ -22,6 +22,12 @@ from typing import Optional, Union
 KNOWN_CHANNELS = ("klara_chat", "whatsapp", "mcp")
 UNKNOWN_CHANNEL = "unknown"
 
+# Who generated the activity: clients only, Sudata staff only, or everyone.
+AUDIENCE_CLIENTS = "clients"
+AUDIENCE_STAFF = "staff"
+AUDIENCE_ALL = "all"
+AUDIENCES = (AUDIENCE_CLIENTS, AUDIENCE_STAFF, AUDIENCE_ALL)
+
 _CHANNEL_LABELS = {
     "klara_chat": "Klara Chat",
     "whatsapp": "WhatsApp",
@@ -59,6 +65,7 @@ class InteractionRow:
     model_key: Optional[str] = None
     latency_ms: Optional[int] = None
     had_error: Optional[bool] = None
+    is_staff: bool = False
 
 
 @dataclass
@@ -71,6 +78,7 @@ class InteractionFilters:
     report_id: Optional[int] = None
     channel: Optional[str] = None  # None/'' = Todos
     search: Optional[str] = None
+    audience: str = AUDIENCE_ALL  # clients | staff | all
     page: int = 1
     page_size: int = 25
 
@@ -81,6 +89,8 @@ class InteractionFilters:
             self.search = self.search.strip() or None
         if self.channel:
             self.channel = self.channel.strip().lower() or None
+        audience = (self.audience or "").strip().lower()
+        self.audience = audience if audience in AUDIENCES else AUDIENCE_ALL
 
 
 @dataclass

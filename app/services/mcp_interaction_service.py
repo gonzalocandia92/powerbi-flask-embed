@@ -99,6 +99,7 @@ def record_mcp_question(
                 mcp_session_public_id=oauth_session.public_id,
                 grant_public_id=grant.public_id,
                 source_tool=source_tool,
+                is_staff=bool(getattr(getattr(oauth_session, "user", None), "is_staff", False)),
             )
             db.session.add(interaction)
             db.session.flush()

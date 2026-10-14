@@ -291,7 +291,8 @@ class KlaraExecutionService:
             for event in result.get("ai_usage_events", []):
                 event["metadata_json"] = {**(event.get("metadata_json") or {}), "source": context.source,
                     "execution_source": context.source,
-                    "reportname": context.report_name, "execution_policy": asdict(policy), "latency_by_component_ms": dict(metrics)}
+                    "reportname": context.report_name, "execution_policy": asdict(policy), "latency_by_component_ms": dict(metrics),
+                    **({"staff": context.trace_context["staff"]} if "staff" in context.trace_context else {})}
             if span is not None:
                 result["trace_id"] = getattr(span, "trace_id", None)
                 for event in result.get("ai_usage_events", []):

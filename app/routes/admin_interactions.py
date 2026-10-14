@@ -14,6 +14,7 @@ from flask_login import login_required
 
 from app.models import Empresa, Report
 from app.services.interactions import InteractionFilters, interaction_query_service
+from app.services.interactions.contracts import AUDIENCE_CLIENTS
 from app.utils.decorators import admin_required
 
 bp = Blueprint('admin_interactions', __name__, url_prefix='/admin/interactions')
@@ -24,6 +25,13 @@ _CHANNEL_OPTIONS = [
     ("whatsapp", "WhatsApp"),
     ("mcp", "MCP"),
     ("unknown", "Sin identificar"),
+]
+
+# Staff activity is internal, so the screen shows client activity by default.
+_AUDIENCE_OPTIONS = [
+    ("clients", "Clientes"),
+    ("staff", "Staff"),
+    ("all", "Todos"),
 ]
 
 
@@ -50,6 +58,7 @@ def _filters_from_request(args) -> InteractionFilters:
         report_id=args.get("report_id", type=int),
         channel=(args.get("channel") or "").strip() or None,
         search=args.get("q"),
+        audience=(args.get("audience") or "").strip() or AUDIENCE_CLIENTS,
         page=args.get("page", 1, type=int),
         page_size=args.get("page_size", 25, type=int),
     )
@@ -70,6 +79,7 @@ def _row_json(row):
         "model_key": row.model_key,
         "latency_ms": row.latency_ms,
         "had_error": row.had_error,
+        "is_staff": row.is_staff,
     }
 
 
@@ -84,6 +94,7 @@ def index():
         empresas=empresas,
         reports=reports,
         channel_options=_CHANNEL_OPTIONS,
+        audience_options=_AUDIENCE_OPTIONS,
         today=date.today().isoformat(),
     )
 

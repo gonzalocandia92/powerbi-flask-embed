@@ -24,6 +24,11 @@ def has_backoffice_access(user):
     return is_logged_in(user) and user.has_permission(BACKOFFICE_PERMISSION)
 
 
+def is_staff_actor(user):
+    """True when the (possibly anonymous) user is logged in and flagged as Sudata staff."""
+    return is_logged_in(user) and bool(getattr(user, 'is_staff', False))
+
+
 def user_can_view_report(user, report):
     """Whether `user` (possibly anonymous) may open `report` through a public link."""
     if not report.requires_login:

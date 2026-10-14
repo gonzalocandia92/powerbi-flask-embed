@@ -121,6 +121,9 @@ class User(db.Model, UserMixin):
     email = db.Column(db.String(254), unique=True, nullable=True, index=True)
     password_hash = db.Column(db.String(256), nullable=True)
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
+    # Sudata staff: their activity is internal and is kept apart from client activity
+    # (chat sessions, MCP interactions, visits, logs and Langfuse traces).
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
@@ -380,6 +383,8 @@ class Visit(db.Model):
     os = db.Column(db.String(100), nullable=True)
     country = db.Column(db.String(2), nullable=True)
     is_bot = db.Column(db.Boolean, default=False, nullable=False)
+    # Snapshot of User.is_staff for a logged-in visitor at visit time.
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
     session_duration = db.Column(db.Integer, nullable=True)
 
 
@@ -530,6 +535,8 @@ class ChatSession(db.Model):
     total_messages = db.Column(db.Integer, default=0, nullable=False)
     had_errors = db.Column(db.Boolean, default=False, nullable=False)
     last_model_key = db.Column(db.String(120), nullable=True)
+    # Snapshot of User.is_staff of the logged-in user who chatted in this session.
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
 
     workspace = db.relationship('Workspace')
     report = db.relationship('Report')
@@ -1552,6 +1559,8 @@ class McpInteraction(db.Model):
     # Which broker call first captured this logical question: 'select_skills'
     # or 'relevant_schema' (the only two calls that carry the raw question).
     source_tool = db.Column(db.String(50), nullable=False)
+    # Snapshot of User.is_staff at capture time.
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
 
     empresa = db.relationship('Empresa')
     report = db.relationship('Report')

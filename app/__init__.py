@@ -22,14 +22,17 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
-from app.services.observability import init_langfuse
+from app.services.observability import StaffLogFilter, init_langfuse
 
 load_dotenv()
 
 logging.basicConfig(
     level=getattr(logging, os.getenv('LOG_LEVEL', 'WARNING').upper(), logging.WARNING),
-    format='%(asctime)s [%(levelname)s] %(message)s'
+    format='%(asctime)s [%(levelname)s]%(staff_tag)s %(message)s'
 )
+# Handler-level filter so records propagated from child loggers also get staff_tag.
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(StaffLogFilter())
 
 db = SQLAlchemy()
 migrate = Migrate()
@@ -331,6 +334,24 @@ def create_app():
         db.session.add(user)
         db.session.commit()
         print("Admin user created successfully")
+
+    @app.cli.command("backfill-staff-activity")
+    def backfill_staff_activity():
+        """Mark past MCP interactions of current staff users as staff activity.
+
+        Chat sessions and visits store no user, so their history cannot be reclassified.
+        """
+        from sqlalchemy import select
+        from app.models import McpInteraction
+
+        staff_ids = select(User.id).where(User.is_staff.is_(True))
+        updated = (
+            McpInteraction.query
+            .filter(McpInteraction.user_id.in_(staff_ids), McpInteraction.is_staff.is_(False))
+            .update({McpInteraction.is_staff: True}, synchronize_session=False)
+        )
+        db.session.commit()
+        print(f"MCP interactions marked as staff: {updated}")
 
     @app.cli.command('create-mcp-oauth-client')
     def create_mcp_oauth_client():

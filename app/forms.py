@@ -494,6 +494,7 @@ class UserForm(FlaskForm):
     password = PasswordField("Contraseña", validators=[Optional(), Length(min=6)])
     password_confirm = PasswordField("Confirmar Contraseña", validators=[Optional()])
     is_admin = BooleanField("Es Administrador")
+    is_staff = BooleanField("Es Staff (Sudata)")
     is_active = BooleanField("Activo", default=True)
     submit = SubmitField("Guardar")
 

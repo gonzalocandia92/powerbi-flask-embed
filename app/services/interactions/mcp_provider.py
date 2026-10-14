@@ -15,7 +15,7 @@ from sqlalchemy import literal, select
 from app import db
 from app.models import Empresa, McpInteraction, Report
 
-from .contracts import InteractionFilters
+from .contracts import AUDIENCE_CLIENTS, AUDIENCE_STAFF, InteractionFilters
 
 SOURCE_KEY = "mcp"
 
@@ -39,6 +39,7 @@ def base_query(filters: InteractionFilters):
             literal(None).label("model_key"),
             literal(None).label("latency_ms"),
             literal(None).label("had_error"),
+            McpInteraction.is_staff.label("is_staff"),
         )
         .select_from(McpInteraction)
         .outerjoin(Empresa, Empresa.id == McpInteraction.empresa_id)
@@ -55,6 +56,10 @@ def base_query(filters: InteractionFilters):
         query = query.where(McpInteraction.report_id_fk == filters.report_id)
     if filters.search:
         query = query.where(McpInteraction.question.ilike(f"%{filters.search}%"))
+    if filters.audience == AUDIENCE_CLIENTS:
+        query = query.where(McpInteraction.is_staff.is_(False))
+    elif filters.audience == AUDIENCE_STAFF:
+        query = query.where(McpInteraction.is_staff.is_(True))
 
     return query
 
@@ -82,4 +87,5 @@ def get_detail(raw_id: int) -> Optional[dict]:
         "mcp_session_public_id": interaction.mcp_session_public_id,
         "grant_public_id": interaction.grant_public_id,
         "source_tool": interaction.source_tool,
+        "is_staff": bool(interaction.is_staff),
     }
