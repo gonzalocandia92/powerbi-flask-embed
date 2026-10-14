@@ -137,7 +137,7 @@
     const enabled = !!profile?.supports_thinking;
     thinking.closest('.col-md-6').hidden = !enabled;
     document.querySelector('.family-thinking-level').hidden = !enabled || !modelLevels.length || thinking.value !== 'on';
-    document.querySelector('.family-thinking-budget').hidden = family.value !== 'claude-haiku-4.5' || thinking.value !== 'on';
+    document.querySelector('.family-thinking-budget').hidden = !(profile?.family_fields || []).includes('budget_tokens') || thinking.value !== 'on';
     if (!enabled) { thinking.value = 'off'; effort.value = ''; budget.value = ''; }
     if (thinking.value !== 'on') { effort.value = ''; budget.value = ''; }
     document.getElementById('default_service_tier').closest('.col-md-6').hidden = !profile?.supports_flex;
