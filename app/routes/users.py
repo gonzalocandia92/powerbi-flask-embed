@@ -67,6 +67,7 @@ def create_user():
             username=form.username.data,
             email=form.email.data or None,
             is_admin=form.is_admin.data,
+            is_staff=form.is_staff.data,
             is_active=form.is_active.data
         )
         
@@ -224,6 +225,7 @@ def manage_access(user_id):
         selected_roles = Role.query.filter(Role.id.in_(role_ids)).all() if role_ids else []
         user.roles = selected_roles
         user.is_admin = request.form.get('is_admin') == 'on'
+        user.is_staff = request.form.get('is_staff') == 'on'
 
         requested_company_ids = {
             int(value) for value in request.form.getlist('company_ids')

@@ -51,6 +51,7 @@ def _row_from_result_row(row) -> InteractionRow:
         model_key=row.model_key,
         latency_ms=row.latency_ms,
         had_error=row.had_error,
+        is_staff=bool(row.is_staff),
     )
 
 

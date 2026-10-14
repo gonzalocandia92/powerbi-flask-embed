@@ -30,6 +30,7 @@ from app.services.analytics import (
     build_analytics_engine,
 )
 from app.services.observability import (
+    chat_actor_context,
     hash_identifier,
     observation_preview,
     propagate_trace_attributes,
@@ -146,6 +147,7 @@ def _ensure_session_for_turn(
     reset_history: bool,
     question: str,
     channel: Optional[str] = None,
+    is_staff: bool = False,
 ) -> ChatSession:
     session: Optional[ChatSession] = None
     session_id = _extract_session_id(conversation_id)
@@ -154,7 +156,9 @@ def _ensure_session_for_turn(
         session = db.session.get(ChatSession, session_id)
 
     if session is None or reset_history:
-        session = ChatSession(slug=slug, title=_build_session_title(question), channel=channel)
+        session = ChatSession(
+            slug=slug, title=_build_session_title(question), channel=channel, is_staff=is_staff
+        )
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
@@ -170,6 +174,9 @@ def _ensure_session_for_turn(
     # channel). Never overwrite a channel that was already set explicitly.
     if not session.channel and channel:
         session.channel = channel
+    # Sticky: once a staff user chats in a session, the session is internal activity.
+    if is_staff and not session.is_staff:
+        session.is_staff = True
     return session
 
 
@@ -192,6 +199,7 @@ def _prepare_turn_sync(
     question: str,
     requested_model_key: Optional[str] = None,
     channel: Optional[str] = None,
+    is_staff: bool = False,
 ) -> Tuple[int, int, List[Dict[str, Any]]]:
     session = _ensure_session_for_turn(
         slug=slug,
@@ -199,6 +207,7 @@ def _prepare_turn_sync(
         reset_history=reset_history,
         question=question,
         channel=channel,
+        is_staff=is_staff,
     )
     session.workspace_id_fk = billing_context.workspace_id
     session.report_id_fk = billing_context.report_id
@@ -405,13 +414,19 @@ def _persist_error_sync(
     requested_model_key: Optional[str] = None,
     user_message_id: Optional[int] = None,
     source: str = "chat",
+    is_staff: bool = False,
 ) -> None:
     db.session.rollback()
 
     session = db.session.get(ChatSession, session_id) if session_id is not None else None
     reply_to_message_id = user_message_id
     if session is None:
-        session = ChatSession(slug=slug, title=_build_session_title(question), channel=_channel_for_source(source))
+        session = ChatSession(
+            slug=slug,
+            title=_build_session_title(question),
+            channel=_channel_for_source(source),
+            is_staff=is_staff,
+        )
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
@@ -491,9 +506,14 @@ async def procesar_interaccion_completa(
     config: Optional[Dict[str, Any]] = None,
     source: str = "chat",
     model_key: Optional[str] = None,
+    is_staff: bool = False,
 ) -> Dict[str, Any]:
     """
     Execute the full chatbot interaction.
+
+    ``is_staff`` marks a turn made by a logged-in Sudata staff user: it is stored
+    on the session and tagged on logs, Langfuse traces and usage events so
+    internal activity stays apart from client activity.
 
     Sync database work is offloaded with ``asyncio.to_thread`` so the Anthropic
     request can await without blocking the event loop.
@@ -531,11 +551,12 @@ async def procesar_interaccion_completa(
                 requested_model_key=model_key,
                 user_message_id=user_message_id,
                 source=source,
+                is_staff=is_staff,
             )
         except Exception:
             logging.exception("[ChatbotService] Failed to log error to DB")
 
-    with start_observation(
+    with chat_actor_context(is_staff=is_staff), start_observation(
         name="public-chat-request",
         as_type="span",
         input={"message": pregunta},
@@ -573,6 +594,7 @@ async def procesar_interaccion_completa(
                 question=pregunta,
                 requested_model_key=model_key,
                 channel=channel,
+                is_staff=is_staff,
             )
             user_turn_persisted = True
 
@@ -588,6 +610,7 @@ async def procesar_interaccion_completa(
                 "requestedmodelkey": model_key,
                 "selectedmodelkey": model_selection.model.model_key if model_selection else None,
                 "modelselectionsource": model_selection.source if model_selection else "legacy_default",
+                "staff": "true" if is_staff else "false",
             }
             if root_observation is not None:
                 root_observation.update(metadata=trace_metadata)
@@ -597,7 +620,7 @@ async def procesar_interaccion_completa(
                 session_id=str(session_id),
                 trace_name="public-chat-request",
                 metadata=trace_metadata,
-                tags=[source, "powerbi"],
+                tags=[source, "powerbi", "staff" if is_staff else "client"],
                 version=trace_version,
             ):
                 analytics_result = await analytics.execute_prepared(
@@ -673,6 +696,7 @@ async def procesar_pregunta(
     config: Optional[Dict[str, Any]] = None,
     source: str = "chat",
     model_key: Optional[str] = None,
+    is_staff: bool = False,
 ) -> Dict[str, Any]:
     """
     Legacy compatibility wrapper.
@@ -701,6 +725,7 @@ async def procesar_pregunta(
         config=config,
         source=source,
         model_key=model_key,
+        is_staff=is_staff,
     )
 
 # Transitional aliases for integrations importing the former helper names.

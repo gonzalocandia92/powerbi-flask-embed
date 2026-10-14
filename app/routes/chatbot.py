@@ -23,6 +23,7 @@ from app.services.report_access import (
     access_denied_json,
     active_link_report,
     has_backoffice_access,
+    is_staff_actor,
     login_required_slugs,
     user_can_view_report,
 )
@@ -85,6 +86,7 @@ async def chat():
             conversation_id=conversation_id_value,
             reset_history=reset_history,
             model_key=model_key,
+            is_staff=is_staff_actor(current_user),
         )
     except chatbot_service.ChatbotNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404

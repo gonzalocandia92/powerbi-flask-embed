@@ -38,7 +38,7 @@ from sqlalchemy.orm import aliased
 from app import db
 from app.models import ChatMessage, ChatSession, Empresa, Report
 
-from .contracts import InteractionFilters, InteractionRow
+from .contracts import AUDIENCE_CLIENTS, AUDIENCE_STAFF, InteractionFilters, InteractionRow
 
 SOURCE_KEY = "chat"
 
@@ -131,6 +131,7 @@ def base_query(filters: InteractionFilters):
             anchor.c.model_key.label("model_key"),
             anchor.c.latency_ms.label("latency_ms"),
             anchor.c.had_error.label("had_error"),
+            ChatSession.is_staff.label("is_staff"),
         )
         .select_from(anchor)
         .join(ChatSession, ChatSession.id == anchor.c.session_id)
@@ -153,6 +154,10 @@ def base_query(filters: InteractionFilters):
     if filters.search:
         term = f"%{filters.search}%"
         query = query.where(or_(anchor.c.question.ilike(term), anchor.c.answer.ilike(term)))
+    if filters.audience == AUDIENCE_CLIENTS:
+        query = query.where(ChatSession.is_staff.is_(False))
+    elif filters.audience == AUDIENCE_STAFF:
+        query = query.where(ChatSession.is_staff.is_(True))
 
     return query
 
@@ -217,4 +222,5 @@ def get_detail(raw_id: int) -> Optional[dict]:
         "dax_query": dax_query,
         "error_message": error_message,
         "slug": session.slug if session else None,
+        "is_staff": bool(session.is_staff) if session else False,
     }

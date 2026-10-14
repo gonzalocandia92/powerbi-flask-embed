@@ -13,7 +13,9 @@ from app.utils.analytics import (
     get_visits_by_day,
     get_top_referrers,
     get_utm_stats,
-    get_device_browser_stats
+    get_device_browser_stats,
+    AUDIENCE_CLIENTS,
+    normalize_audience,
 )
 from app.utils.decorators import retry_on_db_error
 
@@ -69,21 +71,23 @@ def api_stats():
     Query parameters:
         - link_slug: Optional filter by link slug
         - days: Number of days to look back (default 30)
+        - audience: clients (default) | staff | all
     """
     try:
         link_slug = request.args.get('link_slug')
         days = request.args.get('days', '30')
-        
+        audience = normalize_audience(request.args.get('audience'), default=AUDIENCE_CLIENTS)
+
         start_date, end_date = parse_date_range(days)
-        
+
         # Get all statistics
-        stats = get_visit_stats(link_slug, start_date, end_date)
-        hourly = get_visits_by_hour(link_slug, int(days))
-        daily = get_visits_by_day(link_slug, int(days))
-        referrers = get_top_referrers(link_slug, int(days))
-        utm_stats = get_utm_stats(link_slug, int(days))
-        device_browser = get_device_browser_stats(link_slug, int(days))
-        
+        stats = get_visit_stats(link_slug, start_date, end_date, audience=audience)
+        hourly = get_visits_by_hour(link_slug, int(days), audience=audience)
+        daily = get_visits_by_day(link_slug, int(days), audience=audience)
+        referrers = get_top_referrers(link_slug, int(days), audience=audience)
+        utm_stats = get_utm_stats(link_slug, int(days), audience=audience)
+        device_browser = get_device_browser_stats(link_slug, int(days), audience=audience)
+
         return jsonify({
             'success': True,
             'data': {
@@ -168,12 +172,15 @@ def dashboard():
     Query parameters:
         - link_slug: Optional filter by link slug
         - days: Number of days to look back (default 30)
+        - audience: clients (default) | staff | all
     """
     from app.models import PublicLink
-    
+
     link_slug = request.args.get('link_slug')
     days = request.args.get('days', '30')
-    
+    # Staff visits are internal activity, so client visits are shown by default.
+    audience = normalize_audience(request.args.get('audience'), default=AUDIENCE_CLIENTS)
+
     try:
         days_int = int(days)
         days_int = max(1, min(days_int, 365))
@@ -186,13 +193,13 @@ def dashboard():
     available_links = PublicLink.query.filter_by(is_active=True).limit(10).all()
     
     # Get statistics
-    stats = get_visit_stats(link_slug, start_date, end_date)
-    hourly = get_visits_by_hour(link_slug, days_int)
-    daily = get_visits_by_day(link_slug, days_int)
-    referrers = get_top_referrers(link_slug, days_int)
-    utm_stats = get_utm_stats(link_slug, days_int)
-    device_browser = get_device_browser_stats(link_slug, days_int)
-    
+    stats = get_visit_stats(link_slug, start_date, end_date, audience=audience)
+    hourly = get_visits_by_hour(link_slug, days_int, audience=audience)
+    daily = get_visits_by_day(link_slug, days_int, audience=audience)
+    referrers = get_top_referrers(link_slug, days_int, audience=audience)
+    utm_stats = get_utm_stats(link_slug, days_int, audience=audience)
+    device_browser = get_device_browser_stats(link_slug, days_int, audience=audience)
+
     return render_template(
         'analytics/dashboard.html',
         stats=stats,
@@ -204,6 +211,7 @@ def dashboard():
         browsers=device_browser['browsers'],
         link_slug=link_slug,
         days=days_int,
+        audience=audience,
         available_links=available_links
     )
 

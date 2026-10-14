@@ -72,6 +72,13 @@
     color: white;
   }
   
+  /* The opened dropdown list uses the browser's light background, so its options
+     must not inherit the white text used on the gradient. */
+  .filter-card .form-select option {
+    background-color: #ffffff;
+    color: #2d3748;
+  }
+
   .filter-card .form-control::placeholder {
     color: rgba(255,255,255,0.7);
   }
@@ -124,6 +131,16 @@
                   <option value="30" {% if days == 30 %}selected{% endif %}>Last 30 days</option>
                   <option value="60" {% if days == 60 %}selected{% endif %}>Last 60 days</option>
                   <option value="90" {% if days == 90 %}selected{% endif %}>Last 90 days</option>
+                </select>
+              </div>
+              <div class="col-md-3 mb-3 mb-md-0">
+                <label for="audience" class="form-label">
+                  <i class="bi bi-people me-1"></i>Audience
+                </label>
+                <select class="form-select" id="audience" name="audience" title="Staff: internal visits by Sudata users">
+                  <option value="clients" {% if audience == 'clients' %}selected{% endif %}>Clients</option>
+                  <option value="staff" {% if audience == 'staff' %}selected{% endif %}>Staff (Sudata)</option>
+                  <option value="all" {% if audience == 'all' %}selected{% endif %}>All</option>
                 </select>
               </div>
               <div class="col-md-2">

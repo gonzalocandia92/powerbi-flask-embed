@@ -12,6 +12,10 @@ from app.models import AIModelConfig, ModelEvaluationCase, ModelEvaluationRun
 from app.services import ai_billing
 from app.services.analytics import AnalyticsExecutor, AnalyticsRequest
 from app.services.llm import CachePolicy, CacheScope
+from app.services.observability import chat_actor_context, propagate_trace_attributes
+
+# Evaluations are an internal, admin-only benchmark: every run is Sudata staff activity.
+_EVALUATION_TRACE_TAGS = ["evaluation", "powerbi", "staff"]
 
 
 def _utcnow():
@@ -208,19 +212,24 @@ class ModelEvaluationRunner:
     async def _execute_case(self, *, question, history, model_key, cache_policy, run_id, experiment):
         if self.analytics_executor_factory is not None:
             executor = await _maybe_await(self.analytics_executor_factory(model_key, experiment))
-            result = await executor.execute(AnalyticsRequest(
-                report_id=self.report_id,
-                question=question,
-                history=history,
-                source="evaluation",
-                execution_id=f"evaluation:{run_id}:{model_key}",
-                model_key=model_key,
-                cache_policy=cache_policy,
-                trace_context={
-                    "evaluation_run_id": run_id,
-                    "evaluation_model_key": model_key,
-                },
-            ))
+            trace_context = {
+                "evaluation_run_id": run_id,
+                "evaluation_model_key": model_key,
+                "staff": "true",
+            }
+            with chat_actor_context(is_staff=True), propagate_trace_attributes(
+                metadata={**trace_context, "source": "evaluation"}, tags=_EVALUATION_TRACE_TAGS,
+            ):
+                result = await executor.execute(AnalyticsRequest(
+                    report_id=self.report_id,
+                    question=question,
+                    history=history,
+                    source="evaluation",
+                    execution_id=f"evaluation:{run_id}:{model_key}",
+                    model_key=model_key,
+                    cache_policy=cache_policy,
+                    trace_context=trace_context,
+                ))
             return result.to_dict()
         context = await _maybe_await(self.context_factory(
             question, history, model_key, cache_policy, str(run_id), experiment,

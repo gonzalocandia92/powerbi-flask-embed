@@ -11,13 +11,37 @@ import hashlib
 import logging
 import os
 import threading
-from contextlib import nullcontext
-from typing import Any, Dict, Iterable, Optional
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
+from typing import Any, Dict, Iterable, Iterator, Optional
 
 _LOCK = threading.Lock()
 _INITIALIZED = False
 _LANGFUSE_CLIENT: Any = None
 _FLUSH_REGISTERED = False
+
+# Staff flag of the chat turn being processed; None outside a chat turn. A
+# ContextVar follows the turn across ``await`` and ``asyncio.to_thread``.
+_CHAT_STAFF: ContextVar[Optional[bool]] = ContextVar("chat_staff", default=None)
+
+
+@contextmanager
+def chat_actor_context(*, is_staff: bool) -> Iterator[None]:
+    """Mark every log record emitted during a chat turn with its staff flag."""
+    token = _CHAT_STAFF.set(bool(is_staff))
+    try:
+        yield
+    finally:
+        _CHAT_STAFF.reset(token)
+
+
+class StaffLogFilter(logging.Filter):
+    """Expose ``%(staff_tag)s``: `` [staff=true|false]`` inside a chat turn, empty elsewhere."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        is_staff = _CHAT_STAFF.get()
+        record.staff_tag = "" if is_staff is None else f" [staff={'true' if is_staff else 'false'}]"
+        return True
 
 
 def _has_langfuse_credentials() -> bool:

@@ -173,6 +173,46 @@ class ClaudeHaiku45Profile(ModelFamilyProfile):
                 if thinking and not normalized.reasoning_tokens else normalized)
 
 
+class ClaudeHaiku55Profile(ModelFamilyProfile):
+    """Haiku 5.5: adaptive thinking steered by ``output_config.effort``.
+
+    ``budget_tokens`` and non-default sampling are rejected by the API. Prompts
+    over 100K tokens are billed on a second, higher rate card (whole call, with
+    cache reads/writes counted toward the prompt length).
+    """
+    key, label, provider = "claude-haiku-5.5", "Claude Haiku 5.5", "anthropic"
+    models = ("claude-haiku-5-5",)
+    # The API also accepts "xhigh", but LiteLLM 1.101.0 rejects it for models missing
+    # from its map (400 before the request leaves). Add it back after upgrading LiteLLM.
+    levels = ("low", "medium", "high", "max")
+    supports_thinking = True
+    context_pricing_threshold = 100_000
+    required_cache_price_columns = ('cache_read_cost_per_million_usd', 'cache_write_cost_per_million_usd')
+    max_context_window = 1_000_000
+    max_model_output_tokens = 128_000
+
+    def validate(self, model) -> None:
+        super().validate(model)
+        if model.max_output_tokens > self.max_model_output_tokens:
+            raise ValueError("max_output_tokens exceeds Claude Haiku 5.5 model limit")
+        if model.capabilities.context_window > self.max_context_window:
+            raise ValueError("context_window exceeds Claude Haiku 5.5 model limit")
+
+    def apply(self, payload: dict[str, Any], request) -> ThinkingDecision:
+        decision = super().apply(payload, request)
+        if decision.effective == "on":
+            payload["thinking"] = {"type": "adaptive"}
+            # LiteLLM 1.101.0 forwards a native output_config but drops it from extra_body.
+            payload["output_config"] = {"effort": decision.level}
+        else:
+            payload["thinking"] = {"type": "disabled"}
+            payload.pop("output_config", None)
+        payload.pop("temperature", None)
+        return decision
+
+    normalize_usage = ClaudeHaiku45Profile.normalize_usage
+
+
 class GPT41Profile(ModelFamilyProfile):
     key, label, provider = "openai-gpt-4.1", "GPT-4.1", "openai"
     models = ("gpt-4.1-mini", "gpt-4.1", "gpt-4.1-nano", "openai/gpt-4.1")
@@ -314,7 +354,7 @@ class DeepSeekV4Profile(ModelFamilyProfile):
 
 
 PROFILES = {item.key: item for item in (
-    ClaudeHaiku45Profile(), GPT41Profile(), GPT56Profile(), GPT6Profile(), DeepSeekV4Profile(),
+    ClaudeHaiku45Profile(), ClaudeHaiku55Profile(), GPT41Profile(), GPT56Profile(), GPT6Profile(), DeepSeekV4Profile(),
 )}
 
 

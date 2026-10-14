@@ -109,6 +109,17 @@
                   <small class="form-text text-muted">Luego se administra junto con empresas y accesos MCP</small>
                 </div>
               </div>
+              <div class="col-md-6" {% if not is_new %}hidden{% endif %}>
+                <div class="mb-3">
+                  <div class="form-check">
+                    {{ form.is_staff(class="form-check-input", id="is_staff") }}
+                    <label class="form-check-label" for="is_staff">
+                      Es Staff (Sudata)
+                    </label>
+                  </div>
+                  <small class="form-text text-muted">Su actividad se separa de la de los clientes en logs, Langfuse y analytics</small>
+                </div>
+              </div>
               <div class="col-md-6">
                 <div class="mb-3">
                   <div class="form-check">

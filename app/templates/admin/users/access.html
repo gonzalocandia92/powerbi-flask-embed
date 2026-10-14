@@ -37,6 +37,11 @@
           <input class="form-check-input" type="checkbox" name="is_admin" id="is-admin" {% if user.is_admin %}checked{% endif %}>
           <label class="form-check-label fw-semibold" for="is-admin">Administrador total del backoffice</label>
         </div>
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="is_staff" id="is-staff" {% if user.is_staff %}checked{% endif %}>
+          <label class="form-check-label fw-semibold" for="is-staff">Staff de Sudata</label>
+          <div class="form-text">Su actividad (chat, MCP, visitas) se marca como interna y se separa de la de los clientes.</div>
+        </div>
         <div class="row g-3">
           {% for role in backoffice_roles %}
           <div class="col-md-6 col-xl-4">

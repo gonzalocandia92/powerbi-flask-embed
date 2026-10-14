@@ -60,6 +60,9 @@
                 {% else %}
                 <span class="badge bg-secondary">Sin acceso</span>
                 {% endif %}
+                {% if user.is_staff %}
+                <span class="badge bg-dark">Staff</span>
+                {% endif %}
               </td>
               <td>
                 {% if user.empresa_memberships %}
