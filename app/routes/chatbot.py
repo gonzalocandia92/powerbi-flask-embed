@@ -12,24 +12,32 @@ Contract:
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
 from flask_login import current_user
-from sqlalchemy import or_
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink
-from app.services import ai_billing, chatbot_service, model_catalog
+from app.services import ai_billing, chatbot_service, model_catalog, session_owner
 from app.services.report_access import (
     access_denied_json,
     active_link_report,
     has_backoffice_access,
     is_staff_actor,
-    login_required_slugs,
     user_can_view_report,
 )
-from app.utils.chatbot_context import get_all_active_reports, get_workspace_info
+from app.utils.chatbot_context import (
+    DatasetResolutionError,
+    get_all_active_reports,
+    get_workspace_info,
+)
 
 bp = Blueprint("chatbot", __name__)
+
+
+@bp.after_request
+def _attach_owner_cookie(response):
+    """Set the signed visitor cookie issued while handling /chat (if any)."""
+    return session_owner.attach_owner_cookie(response, g.get("klara_owner_cookie"))
 
 
 def _slug_access_error(slug):
@@ -43,9 +51,15 @@ def _slug_access_error(slug):
         return None
 
 
-def _hidden_slugs():
-    """Slugs of reports that require a login, hidden from callers without backoffice access."""
-    return set() if has_backoffice_access(current_user) else login_required_slugs()
+def _backoffice_required():
+    """Error response unless the caller is a logged-in backoffice user.
+
+    Chat transcripts, report inventories and Power BI identifiers are internal
+    data: they are never exposed to anonymous or merely authenticated callers.
+    """
+    if has_backoffice_access(current_user):
+        return None
+    return access_denied_json(current_user)
 
 
 @bp.route("/chat", methods=["POST"])
@@ -78,6 +92,10 @@ async def chat():
     client_ip = client_ip.split(",")[0].strip()
     user_key = f"public:{client_ip}"
 
+    # The conversation is bound to who started it (signed visitor cookie or
+    # logged-in user). The cookie is issued on the first turn of a visitor.
+    owner_hash, g.klara_owner_cookie = session_owner.resolve_web_owner(current_user)
+
     try:
         resultado = await chatbot_service.procesar_interaccion_completa(
             pregunta,
@@ -87,6 +105,7 @@ async def chat():
             reset_history=reset_history,
             model_key=model_key,
             is_staff=is_staff_actor(current_user),
+            owner_hash=owner_hash,
         )
     except chatbot_service.ChatbotNotFoundError as exc:
         return jsonify({"error": str(exc)}), 404
@@ -127,8 +146,9 @@ def chat_models():
     models = model_catalog.available_client_models(
         report_id=report.id, empresa_id=billing.empresa_id, config=dict(current_app.config)
     )
+    owner_hash, _unused_cookie = session_owner.resolve_web_owner(current_user)
     selected_key = model_catalog.session_model_key(
-        request.args.get("conversation_id"), report_id=report.id
+        request.args.get("conversation_id"), report_id=report.id, owner_hash=owner_hash
     )
     allowed_keys = {item["model_key"] for item in models}
     if selected_key not in allowed_keys:
@@ -140,10 +160,14 @@ def chat_models():
 
 @bp.route("/api/chatbot/context/<slug>", methods=["GET"])
 def report_context(slug):
-    denied = _slug_access_error(slug)
+    denied = _backoffice_required()
     if denied is not None:
         return denied
-    info = get_workspace_info(slug)
+    try:
+        info = get_workspace_info(slug)
+    except DatasetResolutionError:
+        logging.exception("[Chatbot] Dataset could not be resolved for context request")
+        return jsonify({"error": "Dataset could not be resolved"}), 503
     if not info:
         return jsonify({"error": "Slug not found or inactive"}), 404
     return jsonify(info)
@@ -151,8 +175,10 @@ def report_context(slug):
 
 @bp.route("/api/chatbot/reports", methods=["GET"])
 def active_reports():
-    hidden = _hidden_slugs()
-    return jsonify([report for report in get_all_active_reports() if report["slug"] not in hidden])
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
+    return jsonify(get_all_active_reports())
 
 
 @bp.route("/api/chatbot/test-agent", methods=["POST"])
@@ -269,14 +295,14 @@ def test_agent_log():
 
 @bp.route("/api/chatbot/sessions", methods=["GET"])
 def list_sessions():
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
     limit = min(int(request.args.get("limit", 50)), 200)
     slug = request.args.get("slug") or None
     q = ChatSession.query.order_by(ChatSession.created_at.desc())
     if slug:
         q = q.filter_by(slug=slug)
-    hidden = _hidden_slugs()
-    if hidden:
-        q = q.filter(or_(ChatSession.slug.is_(None), ChatSession.slug.notin_(hidden)))
     sessions = q.limit(limit).all()
     return jsonify(
         [
@@ -297,8 +323,11 @@ def list_sessions():
 
 @bp.route("/api/chatbot/sessions/<int:session_id>", methods=["GET"])
 def get_session(session_id):
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
     session = db.session.get(ChatSession, session_id)
-    if not session or session.slug in _hidden_slugs():
+    if not session:
         return jsonify({"error": "Session not found"}), 404
     messages = session.messages.order_by(ChatMessage.created_at.asc()).all()
     return jsonify(

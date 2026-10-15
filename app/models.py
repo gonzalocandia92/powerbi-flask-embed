@@ -537,6 +537,10 @@ class ChatSession(db.Model):
     last_model_key = db.Column(db.String(120), nullable=True)
     # Snapshot of User.is_staff of the logged-in user who chatted in this session.
     is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
+    # HMAC of the authorized context that created the session (signed visitor
+    # cookie / user id / verified WhatsApp number). A session is only reused when
+    # the requester presents the same owner; NULL (legacy rows) is never reused.
+    owner_hash = db.Column(db.String(64), nullable=True, index=True)
 
     workspace = db.relationship('Workspace')
     report = db.relationship('Report')

@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.models import AIModelConfig, AIModelGrant, AIModelRoleAssignment, ChatSession
+from app.services import session_owner
 from app.services.llm import ModelCapabilities, ModelConfig
 from app.services.llm.profiles import PROFILES, profile_for
 
@@ -209,13 +210,25 @@ def resolve_client_selection(
     )
 
 
-def session_model_key(conversation_id: str | None, *, report_id: int | None) -> str | None:
+def session_model_key(
+    conversation_id: str | None,
+    *,
+    report_id: int | None,
+    owner_hash: str | None = None,
+) -> str | None:
+    """Model remembered by a session, only if the requester owns that session.
+
+    The session must belong to ``report_id`` and to ``owner_hash``; legacy
+    sessions without an owner are ignored (they are never reused either).
+    """
     try:
         session_id = int(conversation_id) if conversation_id else None
     except (TypeError, ValueError):
         return None
     session = ChatSession.query.filter_by(id=session_id).first() if session_id is not None else None
-    if session is None or (report_id is not None and session.report_id_fk not in (None, report_id)):
+    if session is None or report_id is None or session.report_id_fk != report_id:
+        return None
+    if not session_owner.owners_match(session.owner_hash, owner_hash):
         return None
     return session.last_model_key
 

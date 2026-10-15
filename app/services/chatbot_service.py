@@ -19,7 +19,7 @@ from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink, Report
-from app.services import ai_billing, model_catalog
+from app.services import ai_billing, model_catalog, session_owner
 from app.services.agent_core import DEFAULT_MODEL
 from app.services.analytics import (
     AnalyticsBillingLimitExceededError,
@@ -140,6 +140,23 @@ def _prepare_sqlite_id(instance, model) -> None:
         setattr(instance, "id", _next_integer_id(model))
 
 
+def _session_reuse_mismatch(
+    session: ChatSession,
+    *,
+    slug: str,
+    report_id: Optional[int],
+    owner_hash: Optional[str],
+) -> Optional[str]:
+    """Why ``session`` must NOT be reused for this request, or ``None`` if it may be."""
+    if report_id is None or session.report_id_fk != report_id:
+        return "report_mismatch"
+    if (session.slug or "") != slug:
+        return "slug_mismatch"
+    if not session_owner.owners_match(session.owner_hash, owner_hash):
+        return "owner_mismatch"
+    return None
+
+
 def _ensure_session_for_turn(
     *,
     slug: str,
@@ -148,24 +165,53 @@ def _ensure_session_for_turn(
     question: str,
     channel: Optional[str] = None,
     is_staff: bool = False,
+    report_id: Optional[int] = None,
+    owner_hash: Optional[str] = None,
 ) -> ChatSession:
+    """Return the session for this turn, creating a new one when it cannot be reused.
+
+    A ``conversation_id`` is only a lookup hint, never a credential. The stored
+    session is reused only if it belongs to the same report, the same public slug
+    AND the same authorized owner (see ``session_owner``). Anything else -
+    including legacy rows without an owner - starts a fresh session and leaves
+    the existing one untouched.
+    """
     session: Optional[ChatSession] = None
     session_id = _extract_session_id(conversation_id)
 
     if session_id is not None and not reset_history:
-        session = db.session.get(ChatSession, session_id)
+        candidate = db.session.get(ChatSession, session_id)
+        if candidate is not None:
+            mismatch = _session_reuse_mismatch(
+                candidate, slug=slug, report_id=report_id, owner_hash=owner_hash
+            )
+            if mismatch is None:
+                session = candidate
+            else:
+                # Never log the owner values; ids are enough to investigate.
+                logging.warning(
+                    "[ChatbotService] session_reuse_rejected reason=%s session_id=%s "
+                    "requested_report_id=%s requested_slug_hash=%s",
+                    mismatch,
+                    candidate.id,
+                    report_id,
+                    hash_identifier(slug, prefix="slug"),
+                )
 
-    if session is None or reset_history:
+    if session is None:
         session = ChatSession(
-            slug=slug, title=_build_session_title(question), channel=channel, is_staff=is_staff
+            slug=slug,
+            title=_build_session_title(question),
+            channel=channel,
+            is_staff=is_staff,
+            report_id_fk=report_id,
+            owner_hash=owner_hash,
         )
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
         return session
 
-    if not session.slug:
-        session.slug = slug
     if not session.title:
         session.title = _build_session_title(question)
     # Self-heal: a session created before ``channel`` existed, or created
@@ -200,6 +246,7 @@ def _prepare_turn_sync(
     requested_model_key: Optional[str] = None,
     channel: Optional[str] = None,
     is_staff: bool = False,
+    owner_hash: Optional[str] = None,
 ) -> Tuple[int, int, List[Dict[str, Any]]]:
     session = _ensure_session_for_turn(
         slug=slug,
@@ -208,10 +255,17 @@ def _prepare_turn_sync(
         question=question,
         channel=channel,
         is_staff=is_staff,
+        report_id=billing_context.report_id,
+        owner_hash=owner_hash,
     )
-    session.workspace_id_fk = billing_context.workspace_id
-    session.report_id_fk = billing_context.report_id
-    session.empresa_id = billing_context.empresa_id
+    # Identity of an existing session is never rewritten: a reused session has
+    # already been verified to belong to this report, so only fill gaps.
+    if session.workspace_id_fk is None:
+        session.workspace_id_fk = billing_context.workspace_id
+    if session.report_id_fk is None:
+        session.report_id_fk = billing_context.report_id
+    if session.empresa_id is None:
+        session.empresa_id = billing_context.empresa_id
 
     user_message = ChatMessage(
         session_id=session.id,
@@ -415,9 +469,13 @@ def _persist_error_sync(
     user_message_id: Optional[int] = None,
     source: str = "chat",
     is_staff: bool = False,
+    report_id: Optional[int] = None,
+    owner_hash: Optional[str] = None,
 ) -> None:
     db.session.rollback()
 
+    # ``session_id`` always comes from this same request's _prepare_turn_sync, so
+    # it was already verified as owned by the requester; it is never client input.
     session = db.session.get(ChatSession, session_id) if session_id is not None else None
     reply_to_message_id = user_message_id
     if session is None:
@@ -426,6 +484,8 @@ def _persist_error_sync(
             title=_build_session_title(question),
             channel=_channel_for_source(source),
             is_staff=is_staff,
+            report_id_fk=report_id,
+            owner_hash=owner_hash,
         )
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
@@ -507,9 +567,14 @@ async def procesar_interaccion_completa(
     source: str = "chat",
     model_key: Optional[str] = None,
     is_staff: bool = False,
+    owner_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute the full chatbot interaction.
+
+    ``owner_hash`` identifies the authorized context that owns the conversation
+    (see ``session_owner``). Without it an existing ``conversation_id`` is never
+    reused: the turn starts a fresh session instead.
 
     ``is_staff`` marks a turn made by a logged-in Sudata staff user: it is stored
     on the session and tagged on logs, Langfuse traces and usage events so
@@ -552,6 +617,8 @@ async def procesar_interaccion_completa(
                 user_message_id=user_message_id,
                 source=source,
                 is_staff=is_staff,
+                report_id=report.id if report is not None else None,
+                owner_hash=owner_hash,
             )
         except Exception:
             logging.exception("[ChatbotService] Failed to log error to DB")
@@ -565,7 +632,10 @@ async def procesar_interaccion_completa(
             report = await asyncio.to_thread(_resolve_report_sync, slug)
             billing_context = await asyncio.to_thread(ai_billing.resolve_report_billing_context, report)
             previous_model_key = await asyncio.to_thread(
-                model_catalog.session_model_key, conversation_id, report_id=report.id
+                model_catalog.session_model_key,
+                conversation_id,
+                report_id=report.id,
+                owner_hash=owner_hash,
             )
             try:
                 model_selection = await asyncio.to_thread(
@@ -595,6 +665,7 @@ async def procesar_interaccion_completa(
                 requested_model_key=model_key,
                 channel=channel,
                 is_staff=is_staff,
+                owner_hash=owner_hash,
             )
             user_turn_persisted = True
 
@@ -697,6 +768,7 @@ async def procesar_pregunta(
     source: str = "chat",
     model_key: Optional[str] = None,
     is_staff: bool = False,
+    owner_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Legacy compatibility wrapper.
@@ -726,6 +798,7 @@ async def procesar_pregunta(
         source=source,
         model_key=model_key,
         is_staff=is_staff,
+        owner_hash=owner_hash,
     )
 
 # Transitional aliases for integrations importing the former helper names.

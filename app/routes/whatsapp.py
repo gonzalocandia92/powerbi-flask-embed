@@ -30,7 +30,7 @@ from flask import Blueprint, jsonify, request
 
 from app import db
 from app.models import Empresa, PublicLink, Report, WhatsAppAuthorizedNumber, WhatsAppContact
-from app.services import chatbot_service, meta_whatsapp_client
+from app.services import chatbot_service, meta_whatsapp_client, session_owner
 from app.utils.decorators import retry_on_db_error
 
 bp = Blueprint("whatsapp", __name__)
@@ -89,7 +89,15 @@ def _verify_meta_signature(payload: bytes, signature_header: str) -> bool:
     """Verify the X-Hub-Signature-256 header Meta sends on every webhook POST."""
     app_secret = os.getenv("META_WA_APP_SECRET", "")
     if not app_secret:
-        return True  # skip verification if secret not configured yet
+        # Fail closed: without the signature the sender number is attacker
+        # controlled, and that number selects which company's reports are
+        # reachable. Unsigned payloads are only accepted by explicit opt-in
+        # (local development).
+        if (os.getenv("META_WA_ALLOW_UNSIGNED", "").strip().lower() in {"1", "true", "yes"}):
+            logging.warning("[WhatsApp] META_WA_APP_SECRET not set: accepting UNSIGNED webhook (opt-in)")
+            return True
+        logging.error("[WhatsApp] META_WA_APP_SECRET not set: rejecting webhook")
+        return False
     expected = "sha256=" + hmac.new(
         app_secret.encode(), payload, hashlib.sha256
     ).hexdigest()
@@ -163,6 +171,10 @@ def _select_report_sync(contact_id: int, report_id: int):
     contact = db.session.get(WhatsAppContact, contact_id)
     if contact is None:
         return None
+    if contact.report_id_fk != report_id:
+        # A conversation belongs to exactly one report: switching reports must
+        # never carry the previous session (and its history) over.
+        contact.conversation_id = None
     contact.report_id_fk = report_id
     contact.awaiting_report_selection = False
     db.session.commit()
@@ -175,6 +187,7 @@ def _reset_to_menu_sync(contact_id: int):
     if contact is None:
         return
     contact.report_id_fk = None
+    contact.conversation_id = None
     contact.awaiting_report_selection = True
     db.session.commit()
 
@@ -371,6 +384,7 @@ async def whatsapp_webhook():
             slug=slug,
             user_key=f"whatsapp:{phone_number}",
             source="whatsapp",
+            owner_hash=session_owner.whatsapp_owner_hash(phone_number),
             conversation_id=str(contact.conversation_id) if contact.conversation_id else None,
         )
         await asyncio.to_thread(
