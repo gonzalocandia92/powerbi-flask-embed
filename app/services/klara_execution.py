@@ -49,6 +49,8 @@ class ExecutionContext:
     # Skills fixed by the consumer; when set, dynamic skill selection is skipped.
     required_skill_keys: list = field(default_factory=list)
     decision_usage_events: list = field(default_factory=list, repr=False)
+    # Hashed audit identity of the execution (workspace, credential, dataset source).
+    identity: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -212,6 +214,7 @@ class KlaraExecutionService:
                         "schemaretrievalpromptloaded": bool(context.schema_retrieval_prompt),
                         "schematablelimit": policy.schema_table_limit, "schemameasurelimit": policy.schema_measure_limit,
                         "cache_scope": policy.cache.scope.key, "execution_policy": asdict(policy),
+                        **{k: v for k, v in (context.identity or {}).items() if v is not None},
                         "complexity_classifier_strategy": assessment.strategy,
                         "skill_route_source": "pinned" if pinned_keys else "dynamic",
                         "pinned_skill_keys": list(pinned_keys),
@@ -281,6 +284,7 @@ class KlaraExecutionService:
                 schema_table_context_limit=policy.schema_table_limit, schema_measure_context_limit=policy.schema_measure_limit,
                 **({"required_skill_keys": pinned_keys} if pinned_keys else {}),
             )
+            metadata["schema_empty"] = bool(result.get("schema_empty"))
             metadata["resolved_skill_keys"] = list(
                 (result.get("route_metadata_json") or {}).get("resolved_skill_keys") or [])
             metrics["total"] = round((time.monotonic() - started) * 1000)

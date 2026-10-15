@@ -26,11 +26,11 @@ def load(filename):
 class HotfixMigrationIntegrationTest(unittest.TestCase):
     def test_one_head_and_incremental_path_after_existing_klara_head(self):
         scripts = ScriptDirectory(str(VERSIONS.parent))
-        self.assertEqual(scripts.get_heads(), ['5f1a2b3c4d6e'])
+        self.assertEqual(scripts.get_heads(), ['6a2b3c4d5e7f'])
         path = list(scripts.iterate_revisions('heads', 'b8c9d0e1f2a3'))
         self.assertEqual([r.revision for r in reversed(path)],
                          ['91af0b7c2d10', '91af0b7c2d11', '91af0b7c2d12', '91af0b7c2d13', '5e2d9a7c4b18',
-                          '5f1a2b3c4d6e'])
+                          '5f1a2b3c4d6e', '6a2b3c4d5e7f'])
         baseline = scripts.get_revision('ebcd339309df')
         self.assertEqual(baseline.down_revision, 'c2d3e4f5a6b7')
         self.assertTrue(baseline.path.endswith('ebcd339309df_add_klara_catalog_baseline.py'))

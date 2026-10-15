@@ -592,6 +592,16 @@ class ChatMessage(db.Model):
     reply_to_message_id = db.Column(
         db.BigInteger, db.ForeignKey('chat_messages.id', ondelete='SET NULL'), nullable=True, index=True
     )
+    # Effective identity of the turn, recorded internally for audit. These are
+    # never returned to public clients; ``diagnostic_id`` is the only opaque
+    # handle shared with the browser so support can locate the turn.
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=True, index=True)
+    dataset_hash = db.Column(db.String(64), nullable=True)
+    workspace_hash = db.Column(db.String(64), nullable=True)
+    credential_ref = db.Column(db.String(64), nullable=True)
+    dataset_source = db.Column(db.String(20), nullable=True)
+    trace_id = db.Column(db.String(120), nullable=True)
+    diagnostic_id = db.Column(db.String(32), nullable=True, unique=True, index=True)
 
     session = db.relationship('ChatSession', back_populates='messages')
     usage_events = db.relationship('AIUsageEvent', back_populates='message', lazy='dynamic')

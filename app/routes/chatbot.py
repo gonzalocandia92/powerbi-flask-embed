@@ -4,10 +4,11 @@ Chatbot endpoint accessible from public report pages without authentication.
 Contract:
     POST /chat
     Body:  { "message"|"pregunta": "...", "slug": "...", "conversation_id"|"session_id": 123 }
-    200:   { "answer": "...", "conversation_id": 123, "report_id": 1, "tool_rounds": 1 }
+    200:   { "answer": "...", "conversation_id": 123, "diagnostic_id": "opaque", "tool_rounds": 1 }
     400:   { "error": "..." }
     404:   { "error": "..." }
-    500:   { "error": "..." }
+    403/503: { "error": "...", "code": "chatbot_disabled"|"chatbot_unavailable" }
+    500:   { "error": "..." }   (no internal details; "diagnostic_id" when recorded)
 """
 import logging
 from datetime import datetime, timezone
@@ -96,6 +97,13 @@ async def chat():
     # logged-in user). The cookie is issued on the first turn of a visitor.
     owner_hash, g.klara_owner_cookie = session_owner.resolve_web_owner(current_user)
 
+    def _error(body, status, exc=None):
+        # ``diagnostic_id`` is an opaque handle for support; it carries no identity.
+        diagnostic_id = getattr(exc, "diagnostic_id", None)
+        if diagnostic_id:
+            body = {**body, "diagnostic_id": diagnostic_id}
+        return jsonify(body), status
+
     try:
         resultado = await chatbot_service.procesar_interaccion_completa(
             pregunta,
@@ -108,22 +116,33 @@ async def chat():
             owner_hash=owner_hash,
         )
     except chatbot_service.ChatbotNotFoundError as exc:
-        return jsonify({"error": str(exc)}), 404
+        return _error({"error": str(exc)}, 404, exc)
     except chatbot_service.ChatbotLimitExceededError as exc:
-        return jsonify({"error": str(exc)}), 403
+        return _error({"error": str(exc)}, 403, exc)
     except chatbot_service.ChatbotModelNotAllowedError as exc:
-        return jsonify({"error": str(exc), "code": "model_not_allowed"}), 400
-    except Exception as exc:
+        return _error({"error": str(exc), "code": "model_not_allowed"}, 400, exc)
+    except chatbot_service.ChatbotDisabledError as exc:
+        return _error({"error": str(exc), "code": "chatbot_disabled"}, 403, exc)
+    except chatbot_service.ChatbotUnavailableError as exc:
+        return _error({"error": str(exc), "code": "chatbot_unavailable"}, 503, exc)
+    except chatbot_service.ChatbotServiceError as exc:
+        # Internal details (SQL, identifiers, provider errors) stay in the log.
         logging.exception("[Chatbot] Failed to process /chat request")
-        return jsonify({"error": f"Error al procesar la consulta: {str(exc)}"}), 500
+        return _error({"error": "Error al procesar la consulta."}, 500, exc)
+    except Exception:
+        logging.exception("[Chatbot] Failed to process /chat request")
+        return jsonify({"error": "Error al procesar la consulta."}), 500
 
+    # The public answer never carries internal identifiers (report, dataset,
+    # workspace); the opaque diagnostic_id is the only handle for support.
     payload = {
         "answer": resultado["answer"],
         "conversation_id": resultado["conversation_id"],
-        "report_id": resultado["report_id"],
         "tool_rounds": resultado.get("tool_rounds", 0),
         "dax_query": resultado.get("dax_query"),
     }
+    if resultado.get("diagnostic_id"):
+        payload["diagnostic_id"] = resultado["diagnostic_id"]
     for key in ("model_key", "provider", "actual_model"):
         if resultado.get(key) is not None:
             payload[key] = resultado[key]
@@ -179,6 +198,39 @@ def active_reports():
     if denied is not None:
         return denied
     return jsonify(get_all_active_reports())
+
+
+@bp.route("/api/chatbot/diagnostics/<diagnostic_id>", methods=["GET"])
+def diagnostic_lookup(diagnostic_id):
+    """Resolve the opaque ``diagnostic_id`` shown to a client to the recorded turn.
+
+    Backoffice only: it returns the effective identity (report, hashed dataset /
+    workspace / credential) that is deliberately never sent to the browser.
+    """
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
+    message = ChatMessage.query.filter_by(diagnostic_id=diagnostic_id).first()
+    if message is None:
+        return jsonify({"error": "Diagnostic not found"}), 404
+    session = message.session
+    return jsonify(
+        {
+            "diagnostic_id": message.diagnostic_id,
+            "message_id": message.id,
+            "session_id": message.session_id,
+            "session_slug": session.slug if session else None,
+            "session_report_id": session.report_id_fk if session else None,
+            "report_id": message.report_id_fk,
+            "dataset_hash": message.dataset_hash,
+            "workspace_hash": message.workspace_hash,
+            "credential_ref": message.credential_ref,
+            "dataset_source": message.dataset_source,
+            "trace_id": message.trace_id,
+            "had_error": message.had_error,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+    )
 
 
 @bp.route("/api/chatbot/test-agent", methods=["POST"])

@@ -32,11 +32,17 @@ from app.services.analytics import AnalyticsResult
 from app.utils import chatbot_context
 
 
-def _fake_executor(log, *, delay=False):
-    """Analytics executor double that records what each turn was given."""
+def _fake_executor(log, *, delay=False, metadata=None, prepare_error=None, execute_error=None):
+    """Analytics executor double that records what each turn was given.
+
+    ``metadata(report_id)`` builds the ``execution_metadata`` of the result;
+    ``prepare_error`` / ``execute_error`` make the corresponding stage raise.
+    """
 
     class Executor:
         async def prepare(self, request):
+            if prepare_error is not None:
+                raise prepare_error
             if delay:
                 await asyncio.sleep(random.random() * 0.01)
             return SimpleNamespace(report_id=request.report_id, question=request.question)
@@ -50,9 +56,13 @@ def _fake_executor(log, *, delay=False):
                 "history": list(history or []),
                 "execution_id": execution_id,
             })
+            if execute_error is not None:
+                raise execute_error
             return AnalyticsResult(
                 answer=f"answer to {prepared.question} (report {prepared.report_id})",
                 report_id=prepared.report_id,
+                execution_metadata=metadata(prepared.report_id) if metadata else {},
+                trace_id="trace-xyz" if metadata else None,
             )
 
     return Executor()
@@ -101,6 +111,7 @@ class SeededAppCase(unittest.TestCase):
             db.session.add(Report(
                 id=report_id, name=f"Report {report_id}", report_id=str(uuid.uuid4()),
                 workspace_id_fk=1, usuario_pbi_id=1, es_publico=True, es_privado=False,
+                chatbot_enabled=True,
             ))
             db.session.flush()
             db.session.add(PublicLink(
@@ -116,9 +127,9 @@ class SeededAppCase(unittest.TestCase):
         db.session.add(staff)
         db.session.commit()
 
-    def patched_chat(self, *, delay=False):
+    def patched_chat(self, *, delay=False, **executor_options):
         """Patch the analytics boundary so /chat runs end to end without external services."""
-        executor = _fake_executor(self.calls, delay=delay)
+        executor = _fake_executor(self.calls, delay=delay, **executor_options)
         return (
             patch.object(chatbot_service, "build_analytics_engine", return_value=executor),
             patch.object(chatbot_service.model_catalog, "resolve_client_selection", return_value=None),
@@ -518,6 +529,237 @@ class InternalEndpointsAreNotPublicTests(SeededAppCase):
         for url in ("/api/chatbot/sessions", "/api/chatbot/sessions/800", "/api/chatbot/reports"):
             with self.subTest(url):
                 self.assertEqual(staff.get(url).status_code, 200)
+
+
+class FailClosedAndAuditTests(SeededAppCase):
+    """P1: typed 503, chatbot_enabled gate, opaque diagnostic id, recorded identity."""
+
+    @staticmethod
+    def _metadata(report_id):
+        return {
+            "reportid": report_id,
+            "datasethash": f"dataset-hash-{report_id}",
+            "workspacehash": "workspace-hash",
+            "credentialref": "pbiuser-1",
+            "datasetsource": "rest",
+        }
+
+    def _chat(self, client, slug, message, conversation_id=None, **executor_options):
+        build, select = self.patched_chat(**executor_options)
+        with build, select:
+            return self.post_chat(client, slug, message, conversation_id)
+
+    def _staff(self):
+        staff = self.app.test_client()
+        staff.post("/login", data={"username": "staff", "password": "pw"})
+        return staff
+
+    def test_disabled_chatbot_is_rejected_before_any_analytics(self):
+        with self.app.app_context():
+            db.session.get(Report, 26).chatbot_enabled = False
+            db.session.commit()
+
+        response = self._chat(self.app.test_client(), "slug26", "q")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json()["code"], "chatbot_disabled")
+        self.assertEqual(self.calls, [])
+        with self.app.app_context():
+            self.assertEqual(ChatSession.query.count(), 0)
+
+    def test_unresolved_dataset_is_a_typed_503_without_internal_detail(self):
+        from app.services.analytics import AnalyticsConfigurationError
+
+        error = AnalyticsConfigurationError("Power BI dataset could not be resolved for ws-id / tenant-id")
+        with self.assertLogs(level="ERROR"):
+            response = self._chat(self.app.test_client(), "slug36", "q", prepare_error=error)
+
+        body = response.get_json()
+        self.assertEqual(response.status_code, 503)
+        self.assertEqual(body["code"], "chatbot_unavailable")
+        self.assertNotIn("ws-id", response.get_data(as_text=True))
+        self.assertNotIn("tenant-id", response.get_data(as_text=True))
+        self.assertEqual(self.calls, [])  # never reached the agent with a substitute context
+        # Pre-flight failures keep the existing contract: nothing is persisted.
+        with self.app.app_context():
+            self.assertEqual((ChatSession.query.count(), ChatMessage.query.count()), (0, 0))
+
+    def test_unexpected_errors_do_not_leak_internals(self):
+        with self.assertLogs(level="ERROR"):
+            response = self._chat(
+                self.app.test_client(), "slug26", "q",
+                execute_error=RuntimeError("SELECT secret FROM internal_table"),
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("internal_table", response.get_data(as_text=True))
+        self.assertTrue(response.get_json()["diagnostic_id"])
+
+    def test_public_response_has_only_an_opaque_diagnostic_handle(self):
+        response = self._chat(self.app.test_client(), "slug26", "q", metadata=self._metadata)
+        body = response.get_json()
+        raw = response.get_data(as_text=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertNotIn("report_id", body)
+        for secret in ("dataset-hash-26", "workspace-hash", "pbiuser-1", "ws-id", "tenant-id"):
+            self.assertNotIn(secret, raw)
+        self.assertRegex(body["diagnostic_id"], r"^[A-Za-z0-9_-]{12,32}$")
+
+    def test_identity_is_recorded_internally_and_resolved_only_for_backoffice(self):
+        body = self._chat(self.app.test_client(), "slug26", "q", metadata=self._metadata).get_json()
+
+        with self.app.app_context():
+            assistant = ChatMessage.query.filter_by(role="assistant").one()
+            user = ChatMessage.query.filter_by(role="user").one()
+            self.assertEqual(assistant.diagnostic_id, body["diagnostic_id"])
+            self.assertEqual(
+                (assistant.report_id_fk, assistant.dataset_hash, assistant.workspace_hash,
+                 assistant.credential_ref, assistant.dataset_source, assistant.trace_id),
+                (26, "dataset-hash-26", "workspace-hash", "pbiuser-1", "rest", "trace-xyz"),
+            )
+            self.assertEqual(user.report_id_fk, 26)
+
+        url = f"/api/chatbot/diagnostics/{body['diagnostic_id']}"
+        self.assertIn(self.app.test_client().get(url).status_code, (401, 403))
+        staff = self._staff()
+        detail = staff.get(url)
+        self.assertEqual(detail.status_code, 200)
+        self.assertEqual(detail.get_json()["report_id"], 26)
+        self.assertEqual(detail.get_json()["session_report_id"], 26)
+        self.assertEqual(staff.get("/api/chatbot/diagnostics/unknown").status_code, 404)
+
+    def test_error_turns_record_report_and_a_diagnostic_id(self):
+        with self.assertLogs(level="ERROR"):
+            body = self._chat(
+                self.app.test_client(), "slug36", "q",
+                execute_error=RuntimeError("provider failure"),
+            ).get_json()
+
+        with self.app.app_context():
+            failed = ChatMessage.query.filter_by(diagnostic_id=body["diagnostic_id"]).one()
+            self.assertEqual((failed.report_id_fk, failed.had_error), (36, True))
+
+    def test_answer_executed_for_another_report_is_never_returned(self):
+        with self.assertLogs(level="ERROR"):
+            response = self._chat(
+                self.app.test_client(), "slug36", "q",
+                metadata=lambda report_id: {**self._metadata(report_id), "reportid": 26},
+            )
+
+        self.assertEqual(response.status_code, 500)
+        self.assertNotIn("answer to", response.get_data(as_text=True))
+        with self.app.app_context():
+            successes = ChatMessage.query.filter_by(role="assistant", had_error=False).count()
+            self.assertEqual(successes, 0)
+
+    def test_history_never_replays_messages_recorded_for_another_report(self):
+        with self.app.app_context():
+            db.session.add(ChatSession(id=900, slug="slug36", report_id_fk=36))
+            db.session.add_all([
+                ChatMessage(id=1, session_id=900, role="user", content="from 36", report_id_fk=36),
+                ChatMessage(id=2, session_id=900, role="assistant", content="legacy no report"),
+                ChatMessage(id=3, session_id=900, role="user", content="from 26", report_id_fk=26),
+                ChatMessage(id=4, session_id=900, role="assistant", content="answer from 26", report_id_fk=26),
+            ])
+            db.session.commit()
+
+            history = chatbot_service._load_history(session_id=900, report_id=36)
+
+        self.assertEqual([m["content"] for m in history], ["from 36", "legacy no report"])
+
+
+class PowerBiResolutionTests(unittest.TestCase):
+    def setUp(self):
+        from app.utils import powerbi
+
+        self.powerbi = powerbi
+        powerbi.clear_dataset_id_cache()
+        self.addCleanup(powerbi.clear_dataset_id_cache)
+
+    @staticmethod
+    def _report(report_pk=26, guid="pbi-guid-26", workspace="ws-26"):
+        return SimpleNamespace(
+            id=report_pk, report_id=guid, workspace=SimpleNamespace(workspace_id=workspace)
+        )
+
+    def _patch_rest(self, dataset_ids):
+        calls = []
+
+        def fake_fetch(report):
+            calls.append(report.id)
+            value = dataset_ids[min(len(calls), len(dataset_ids)) - 1]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        return calls, patch.object(self.powerbi, "_fetch_dataset_id", side_effect=fake_fetch)
+
+    def test_every_external_call_has_a_timeout(self):
+        report = SimpleNamespace(
+            id=1, report_id="r", usuario_pbi=SimpleNamespace(username="u", get_password=lambda: "p"),
+            workspace=SimpleNamespace(
+                workspace_id="w",
+                tenant=SimpleNamespace(
+                    tenant_id="t",
+                    client=SimpleNamespace(client_id="c", get_secret=lambda: "s"),
+                ),
+            ),
+        )
+        token = SimpleNamespace(ok=True, json=lambda: {"access_token": "a.b.c"}, raise_for_status=lambda: None)
+        info = SimpleNamespace(ok=True, json=lambda: {"datasetId": "ds"}, raise_for_status=lambda: None)
+        with patch.dict(os.environ, {"DATASET_ID_CACHE_TTL_SECONDS": "0"}), \
+                patch.object(self.powerbi.requests, "post", return_value=token) as post, \
+                patch.object(self.powerbi.requests, "get", return_value=info) as get:
+            self.assertEqual(self.powerbi.get_current_dataset_id(report), "ds")
+
+        self.assertEqual(post.call_args.kwargs["timeout"], self.powerbi.POWERBI_HTTP_TIMEOUT_SECONDS)
+        self.assertEqual(get.call_args.kwargs["timeout"], self.powerbi.POWERBI_HTTP_TIMEOUT_SECONDS)
+
+    def test_resolution_is_cached_per_report_and_reports_dont_share_entries(self):
+        calls, rest = self._patch_rest(["ds-26", "ds-36"])
+        with rest:
+            first = self.powerbi.get_current_dataset_id(self._report(26))
+            self.assertEqual(self.powerbi.last_dataset_source(), "rest")
+            again = self.powerbi.get_current_dataset_id(self._report(26))
+            self.assertEqual(self.powerbi.last_dataset_source(), "cache")
+            other = self.powerbi.get_current_dataset_id(self._report(36, "pbi-guid-36", "ws-36"))
+
+        self.assertEqual((first, again, other), ("ds-26", "ds-26", "ds-36"))
+        self.assertEqual(calls, [26, 36])
+
+    def test_editing_the_report_guid_or_workspace_invalidates_the_entry(self):
+        calls, rest = self._patch_rest(["ds-old", "ds-new", "ds-newer"])
+        with rest:
+            old = self.powerbi.get_current_dataset_id(self._report(26))
+            new_guid = self.powerbi.get_current_dataset_id(self._report(26, guid="other-guid"))
+            new_workspace = self.powerbi.get_current_dataset_id(self._report(26, workspace="other-ws"))
+
+        self.assertEqual((old, new_guid, new_workspace), ("ds-old", "ds-new", "ds-newer"))
+
+    def test_failures_are_not_cached_and_never_substituted(self):
+        calls, rest = self._patch_rest([RuntimeError("azure down"), "ds-26"])
+        with rest, patch.dict(os.environ, {"CHATBOT_DATASET_ID": "ds-of-another-report"}):
+            with self.assertRaises(RuntimeError):
+                self.powerbi.get_current_dataset_id(self._report(26))
+            recovered = self.powerbi.get_current_dataset_id(self._report(26))
+
+        self.assertEqual(recovered, "ds-26")
+        self.assertEqual(len(calls), 2)
+
+    def test_cache_can_be_disabled(self):
+        calls, rest = self._patch_rest(["a", "b"])
+        with rest, patch.dict(os.environ, {"DATASET_ID_CACHE_TTL_SECONDS": "0"}):
+            self.assertEqual(self.powerbi.get_current_dataset_id(self._report()), "a")
+            self.assertEqual(self.powerbi.get_current_dataset_id(self._report()), "b")
+
+    def test_entries_expire(self):
+        calls, rest = self._patch_rest(["a", "b"])
+        clock = {"now": 1000.0}
+        with rest, patch.object(self.powerbi.time, "monotonic", side_effect=lambda: clock["now"]):
+            self.assertEqual(self.powerbi.get_current_dataset_id(self._report()), "a")
+            clock["now"] += 301
+            self.assertEqual(self.powerbi.get_current_dataset_id(self._report()), "b")
 
 
 if __name__ == "__main__":
