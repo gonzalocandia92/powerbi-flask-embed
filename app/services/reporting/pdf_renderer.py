@@ -72,8 +72,18 @@ def _inline_only_url_fetcher(weasyprint: Any):
 class WeasyPrintPdfRenderer:
     """``html -> PDF bytes`` with WeasyPrint (A4 via the document's ``@page``, print CSS, backgrounds)."""
 
+    engine_name = "weasyprint"
+
     def __init__(self, *, timeout_ms: int = DEFAULT_TIMEOUT_MS) -> None:
         self._timeout_ms = timeout_ms
+
+    @property
+    def engine_version(self) -> str | None:
+        """Installed WeasyPrint version, or ``None`` when it (or Pango) is not available. Never raises."""
+        try:
+            return str(getattr(_weasyprint(), "__version__", "")) or None
+        except (ImportError, OSError):
+            return None
 
     async def render(self, html: str) -> bytes:
         try:

@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - fallback for environments without pgve
             return f"VECTOR({self.dimensions})"
 
 from app import db
+from app.persistence import review_states, review_triggers
 
 FERNET_KEY = os.getenv('FERNET_KEY')
 if not FERNET_KEY:
@@ -1060,6 +1061,12 @@ class ReportRun(db.Model):
         'ReportRunArtifact', back_populates='run', lazy='select',
         cascade='all, delete-orphan', passive_deletes=True, order_by='ReportRunArtifact.id',
     )
+    # No delete cascade and passive_deletes='all': the ORM must never try to nullify or remove a
+    # review; deleting a run that has one is refused by the database (ON DELETE RESTRICT).
+    reviews = db.relationship(
+        'ReportReview', back_populates='run', lazy='select', passive_deletes='all',
+        order_by='ReportReview.round',
+    )
 
     __table_args__ = (
         db.Index('ix_report_runs_status_created', 'status', 'created_at'),
@@ -1153,7 +1160,121 @@ class ReportRunArtifact(db.Model):
     __table_args__ = (
         db.UniqueConstraint('report_run_id', 'artifact_type', 'revision', name='uq_report_run_artifact_revision'),
         db.Index('ix_report_run_artifacts_run_type', 'report_run_id', 'artifact_type'),
+        # Redundant with the primary key; it exists so ``report_reviews`` can reference the PAIR
+        # (artifact id, run id) and the database guarantees an artifact belongs to the review's run.
+        db.Index('uq_report_run_artifact_id_run', 'id', 'report_run_id', unique=True),
     )
+
+
+def _sql_in(column, values):
+    return f"{column} IN ({', '.join(repr(v) for v in values)})"
+
+
+class ReportReview(db.Model):
+    """Human review of ONE persisted PDF of a ``ReportRun`` (staff approve/reject).
+
+    Domain rules live in the review service; the database enforces what must hold even if the
+    code is wrong: CHECKs for coherence, composite RESTRICT foreign keys (an artifact belongs to
+    the review's run and cannot be deleted while referenced) and triggers
+    (``app/persistence/review_triggers.py``) for immutability. ``draft`` is the preparation lock:
+    the row exists (unique per run and round) before the PDF is rendered.
+
+    ``round`` allows a later re-review of the same run without a schema change; only round 1 is
+    used for now. ``submitted_by_user_id`` is nullable by design (users can be deleted, and the
+    scheduler will submit without a human actor).
+    """
+
+    __tablename__ = 'report_reviews'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    report_run_id = db.Column(
+        db.String(36), db.ForeignKey('report_runs.id', ondelete='RESTRICT'), nullable=False)
+    round = db.Column(db.Integer, nullable=False, default=1, server_default='1')
+    status = db.Column(db.String(20), nullable=False, default=review_states.STATUS_DRAFT,
+                       server_default=review_states.STATUS_DRAFT)
+    # Artifact references (composite FKs below). Ids only: no ORM relationship, so reading a review
+    # never loads PDF bytes.
+    pdf_artifact_id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), nullable=True)
+    pdf_sha256 = db.Column(db.String(64), nullable=True)
+    final_report_artifact_id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), nullable=True)
+    html_artifact_id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), nullable=True)
+    submitted_by_user_id = db.Column(
+        db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    decided_by_user_id = db.Column(
+        db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    decided_at = db.Column(db.DateTime, nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    run = db.relationship('ReportRun', back_populates='reviews')
+    submitted_by = db.relationship('User', foreign_keys=[submitted_by_user_id])
+    decided_by = db.relationship('User', foreign_keys=[decided_by_user_id])
+    events = db.relationship(
+        'ReportReviewEvent', back_populates='review', lazy='select', passive_deletes='all',
+        order_by='ReportReviewEvent.id',
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint('report_run_id', 'round', name='uq_report_review_run_round'),
+        db.CheckConstraint(_sql_in('status', review_states.STATUSES), name='ck_report_review_status'),
+        db.CheckConstraint("status = 'draft' OR (pdf_artifact_id IS NOT NULL AND pdf_sha256 IS NOT NULL)",
+                           name='ck_report_review_pdf_when_submitted'),
+        db.CheckConstraint("status = 'draft' OR submitted_at IS NOT NULL",
+                           name='ck_report_review_submitted_at'),
+        db.CheckConstraint(f"NOT ({_sql_in('status', review_states.DECIDED_STATUSES)}) OR decided_at IS NOT NULL",
+                           name='ck_report_review_decided_at'),
+        db.CheckConstraint(
+            "status <> 'rejected' OR (rejection_reason IS NOT NULL AND length(trim(rejection_reason)) > 0)",
+            name='ck_report_review_rejection_reason'),
+        db.ForeignKeyConstraint(
+            ['pdf_artifact_id', 'report_run_id'],
+            ['report_run_artifacts.id', 'report_run_artifacts.report_run_id'],
+            ondelete='RESTRICT', name='fk_report_review_pdf'),
+        db.ForeignKeyConstraint(
+            ['html_artifact_id', 'report_run_id'],
+            ['report_run_artifacts.id', 'report_run_artifacts.report_run_id'],
+            ondelete='RESTRICT', name='fk_report_review_html'),
+        db.ForeignKeyConstraint(
+            ['final_report_artifact_id', 'report_run_id'],
+            ['report_run_artifacts.id', 'report_run_artifacts.report_run_id'],
+            ondelete='RESTRICT', name='fk_report_review_final_report'),
+        db.Index('ix_report_reviews_status_submitted', 'status', 'submitted_at'),
+    )
+
+
+class ReportReviewEvent(db.Model):
+    """Append-only audit trail of a review (the database refuses UPDATE and DELETE).
+
+    ``actor_user_id`` becomes NULL if the user is deleted, so the actor's identity is also
+    snapshotted in ``metadata_json`` by the review service. ``event_type`` has no CHECK on
+    purpose: a new kind of event must not need a migration.
+    """
+
+    __tablename__ = 'report_review_events'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    review_id = db.Column(
+        db.BigInteger().with_variant(db.Integer, 'sqlite'),
+        db.ForeignKey('report_reviews.id', ondelete='RESTRICT'), nullable=False)
+    actor_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    event_type = db.Column(db.String(40), nullable=False)
+    previous_status = db.Column(db.String(20), nullable=True)
+    new_status = db.Column(db.String(20), nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    metadata_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    review = db.relationship('ReportReview', back_populates='events')
+    actor = db.relationship('User', foreign_keys=[actor_user_id])
+
+    __table_args__ = (
+        db.Index('ix_report_review_events_review', 'review_id', 'id'),
+    )
+
+
+review_triggers.install(reviews=ReportReview.__table__, events=ReportReviewEvent.__table__)
 
 
 class WhatsAppAuthorizedNumber(db.Model):

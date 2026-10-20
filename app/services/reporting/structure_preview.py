@@ -5,6 +5,7 @@ from typing import Any
 
 from .structure_spec import ReportStructureSpec
 from .structure_store import StructureState
+from .snapshot import structure_from_snapshot
 
 ITEM_LABELS = {
     "executive_summary": "Resumen ejecutivo",
@@ -27,6 +28,25 @@ def spec_preview(spec: ReportStructureSpec, titles: dict[str, str]) -> list[dict
             "questions": [{"key": key, "title": titles.get(key, key)} for key in keys],
         })
     return items
+
+
+def run_structure_payload(snapshot: dict | None) -> dict[str, Any]:
+    """Read only the run's frozen inputs; never reconstruct a historical spec."""
+    snapshot = snapshot or {}
+    block = snapshot.get("structure")
+    prompt = block.get("prompt") if isinstance(block, dict) else snapshot.get("structure_prompt")
+    payload = {"prompt": prompt, "source": None, "status": None, "warnings": [], "preview": None}
+    try:
+        frozen = structure_from_snapshot(snapshot)
+    except (ValueError, KeyError, TypeError):
+        # An unavailable schema must not prevent reading the report itself.
+        return payload
+    if frozen is not None:
+        titles = {q["key"]: q["title"] for q in snapshot.get("questions") or []}
+        payload.update(source=frozen.source, status=frozen.status,
+                       warnings=[w.model_dump(mode="json") for w in frozen.warnings],
+                       preview=spec_preview(frozen.spec, titles))
+    return payload
 
 
 def structure_payload(state: StructureState, *, compiled: bool | None = None) -> dict[str, Any]:

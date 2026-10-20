@@ -202,8 +202,11 @@
           <button class="ai-btn-secondary btn-sm" id="reporting-download-html" type="button">
             <i class="bi bi-code-slash me-1"></i>HTML
           </button>
+          <a class="ai-btn-secondary btn-sm d-none" id="reporting-review-link">
+            <i class="bi bi-patch-check me-1"></i><span id="reporting-review-link-label"></span>
+          </a>
           <button class="ai-btn-primary btn-sm" id="reporting-download-pdf" type="button">
-            <i class="bi bi-file-earmark-pdf me-1"></i>Descargar PDF
+            <i class="bi bi-file-earmark-pdf me-1"></i><span id="reporting-download-pdf-label">Descargar borrador (no revisado)</span>
           </button>
           <button class="ai-btn-secondary btn-sm" id="reporting-download-json" type="button">
             <i class="bi bi-braces me-1"></i>JSON
@@ -299,6 +302,8 @@
 <script src="{{ url_for('static', filename='js/klara_reporting_api.js') }}"></script>
 <script src="{{ url_for('static', filename='js/klara_report_run_controller.js') }}"></script>
 <script src="{{ url_for('static', filename='js/klara_report_run_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_pdf_source.js') }}"></script>
 <script>
 (() => {
   const models = {{ models|tojson }};
@@ -309,6 +314,7 @@
   const importEndpoint = {{ url_for('ai_reporting.import_questions')|tojson }};
   const skillsEndpoint = {{ url_for('ai_reporting.skills')|tojson }};
   const pdfEndpoint = {{ url_for('ai_reporting.render_pdf')|tojson }};
+  const reviewEntry = {{ review_entry|tojson }};   // null when the review feature is not installed
   const csrf = document.querySelector('meta[name="csrf-token"]').content;
   const byId = id => document.getElementById(id);
   const questions = byId('reporting-questions');
@@ -320,6 +326,7 @@
   let reportHtml = null;
   let finalReportJson = null;
   let finalReportData = null;
+  let pdfSource = KlaraReportPdfSource.resolvePdfSource({review: null, entry: null});
   let reportRunId = null;
   let skillCatalog = [];
   const renderMarkdown = text => KlaraMarkdown.render(text, document);
@@ -728,7 +735,7 @@
     byId('reporting-json').value = finalReportJson || '';
     byId('reporting-download-html').disabled = !reportHtml;
     byId('reporting-download-json').disabled = !finalReportJson;
-    byId('reporting-download-pdf').disabled = !finalReportData;
+    applyReviewState(data);
     const alert = byId('reporting-writer-alert');
     if (!writer) {
       alert.className = 'alert alert-secondary m-3 mb-0';
@@ -744,6 +751,23 @@
     renderCoordinationDebug(data.coordination || null);
     renderCost(data.cost || null, data.cost ? data.cost.ledger_record_failures : 0);
     selectTab(reportHtml ? 'report' : 'debug');
+  }
+
+  // The PDF button hands out the persisted (reviewed) PDF when there is one, else a labelled draft [M8].
+  function applyReviewState(data) {
+    const statusLabel = status => KlaraReviewView.statusInfo(status).label;
+    pdfSource = KlaraReportPdfSource.resolvePdfSource({review: data.review, entry: reviewEntry, statusLabel});
+    const button = byId('reporting-download-pdf');
+    byId('reporting-download-pdf-label').textContent = pdfSource.label;
+    button.title = pdfSource.hint;
+    button.disabled = pdfSource.kind === 'draft' && !finalReportData;
+    const link = KlaraReportPdfSource.resolveReviewLink({
+      review: data.review, runStatus: data.run_status, runId: data.report_run_id, entry: reviewEntry, statusLabel});
+    byId('reporting-review-link').classList.toggle('d-none', !link);
+    if (link) {
+      byId('reporting-review-link').href = link.href;
+      byId('reporting-review-link-label').textContent = link.label;
+    }
   }
 
   function downloadText(text, name, type) {
@@ -991,6 +1015,7 @@
   });
 
   byId('reporting-download-pdf').addEventListener('click', async () => {
+    if (pdfSource.kind === 'reviewed') { window.location.assign(pdfSource.href); return; }
     if (!finalReportData) return;
     const btn = byId('reporting-download-pdf');
     btn.disabled = true;

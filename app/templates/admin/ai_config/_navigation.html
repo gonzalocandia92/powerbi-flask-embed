@@ -17,7 +17,9 @@
   ('Reporting', [
     ('reporting', 'Informes KLARA', 'file-earmark-text', url_for('ai_reporting.page')),
     ('reporting_history', 'Historial de informes', 'clock-history', url_for('ai_reporting.history_page')),
-  ]),
+  ] + ([
+    ('reporting_reviews', 'Revisión de informes', 'patch-check', url_for('ai_reporting_review_pages.inbox_page')),
+  ] if current_user.is_authenticated and current_user.is_staff else [])),
 ] %}
 <nav class="ai-sidenav" aria-label="Consola AI">
   <div class="ai-sidenav-brand">

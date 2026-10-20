@@ -78,12 +78,37 @@ class ArtifactStore:
             ReportRunArtifact.revision == revision)).scalar_one_or_none()
         return None if row is None else self._to_record(row)
 
+    def get_by_id(self, report_run_id: str, artifact_id: int, artifact_type: str | None = None) -> ArtifactRecord | None:
+        """One exact artifact. An id that belongs to another run (or another type) is simply not found."""
+        query = select(ReportRunArtifact).where(
+            ReportRunArtifact.id == artifact_id, ReportRunArtifact.report_run_id == report_run_id)
+        if artifact_type is not None:
+            query = query.where(ReportRunArtifact.artifact_type == artifact_type)
+        row = db.session.execute(query).scalar_one_or_none()
+        return None if row is None else self._to_record(row)
+
     def list(self, report_run_id: str, artifact_type: str | None = None) -> list[ArtifactRecord]:
         query = select(ReportRunArtifact).where(ReportRunArtifact.report_run_id == report_run_id)
         if artifact_type is not None:
             query = query.where(ReportRunArtifact.artifact_type == artifact_type)
         rows = db.session.execute(query.order_by(ReportRunArtifact.artifact_type, ReportRunArtifact.revision)).scalars()
         return [self._to_record(row) for row in rows]
+
+    def list_metadata(self, report_run_id: str, artifact_type: str) -> list[tuple[int, int, dict[str, Any]]]:
+        """``(id, revision, metadata)`` of a type, oldest first, WITHOUT loading any content (no BLOBs)."""
+        rows = db.session.execute(select(
+            ReportRunArtifact.id, ReportRunArtifact.revision, ReportRunArtifact.metadata_json).where(
+            ReportRunArtifact.report_run_id == report_run_id, ReportRunArtifact.artifact_type == artifact_type
+        ).order_by(ReportRunArtifact.revision))
+        return [(row.id, row.revision, dict(row.metadata_json or {})) for row in rows]
+
+    def end_read_transaction(self) -> None:
+        """Hand the connection back before a long non-database step (e.g. rendering a PDF).
+
+        Like ``add`` this store owns its commits, so it also ends any transaction the reads left open;
+        otherwise PostgreSQL would keep the connection ``idle in transaction`` for the whole render.
+        """
+        db.session.commit()
 
     def legacy_final_report_json(self, report_run_id: str) -> dict | None:
         """``result_json["final_report"]`` of runs created before artifacts existed (read-only fallback)."""
