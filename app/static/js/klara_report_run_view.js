@@ -60,7 +60,7 @@
       else if (!active) state = 'skipped';
       else if (run.current_stage === 'analysis' && runningAssigned < slots) { state = 'running'; runningAssigned += 1; }
       else state = 'pending';
-      return {key: plan.key, title: plan.title, state, style: ITEM_STYLES[state], origin: 'definition'};
+      return {key: plan.key, title: plan.title, question: plan.question, state, style: ITEM_STYLES[state], origin: 'definition'};
     });
     const plannedKeys = new Set(planned.map(plan => plan.key));
     for (const section of run.sections || []) {
@@ -90,6 +90,7 @@
                  label: `${progress.current} / ${progress.total} preguntas completadas`},
       showProgress: kind === 'running' || kind === 'cancelling' || (kind === 'queued' && progress.total > 0),
       items: itemsFor(run, active),
+      structure: run.structure || null,
       canCancel: (run.status === 'queued' || run.status === 'running') && !state.cancelling,
       error: run.error ? {code: run.error.code, message: run.error.message} : null,
       connection: state.phase === 'retrying' ? {tone: 'warning', message: 'Problemas de conexión. Reintentando…'}
@@ -111,6 +112,8 @@
     if (!result && !sections.length && !(cost && cost.calls)) return null;
     return {
       report_run_id: run.run_id,
+      run_status: run.status,
+      review: run.review || null, // {id, status, has_pdf} once the run entered the review workflow
       name: run.name || 'Informe',
       markdown: (result && result.markdown) || '',
       writer: (result && result.writer) || null, // null: the run ended before writing
@@ -127,6 +130,51 @@
     if (className) node.className = className;
     if (text != null) node.textContent = text;
     return node;
+  }
+
+  function literal(doc, text) {
+    const node = el(doc, 'div', 'text-body text-break mt-1', text);
+    node.style.whiteSpace = 'pre-wrap';
+    return node;
+  }
+
+  function structurePanel(doc, structure) {
+    const panel = el(doc, 'section', 'mt-3 pt-3 border-top small');
+    panel.append(el(doc, 'h5', 'h6', 'Estructura del informe'));
+    if (structure.prompt) {
+      panel.append(el(doc, 'div', 'fw-semibold', 'Instrucciones originales'), literal(doc, structure.prompt));
+    }
+    if (structure.preview == null) {
+      panel.append(el(doc, 'p', 'text-muted mt-2 mb-0', 'No se registró el esquema aplicado.'));
+      return panel;
+    }
+    panel.append(el(doc, 'p', 'mt-2 mb-1', structure.source === 'interpreted'
+      ? 'Se usó la estructura personalizada.' : 'Se usó la estructura predeterminada.'));
+    const reasons = {
+      fallback: 'No se pudo interpretar la estructura personalizada.',
+      not_compiled: 'Las instrucciones de estructura no estaban interpretadas.',
+      stale: 'Las instrucciones o las preguntas habían cambiado desde la última interpretación.',
+    };
+    const warnings = structure.warnings || [];
+    if (!warnings.length && structure.prompt && reasons[structure.status]) {
+      panel.append(el(doc, 'p', 'text-warning mb-1', reasons[structure.status]));
+    }
+    for (const warning of warnings) {
+      panel.append(literal(doc, warning.message));
+    }
+    panel.append(el(doc, 'div', 'fw-semibold mt-2', 'Esquema aplicado'));
+    const list = el(doc, 'ol', 'mb-0 ps-3');
+    for (const item of structure.preview) {
+      const row = el(doc, 'li', 'py-1');
+      row.append(el(doc, 'span', 'fw-semibold text-break', item.label));
+      if (item.text) row.append(literal(doc, item.text));
+      if (item.questions && item.questions.length) {
+        row.append(el(doc, 'div', 'text-muted text-break', 'Preguntas: ' + item.questions.map(q => q.title).join(', ')));
+      }
+      list.append(row);
+    }
+    panel.append(list);
+    return panel;
   }
 
   // handlers: {onCancel, onRetry}. render(state) is idempotent and replaces the panel contents.
@@ -175,14 +223,19 @@
         body.append(box);
       }
       if (view.items.length) {
+        body.append(el(document_, 'h5', 'h6 mt-3 mb-1', 'Preguntas del informe'));
         const list = el(document_, 'ul', 'list-unstyled mt-3 mb-0 small');
         for (const item of view.items) {
           const row = el(document_, 'li', `d-flex justify-content-between gap-3 py-1 border-bottom ${item.style.cls}`);
-          row.append(el(document_, 'span', null, `${item.style.icon} ${item.title}`), el(document_, 'span', null, item.style.label));
+          const content = el(document_, 'div', 'flex-grow-1 text-break');
+          content.append(el(document_, 'div', 'fw-semibold', `${item.style.icon} ${item.title}`));
+          if (item.question) content.append(literal(document_, item.question));
+          row.append(content, el(document_, 'span', 'flex-shrink-0', item.style.label));
           list.append(row);
         }
         body.append(list);
       }
+      if (view.structure) body.append(structurePanel(document_, view.structure));
       card.append(body);
       root.append(card);
     }

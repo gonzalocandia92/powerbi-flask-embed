@@ -196,7 +196,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import ai_config, ai_reporting, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations, admin_interactions
+    from app.routes import ai_config, ai_reporting, ai_reporting_reviews, ai_reporting_review_pages, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations, admin_interactions
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -222,6 +222,8 @@ def create_app():
     app.register_blueprint(model_catalog.bp)
     app.register_blueprint(evaluations.bp)
     app.register_blueprint(ai_reporting.bp)
+    app.register_blueprint(ai_reporting_reviews.bp)
+    app.register_blueprint(ai_reporting_review_pages.bp)
     app.register_blueprint(admin_interactions.bp)
 
     from app.services.reporting.cli import register_reporting_command
@@ -239,7 +241,8 @@ def create_app():
     backoffice_blueprints = {
         'main', 'tenants', 'clients', 'workspaces', 'reports', 'usuarios_pbi',
         'analytics', 'empresas', 'futuras_empresas', 'api_docs', 'monitor',
-        'ai_config', 'model_catalog', 'evaluations', 'ai_reporting', 'users', 'mcp_config', 'mcp_oauth_admin',
+        'ai_config', 'model_catalog', 'evaluations', 'ai_reporting', 'ai_reporting_reviews', 'ai_reporting_review_pages', 'users', 'mcp_config',
+        'mcp_oauth_admin',
     }
 
     @app.before_request

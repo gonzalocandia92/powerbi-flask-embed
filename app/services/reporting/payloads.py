@@ -43,7 +43,7 @@ def section_payload(section: ReportSection) -> dict:
 def planned_sections(snapshot: dict | None) -> list[dict]:
     """Questions a run will execute, from its immutable snapshot, so a UI can show what is still pending."""
     questions = (snapshot or {}).get("questions") or []
-    return [{"key": item["key"], "title": item["title"], "order": item["order"]}
+    return [{"key": item["key"], "title": item["title"], "question": item.get("question"), "order": item["order"]}
             for item in sorted(questions, key=lambda item: item["order"])]
 
 

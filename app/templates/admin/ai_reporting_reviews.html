@@ -1,0 +1,90 @@
+{% extends "admin/ai/shell.html" %}
+
+{% set active_ai_section = 'reporting_reviews' %}
+{% set page_crumb = 'Reporting' %}
+{% set page_title = 'Revisión de informes' %}
+{% set page_subtitle = 'Informes KLARA enviados a revisión: abrí uno para ver su PDF y aprobarlo o rechazarlo.' %}
+
+{% block header_actions %}
+<button class="ai-btn-secondary" id="ri-refresh" type="button">
+  <i class="bi bi-arrow-clockwise me-1"></i>Actualizar
+</button>
+{% endblock %}
+
+{% block ai_content %}
+<div id="review-inbox-page">
+  <div id="ri-message" class="alert alert-danger d-none" role="alert"></div>
+
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-body">
+      <form id="ri-filters" class="row g-3 align-items-end">
+        <div class="col-md-3">
+          <label class="form-label" for="ri-f-status">Estado de la revisión</label>
+          <select class="form-select" id="ri-f-status" name="status"></select>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="ri-f-report">Reporte</label>
+          <select class="form-select" id="ri-f-report" name="report_id"></select>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="ri-f-from">Enviado desde</label>
+          <input class="form-control" type="date" id="ri-f-from" name="date_from">
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="ri-f-to">Enviado hasta</label>
+          <input class="form-control" type="date" id="ri-f-to" name="date_to">
+        </div>
+        <div class="col-md-2 d-flex gap-2">
+          <button class="ai-btn-primary btn-sm w-100" type="submit">
+            <i class="bi bi-funnel me-1"></i>Filtrar
+          </button>
+          <button class="ai-btn-ghost btn-sm" type="button" id="ri-reset" title="Restablecer filtros">Limpiar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="ai-surface">
+    <div class="ai-table-wrap">
+      <table class="ai-table">
+        <thead>
+          <tr>
+            <th>Informe</th>
+            <th>Reporte</th>
+            <th>Revisión</th>
+            <th>Generado por</th>
+            <th>Enviado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="ri-body">
+          <tr><td colspan="6" class="text-center text-muted py-4">Cargando revisiones…</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="ai-surface-body d-flex justify-content-between align-items-center border-top">
+      <small class="text-muted" id="ri-summary"></small>
+      <div class="btn-group btn-group-sm">
+        <button class="ai-btn-secondary btn-sm" id="ri-prev" type="button" disabled>Anterior</button>
+        <button class="ai-btn-secondary btn-sm" id="ri-next" type="button" disabled>Siguiente</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>window.KLARA_REVIEW = {{ review_config|tojson }};</script>
+<script src="{{ url_for('static', filename='js/klara_review_api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_dom.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_inbox.js') }}"></script>
+<script>
+  KlaraReviewInbox.mount({
+    config: window.KLARA_REVIEW,
+    csrf: document.querySelector('meta[name="csrf-token"]').content,
+    doc: document,
+  });
+</script>
+{% endblock %}

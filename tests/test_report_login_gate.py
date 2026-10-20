@@ -294,46 +294,62 @@ class ChatbotGateTest(GateTestCase):
         self.assertEqual(response.get_json()['models'], [])
         catalog.assert_called_once()
 
-    def test_context_endpoint_requires_login_for_gated_slug(self):
+    def test_context_endpoint_is_backoffice_only(self):
         with patch('app.utils.chatbot_context.get_current_dataset_id', return_value='ds-1'):
-            anonymous = self.http.get('/api/chatbot/context/gated')
-            open_slug = self.http.get('/api/chatbot/context/open')
+            anonymous_gated = self.http.get('/api/chatbot/context/gated')
+            anonymous_open = self.http.get('/api/chatbot/context/open')
             self.login('viewer')
-            allowed = self.http.get('/api/chatbot/context/gated')
+            reader_gated = self.http.get('/api/chatbot/context/gated')
+            reader_open = self.http.get('/api/chatbot/context/open')
+            self.http.get('/logout')
+            self.login('staff')
+            staff_gated = self.http.get('/api/chatbot/context/gated')
+            staff_open = self.http.get('/api/chatbot/context/open')
 
-        self.assertEqual(anonymous.status_code, 401)
-        self.assertEqual(open_slug.status_code, 200)
-        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(anonymous_gated.status_code, 401)
+        self.assertEqual(anonymous_open.status_code, 401)
+        self.assertEqual(reader_gated.status_code, 403)
+        self.assertEqual(reader_open.status_code, 403)
+        self.assertEqual(staff_gated.status_code, 200)
+        self.assertEqual(staff_open.status_code, 200)
 
-    def test_reports_listing_hides_gated_reports_from_everyone_but_backoffice(self):
-        def slugs():
-            return {r['slug'] for r in self.http.get('/api/chatbot/reports').get_json()}
+    def test_context_endpoint_never_substitutes_an_unresolved_dataset(self):
+        self.login('staff')
+        with patch.dict('os.environ', {'CHATBOT_DATASET_ID': 'dataset-of-another-report'}), \
+                patch('app.utils.chatbot_context.get_current_dataset_id', side_effect=RuntimeError('azure down')):
+            response = self.http.get('/api/chatbot/context/open')
 
-        self.assertEqual(slugs(), {'open'})
+        self.assertEqual(response.status_code, 503)
+        self.assertNotIn('dataset-of-another-report', response.get_data(as_text=True))
+
+    def test_reports_listing_is_backoffice_only(self):
+        self.assertEqual(self.http.get('/api/chatbot/reports').status_code, 401)
         self.login('viewer')
-        self.assertEqual(slugs(), {'open'})
+        self.assertEqual(self.http.get('/api/chatbot/reports').status_code, 403)
         self.http.get('/logout')
         self.login('staff')
-        self.assertEqual(slugs(), {'open', 'gated', 'orphan'})
+        response = self.http.get('/api/chatbot/reports')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual({r['slug'] for r in response.get_json()}, {'open', 'gated', 'orphan'})
 
-    def test_sessions_of_gated_reports_are_hidden_from_everyone_but_backoffice(self):
+    def test_sessions_are_backoffice_only(self):
         ids = self._session_ids()
 
-        def listed():
-            return {s['slug'] for s in self.http.get('/api/chatbot/sessions').get_json()}
-
-        self.assertEqual(listed(), {'open'})
-        self.assertEqual(self.http.get(f"/api/chatbot/sessions/{ids['gated']}").status_code, 404)
-        self.assertEqual(self.http.get(f"/api/chatbot/sessions/{ids['open']}").status_code, 200)
+        self.assertEqual(self.http.get('/api/chatbot/sessions').status_code, 401)
+        for slug in ('gated', 'open'):
+            self.assertEqual(self.http.get(f"/api/chatbot/sessions/{ids[slug]}").status_code, 401)
 
         self.login('viewer')
-        self.assertEqual(listed(), {'open'})
-        self.assertEqual(self.http.get(f"/api/chatbot/sessions/{ids['gated']}").status_code, 404)
+        self.assertEqual(self.http.get('/api/chatbot/sessions').status_code, 403)
+        for slug in ('gated', 'open'):
+            self.assertEqual(self.http.get(f"/api/chatbot/sessions/{ids[slug]}").status_code, 403)
 
         self.http.get('/logout')
         self.login('staff')
-        self.assertEqual(listed(), {'open', 'gated'})
-        self.assertEqual(self.http.get(f"/api/chatbot/sessions/{ids['gated']}").status_code, 200)
+        listed = {s['slug'] for s in self.http.get('/api/chatbot/sessions').get_json()}
+        self.assertEqual(listed, {'open', 'gated'})
+        for slug in ('gated', 'open'):
+            self.assertEqual(self.http.get(f"/api/chatbot/sessions/{ids[slug]}").status_code, 200)
 
     def test_chat_access_check(self):
         """The check /chat runs before reaching the chatbot service."""

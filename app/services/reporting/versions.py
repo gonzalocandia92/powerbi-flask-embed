@@ -39,3 +39,4 @@ ARTIFACT_REPORT_DRAFT = "report_draft"
 
 CONTENT_TYPE_JSON = "application/json"
 CONTENT_TYPE_HTML = "text/html; charset=utf-8"
+CONTENT_TYPE_PDF = "application/pdf"

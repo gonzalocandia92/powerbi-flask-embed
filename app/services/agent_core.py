@@ -778,7 +778,10 @@ async def _fetch_schema_context(
     ) as observation:
         if observation is not None:
             observation.update(
-                metadata={"datasethash": hash_identifier(dataset_id, prefix="dataset")}
+                metadata={
+                    "datasethash": hash_identifier(dataset_id, prefix="dataset"),
+                    "reportid": str(report_id) if report_id is not None else None,
+                }
             )
         try:
             result = await retrieve_relevant_schema(
@@ -1281,7 +1284,11 @@ class ToolRegistry:
             input={"dax_query": str(dax_query)},
         ) as observation:
             if observation is not None:
-                observation.update(metadata={"datasethash": hash_identifier(str(dataset_id), prefix="dataset")})
+                observation.update(metadata={
+                    "datasethash": hash_identifier(str(dataset_id), prefix="dataset"),
+                    "reportid": str(context.get("report_id")) if context.get("report_id") is not None else None,
+                    "workspacehash": hash_identifier(powerbi_credentials.get("WORKSPACE_ID"), prefix="workspace"),
+                })
             result = await asyncio.to_thread(
                 execute_dax_query_local,
                 dataset_id,
@@ -1650,6 +1657,14 @@ class AgentOrchestrator:
                 initial_failure_reason = "semantic_model_unavailable"
                 initial_error_message = "Semantic model context could not be retrieved"
 
+        schema_empty = not schema_text
+        if schema_empty:
+            logging.warning(
+                "[Agent] schema_context_empty report_id=%s dataset=%s",
+                report_id,
+                hash_identifier(dataset_id, prefix="dataset"),
+            )
+
         prompt_route_decision = route_decision if apply_route_context else None
         system_prompt = self.prompt_manager.get_system_prompt(
             schema_text,
@@ -1720,6 +1735,7 @@ class AgentOrchestrator:
             return {
                 "answer": answer,
                 "conversation_id": conv_id,
+                "schema_empty": schema_empty,
                 "report_id": report_id,
                 "tool_rounds": tool_rounds,
                 "input_tokens": usage_totals["input_tokens"],

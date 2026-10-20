@@ -4,13 +4,10 @@ from __future__ import annotations
 import asyncio
 import csv
 import logging
-import re
 import time
 import uuid
 from io import StringIO
 from dataclasses import replace
-
-from datetime import datetime
 
 from flask import Blueprint, Response, current_app, jsonify, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -44,12 +41,16 @@ from app.services.reporting.run_store import (
 from app.services.reporting.structure_compiler import StructureCompiler
 from app.services.reporting.structure_factory import resolve_structure_planner
 from app.services.reporting.structure_contracts import StructureQuestion
-from app.services.reporting.structure_preview import spec_preview, structure_payload
+from app.services.reporting.structure_preview import run_structure_payload, spec_preview, structure_payload
 from app.services.reporting.structure_validation import default_structure_spec
 from app.services.reporting.structure_service import StructureDefinitionNotFoundError, StructureService
 from app.services.reporting.structure_store import StructureChangedDuringCompileError, StructureStore
 from app.services.reporting.writer_factory import resolve_report_writer
+from app.routes.review_payloads import summary_payload
+from app.routes.review_entry import review_entry_links
+from app.services.reporting.review_factory import build_review_service
 from app.utils.decorators import admin_required
+from app.utils.request_args import date_arg as _date_arg, int_arg as _int_arg, valid_run_id
 
 
 bp = Blueprint("ai_reporting", __name__, url_prefix="/admin/ai-reporting")
@@ -62,7 +63,6 @@ QUESTION_HEADERS = ("question", "pregunta")
 MAX_STRUCTURE_PROMPT_CHARS = 4000
 MAX_PINNED_SKILLS = 10
 MAX_PDF_PAYLOAD_BYTES = 2 * 1024 * 1024
-_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
 
 
 def _model_tiers(record: AIModelConfig, config: dict) -> list[str]:
@@ -224,6 +224,7 @@ def page():
         "admin/ai_reporting.html",
         initial_run_id=_log_run_id(run_id),
         run_endpoints=_run_endpoints(),
+        review_entry=review_entry_links(current_user),
         reports=ai_console.klara_enabled_reports(),
         models=models, default_model_key=default_model_key,
         luna_warning=luna_warning, max_questions=MAX_QUESTIONS,
@@ -557,26 +558,6 @@ def history_page():
     )
 
 
-def _int_arg(name: str, default: int, *, minimum: int = 1, maximum: int | None = None) -> int:
-    try:
-        value = int(request.args.get(name, default))
-    except (TypeError, ValueError):
-        return default
-    value = max(minimum, value)
-    return min(value, maximum) if maximum else value
-
-
-def _date_arg(name: str, *, end_of_day: bool = False) -> datetime | None:
-    raw = (request.args.get(name) or "").strip()
-    if not raw:
-        return None
-    try:
-        parsed = datetime.strptime(raw, "%Y-%m-%d")
-    except ValueError:
-        return None
-    return parsed.replace(hour=23, minute=59, second=59, microsecond=999999) if end_of_day else parsed
-
-
 def _history_row(run: ReportRun) -> dict:
     started, finished = run.started_at, run.completed_at
     return {
@@ -676,6 +657,15 @@ def create_report_run():
     return response
 
 
+def _review_summary(run_id: str) -> dict | None:
+    """Review state of a run for the run payload. Informational: a failure here must never cost the report."""
+    try:
+        return summary_payload(build_review_service().find_review_for_run(run_id))
+    except Exception:
+        logging.exception("[AIReporting] Review summary failed report_run_id=%s", _log_run_id(run_id))
+        return None
+
+
 def _analysis_concurrency(run: ReportRun) -> int:
     recorded = ((run.result_json or {}).get("analysis") or {}).get("configured_concurrency")
     if isinstance(recorded, int) and recorded >= 1:
@@ -692,6 +682,7 @@ def _run_payload(run: ReportRun) -> dict:
         "strategy": (run.definition_snapshot_json or {}).get("strategy"),
         # What the run will execute (from its snapshot); the UI uses it to show pending questions.
         "planned_sections": _planned_sections(run.definition_snapshot_json),
+        "structure": run_structure_payload(run.definition_snapshot_json),
         "status": run.status, "current_stage": run.current_stage,
         # current = analyses FINISHED (several may be running at once).
         "progress": {"current": run.progress_current, "total": run.progress_total},
@@ -704,8 +695,11 @@ def _run_payload(run: ReportRun) -> dict:
         "heartbeat_at": run.heartbeat_at.isoformat() if run.heartbeat_at else None,
         "sections": [_section_payload(section) for section in sections],
         "result": None, "cost": None,
+        # {id, status, has_pdf} once the run entered the review workflow (stage 5 aligns the PDF button with it).
+        "review": None,
     }
     if run.status in TERMINAL_STATUSES:
+        payload["review"] = _review_summary(run.id)
         result = dict(run.result_json or {})
         # Artifacts are the source of truth (stored FinalReport + stored HTML, resolved with the
         # versions they were produced with); runs from before artifacts fall back to result_json.
@@ -785,7 +779,7 @@ def _pdf_error(code: str, message: str, status: int):
 
 def _log_run_id(value) -> str | None:
     """``report_run_id`` is only used for log correlation; anything unexpected is dropped."""
-    return value if isinstance(value, str) and _RUN_ID_RE.match(value) else None
+    return valid_run_id(value)
 
 
 @bp.route("/render-pdf", methods=["POST"])

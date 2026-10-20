@@ -17,7 +17,8 @@ from app.services.llm import LiteLLMRuntime
 from app.services.llm.contracts import ModelConfig
 from app.services.semantic_notes import normalize_semantic_notes
 from app.services.skill_router import normalize_pinned_skill_keys
-from app.utils.powerbi import get_current_dataset_id
+from app.services.observability import hash_identifier
+from app.utils.powerbi import clear_last_dataset_source, get_current_dataset_id, last_dataset_source
 
 from .contracts import (
     AnalyticsBillingLimitExceededError,
@@ -129,14 +130,24 @@ class KlaraAnalyticsEngine:
         if report is None:
             raise AnalyticsReportNotFoundError(f"Report not found: {request.report_id}")
 
+        clear_last_dataset_source()
         try:
             dataset_id = get_current_dataset_id(report)
         except (requests.RequestException, RuntimeError, KeyError) as exc:
             raise AnalyticsConfigurationError("Power BI dataset could not be resolved") from exc
+        if not dataset_id:
+            raise AnalyticsConfigurationError("Power BI dataset could not be resolved")
+        dataset_source = last_dataset_source() or "unknown"
         try:
             credentials = resolve_powerbi_env_for_report(report)
         except RuntimeError as exc:
             raise AnalyticsConfigurationError(str(exc)) from exc
+        # Effective identity of this execution, for audit only (hashed; never sent to clients).
+        identity = {
+            "workspacehash": hash_identifier(credentials.get("WORKSPACE_ID"), prefix="workspace"),
+            "credentialref": hash_identifier(str(report.usuario_pbi_id), prefix="pbiuser"),
+            "datasetsource": dataset_source,
+        }
         try:
             settings = build_runtime_settings(self.config)
         except (TypeError, ValueError) as exc:
@@ -211,6 +222,7 @@ class KlaraAnalyticsEngine:
             billing_context=billing_context,
             trace_context=dict(request.trace_context),
             required_skill_keys=normalize_pinned_skill_keys(request.required_skill_keys),
+            identity=identity,
         )
         return PreparedAnalyticsExecution(
             request=replace(

@@ -14,6 +14,10 @@ Source of truth
                             regeneration that appends a new revision) and for
                             legacy runs that have no artifact (in memory, never written).
 
+    PDF artifact          = a derived, FROZEN copy of a PERSISTED html artifact (``render_and_save_pdf``
+                            appends it; ``get_pdf`` returns the exact bytes after verifying their SHA-256).
+                            PDF bytes are not reproducible, so a PDF is generated once and reused.
+
 Consumers (HTTP, PDF, later scheduler/review/email) call ``get_final_report`` /
 ``get_html`` and never see tables, artifact ids, versions or the legacy fallback.
 Read methods never write.
@@ -30,11 +34,17 @@ from pydantic import BaseModel
 
 from .artifact_store import ArtifactStore, ArtifactStoreError
 from .artifacts import ArtifactRecord, canonical_json
+from .pdf_artifacts import (
+    LoadedPdf, PdfArtifactError, PdfIntegrityError, PdfNotFoundError, PdfPersistenceError,
+    PdfRenderFailedArtifactError, PdfSourceUnavailableError, SavedPdf, describe_engine, engine_tag,
+    pdf_max_bytes_from_env, run_pdf_render, validate_pdf_output,
+)
+from .pdf_renderer import PdfRenderer, PdfRenderError, build_pdf_renderer
 from .registries import (
     FinalReportSchemaRegistry, HtmlRendererRegistry, VersionResolutionError, final_report_schemas, html_renderers,
 )
 from .versions import (
-    ARTIFACT_FINAL_REPORT, ARTIFACT_HTML, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON,
+    ARTIFACT_FINAL_REPORT, ARTIFACT_HTML, ARTIFACT_PDF, CONTENT_TYPE_HTML, CONTENT_TYPE_JSON, CONTENT_TYPE_PDF,
 )
 
 LOG = logging.getLogger(__name__)
@@ -88,10 +98,15 @@ def _release() -> str | None:
 class ArtifactService:
     def __init__(self, store: ArtifactStore | None = None, *,
                  schemas: FinalReportSchemaRegistry | None = None,
-                 renderers: HtmlRendererRegistry | None = None):
+                 renderers: HtmlRendererRegistry | None = None,
+                 pdf_renderer: PdfRenderer | None = None, pdf_max_bytes: int | None = None):
         self.store = store or ArtifactStore()
         self.schemas = schemas or final_report_schemas
         self.renderers = renderers or html_renderers
+        # PDF collaborators are optional and resolved when used: this service is built in many
+        # places that never touch PDFs, and the production defaults read the environment.
+        self._pdf_renderer = pdf_renderer
+        self._pdf_max_bytes = pdf_max_bytes
 
     # ── writes ────────────────────────────────────────────────────────────
 
@@ -131,7 +146,90 @@ class ArtifactService:
         return self._add(report_run_id, ARTIFACT_HTML, html, CONTENT_TYPE_HTML,
                          schema_version=schema_version, renderer_version=version, metadata=metadata)
 
+    def render_and_save_pdf(self, report_run_id: str, *, html_artifact_id: int | None = None,
+                            final_report_artifact_id: int | None = None,
+                            extra_metadata: Mapping[str, Any] | None = None) -> SavedPdf:
+        """Convert a PERSISTED HTML artifact to PDF and APPEND it as a new ``pdf`` artifact.
+
+        The HTML is never taken from a client nor re-rendered: ``html_artifact_id`` pins the exact
+        stored artifact (``None`` = the original revision, same policy as ``get_html``), and likewise
+        ``final_report_artifact_id`` for the lineage (``None`` = the FinalReport the chosen HTML was rendered
+        from, i.e. its ``source_artifact_id``; the latest one only for HTML that does not record it). A run whose HTML/FinalReport exist only as legacy
+        in-memory renders has no artifact row to point at and is rejected (``html_unavailable``).
+
+        Nothing is stored on any failure. Not atomic by itself: two concurrent calls append two PDFs;
+        callers that need "once" serialize before calling (the review draft lock) and use ``find_pdf``.
+        Raises ``PdfArtifactError`` subclasses only.
+        """
+        html_record = self._source_html(report_run_id, html_artifact_id)
+        report_record = self._source_final_report(report_run_id, final_report_artifact_id, html_record)
+        renderer = self._pdf_renderer or build_pdf_renderer()
+        engine, engine_version = describe_engine(renderer)
+        self.store.end_read_transaction()  # do not hold a connection "idle in transaction" while rendering
+        try:
+            raw = run_pdf_render(renderer, html_record.text)
+        except PdfRenderError as exc:
+            self._log("pdf", report_run_id, html_record.schema_version, None, ok=False)
+            raise PdfRenderFailedArtifactError(code=exc.code) from exc
+        except Exception as exc:
+            self._log("pdf", report_run_id, html_record.schema_version, None, ok=False)
+            LOG.exception("[ReportArtifact] PDF render failed run=%s", report_run_id)
+            raise PdfRenderFailedArtifactError() from exc
+        max_bytes = self._pdf_max_bytes if self._pdf_max_bytes is not None else pdf_max_bytes_from_env()
+        try:
+            pdf = validate_pdf_output(raw, max_bytes)
+        except PdfArtifactError:
+            self._log("pdf", report_run_id, html_record.schema_version, None, ok=False)
+            raise
+        metadata = {
+            **self._metadata(), **(extra_metadata or {}),
+            "source_html_artifact_id": html_record.id, "source_html_revision": html_record.revision,
+            "source_final_report_artifact_id": report_record.id,
+            "html_renderer_version": html_record.renderer_version,
+            "pdf_engine": engine, "pdf_engine_version": engine_version,
+        }
+        try:
+            record = self.store.add(report_run_id, ARTIFACT_PDF, content=pdf, content_type=CONTENT_TYPE_PDF,
+                                    schema_version=html_record.schema_version,
+                                    renderer_version=engine_tag(engine, engine_version), metadata=metadata)
+        except ArtifactStoreError as exc:
+            self._log("pdf", report_run_id, html_record.schema_version, None, ok=False)
+            LOG.exception("[ReportArtifact] Persist failed run=%s type=%s", report_run_id, ARTIFACT_PDF)
+            raise PdfPersistenceError() from exc
+        self._log(ARTIFACT_PDF, report_run_id, record.schema_version, record.renderer_version, ok=True, record=record)
+        return SavedPdf(record, html_record.id, report_record.id)
+
     # ── reads ─────────────────────────────────────────────────────────────
+
+    def get_pdf(self, report_run_id: str, artifact_id: int) -> LoadedPdf:
+        """The exact stored PDF ``artifact_id`` of a run, with its SHA-256 verified on every read.
+
+        Raises ``PdfNotFoundError`` (no such PDF for that run, including ids of other runs/types) or
+        ``PdfIntegrityError`` (stored bytes no longer match the recorded hash). Never renders or writes.
+        """
+        record = self.store.get_by_id(report_run_id, artifact_id, ARTIFACT_PDF)
+        if record is None:
+            raise PdfNotFoundError()
+        return self._verified_pdf(record)
+
+    def find_pdf(self, report_run_id: str, *, html_artifact_id: int) -> LoadedPdf | None:
+        """Newest intact PDF generated from that exact HTML artifact, or ``None`` (pure read).
+
+        Lets a caller reuse a PDF instead of generating another one, which matters because PDF bytes
+        are not reproducible: a second render of the same HTML may hash differently.
+        """
+        # Candidates are chosen from metadata alone; only the matching PDFs' bytes are ever loaded.
+        for artifact_id, _, metadata in reversed(self.store.list_metadata(report_run_id, ARTIFACT_PDF)):
+            if metadata.get("source_html_artifact_id") != html_artifact_id:
+                continue
+            record = self.store.get_by_id(report_run_id, artifact_id, ARTIFACT_PDF)
+            if record is None:
+                continue
+            try:
+                return self._verified_pdf(record)
+            except PdfIntegrityError:
+                continue  # already logged; a corrupt copy is never offered for reuse
+        return None
 
     def get_final_report(self, report_run_id: str) -> LoadedFinalReport | None:
         """Validated FinalReport of a run, or ``None`` when it has none (or it cannot be read).
@@ -152,7 +250,8 @@ class ArtifactService:
             return None
         return LoadedFinalReport(report, report.schema_version, ORIGIN_LEGACY)
 
-    def get_html(self, report_run_id: str, *, revision: int | None = None) -> LoadedHtml | None:
+    def get_html(self, report_run_id: str, *, revision: int | None = None,
+                 persisted_only: bool = False) -> LoadedHtml | None:
         """The persisted HTML as stored, with no renderer involved.
 
         Reading policy (the only place it lives): without ``revision`` the ORIGINAL presentation
@@ -162,7 +261,8 @@ class ArtifactService:
 
         A run with a FinalReport but no HTML artifact (created before artifacts existed, or whose
         rendering failed) is rendered in memory with the schema's ORIGINAL renderer (fixed in the
-        registry, unaffected by newer recommended renderers) and NOT persisted.
+        registry, unaffected by newer recommended renderers) and NOT persisted. ``persisted_only=True``
+        disables that fallback (``None`` instead), for callers that need a stored artifact to point at.
         """
         if revision is not None:
             record = self.store.get_revision(report_run_id, ARTIFACT_HTML, revision)
@@ -174,7 +274,7 @@ class ArtifactService:
                 return LoadedHtml(record.text, record.schema_version, record.renderer_version, ORIGIN_ARTIFACT, record)
             LOG.error("[ReportArtifact] HTML integrity check failed run=%s artifact=%s revision=%s",
                       report_run_id, record.id, record.revision)
-        if records or revision is not None:
+        if records or revision is not None or persisted_only:
             return None  # stored HTML exists but is unusable (or the requested revision does not): never re-render
         loaded = self.get_final_report(report_run_id)
         if loaded is None:
@@ -206,6 +306,46 @@ class ArtifactService:
         return ExportSource(report_model, renderer.render(report_model), report_model.schema_version, version, "request")
 
     # ── internals ─────────────────────────────────────────────────────────
+
+    def _source_html(self, report_run_id: str, artifact_id: int | None) -> ArtifactRecord:
+        """The stored, intact HTML artifact a PDF is built from (never a legacy in-memory render)."""
+        if artifact_id is None:
+            loaded = self.get_html(report_run_id, persisted_only=True)
+            record = loaded.artifact if loaded is not None else None
+        else:
+            record = self.store.get_by_id(report_run_id, artifact_id, ARTIFACT_HTML)
+            if record is not None and not (record.is_intact() and record.text is not None):
+                LOG.error("[ReportArtifact] HTML integrity check failed run=%s artifact=%s", report_run_id, record.id)
+                record = None
+        if record is None:
+            raise PdfSourceUnavailableError("The persisted HTML is not available")
+        return record
+
+    def _source_final_report(self, report_run_id: str, artifact_id: int | None,
+                             html_record: ArtifactRecord) -> ArtifactRecord:
+        """The stored, valid FinalReport artifact the PDF's lineage points to.
+
+        Default = the one the HTML was rendered from (its recorded ``source_artifact_id``), so the lineage
+        is coherent even when a run has several FinalReports; the latest only when the HTML records none.
+        """
+        if artifact_id is None:
+            artifact_id = html_record.metadata.get("source_artifact_id")
+        if artifact_id is None:
+            loaded = self.get_final_report(report_run_id)
+        else:
+            record = self.store.get_by_id(report_run_id, artifact_id, ARTIFACT_FINAL_REPORT)
+            loaded = None if record is None else self._load_artifact_report(record)
+        if loaded is None or loaded.artifact is None:  # missing, unreadable, or legacy (no row to reference)
+            raise PdfSourceUnavailableError("The persisted FinalReport is not available")
+        return loaded.artifact
+
+    @staticmethod
+    def _verified_pdf(record: ArtifactRecord) -> LoadedPdf:
+        if record.data is None or not record.is_intact():
+            LOG.error("[ReportArtifact] PDF integrity check failed run=%s artifact=%s",
+                      record.report_run_id, record.id)
+            raise PdfIntegrityError()
+        return LoadedPdf(record.data, record.sha256, record.size_bytes, record)
 
     def _load_artifact_report(self, record: ArtifactRecord) -> LoadedFinalReport | None:
         if not record.is_intact() or record.text is None:
