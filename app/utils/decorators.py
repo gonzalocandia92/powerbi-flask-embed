@@ -4,11 +4,12 @@ Utility decorators for the Power BI Flask Embed application.
 import time
 import logging
 from functools import wraps
-from flask import redirect, url_for, flash
+from flask import jsonify, redirect, url_for, flash
 from flask_login import current_user
 from sqlalchemy.exc import OperationalError, DBAPIError
 
 from app import db
+from app.services.report_access import has_backoffice_access, is_logged_in, is_staff_actor
 
 
 def retry_on_db_error(max_retries=3, delay=1):
@@ -70,6 +71,44 @@ def admin_required(f):
             return redirect(url_for('auth.login'))
         return f(*args, **kwargs)
     return decorated_function
+
+
+ACCESS_MARK = "__access__"
+ACCESS_STAFF = "staff"
+
+
+def staff_required(f=None, *, json: bool = False):
+    """Require an authenticated, active Sudata staff user with backoffice access.
+
+    ``is_admin`` does not stand in for ``is_staff``. The predicate is the one in ``report_access`` (single
+    source of truth); this decorator only decides how a refusal looks:
+
+    * ``json=True`` (API endpoints, called with ``fetch``): ``401`` when logged out, ``403`` otherwise,
+      both as ``{"error", "code"}``. Never a redirect, which a ``fetch`` would silently follow.
+    * ``json=False`` (HTML pages): flash + redirect, like ``admin_required``.
+
+    The wrapped view carries ``__access__ == "staff"`` so a test can prove no endpoint of a blueprint was
+    left unguarded. Usable bare (``@staff_required``) or as ``@staff_required(json=True)``.
+    """
+    def decorator(view):
+        @wraps(view)
+        def decorated_function(*args, **kwargs):
+            if is_staff_actor(current_user) and has_backoffice_access(current_user):
+                return view(*args, **kwargs)
+            if json:
+                if not is_logged_in(current_user):
+                    return jsonify({"error": "Debe iniciar sesión.", "code": "login_required"}), 401
+                return jsonify({"error": "Se requiere un usuario del equipo interno.",
+                                "code": "staff_required"}), 403
+            if not is_logged_in(current_user):
+                flash('Debe iniciar sesión.', 'danger')
+            else:
+                flash('Acceso denegado. Se requiere un usuario del equipo interno.', 'danger')
+            return redirect(url_for('auth.login'))
+        setattr(decorated_function, ACCESS_MARK, ACCESS_STAFF)
+        return decorated_function
+
+    return decorator(f) if f is not None else decorator
 
 
 def backoffice_required(f):

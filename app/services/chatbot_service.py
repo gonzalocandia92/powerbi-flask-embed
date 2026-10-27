@@ -9,33 +9,45 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from flask import current_app
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.exc import DBAPIError, OperationalError
 
 from app import db
 from app.models import ChatMessage, ChatSession, PublicLink, Report
-from app.services import agent_prompts, ai_billing
-from app.services.chat_credentials import resolve_powerbi_env_for_report
+from app.services import ai_billing, model_catalog, session_owner
 from app.services.agent_core import DEFAULT_MODEL
+from app.services.analytics import (
+    AnalyticsBillingLimitExceededError,
+    AnalyticsConfigurationError,
+    AnalyticsExecutor,
+    AnalyticsModelError,
+    AnalyticsReportNotFoundError,
+    AnalyticsRequest,
+    build_analytics_engine,
+)
 from app.services.observability import (
+    chat_actor_context,
     hash_identifier,
     observation_preview,
     propagate_trace_attributes,
     start_observation,
     trace_user_id,
 )
-from app.services import chat_mcp
-from app.utils.chatbot_context import get_report_and_dataset_by_slug
 from app.utils.decorators import retry_on_db_error
 
 
 class ChatbotServiceError(Exception):
     """Base exception for chatbot service failures."""
+
+    # Opaque handle of the persisted error turn (support lookup); set by the
+    # service after the failure was recorded, never derived from internal ids.
+    diagnostic_id: Optional[str] = None
 
 
 class ChatbotNotFoundError(ChatbotServiceError):
@@ -46,7 +58,42 @@ class ChatbotLimitExceededError(ChatbotServiceError):
     """Raised when the configured AI spend limit has already been reached."""
 
 
-def _chat_message_to_anthropic_message(message: ChatMessage) -> Optional[Dict[str, Any]]:
+class ChatbotUnavailableError(ChatbotServiceError):
+    """Raised when the report context (dataset, credentials) cannot be resolved safely."""
+
+
+class ChatbotDisabledError(ChatbotServiceError):
+    """Raised when KLARA is disabled for the report behind the slug."""
+
+
+UNAVAILABLE_MESSAGE = (
+    "KLARA no esta disponible para este reporte en este momento. Intenta nuevamente mas tarde."
+)
+DISABLED_MESSAGE = "KLARA no esta habilitada para este reporte."
+
+
+class ChatbotModelNotAllowedError(ChatbotServiceError):
+    """Raised when a client requests a model outside the effective allowlist."""
+
+
+# Internal ``source`` values ("chat"/"whatsapp"/...) drive analytics routing,
+# billing source_type and tracing tags, and must not change: other code and
+# historical AIUsageEvent rows depend on them. ``channel`` is a distinct,
+# UI-facing concept (see ChatSession.channel) that this module maps to at the
+# single point where a session is created, so the rest of the pipeline never
+# has to know about it. Sources without an explicit mapping (e.g. "internal",
+# used by non-chat AnalyticsExecutor callers) intentionally get no channel.
+_CHANNEL_BY_SOURCE = {
+    "chat": "klara_chat",
+    "whatsapp": "whatsapp",
+}
+
+
+def _channel_for_source(source: Optional[str]) -> Optional[str]:
+    return _CHANNEL_BY_SOURCE.get((source or "").strip().lower())
+
+
+def _chat_message_to_history_message(message: ChatMessage) -> Optional[Dict[str, Any]]:
     role = (message.role or "").strip().lower()
     content = message.content or ""
 
@@ -61,11 +108,19 @@ def _chat_message_to_anthropic_message(message: ChatMessage) -> Optional[Dict[st
     return {"role": "assistant", "content": content}
 
 
-def _load_anthropic_history(
+def _load_history(
     *,
     session_id: int,
     exclude_message_id: Optional[int] = None,
+    report_id: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
+    """Messages of a session, in order.
+
+    Defence in depth: when ``report_id`` is given, a message recorded for a
+    *different* report is never replayed to the model, even if its session were
+    somehow shared. Messages without a recorded report (legacy rows) belong to
+    the session's own report and are kept.
+    """
     query = (
         ChatMessage.query
         .filter(ChatMessage.session_id == session_id)
@@ -73,10 +128,14 @@ def _load_anthropic_history(
     )
     if exclude_message_id is not None:
         query = query.filter(ChatMessage.id != exclude_message_id)
+    if report_id is not None:
+        query = query.filter(
+            or_(ChatMessage.report_id_fk.is_(None), ChatMessage.report_id_fk == report_id)
+        )
 
     history: List[Dict[str, Any]] = []
     for message in query.all():
-        entry = _chat_message_to_anthropic_message(message)
+        entry = _chat_message_to_history_message(message)
         if entry is not None:
             history.append(entry)
     return history
@@ -113,60 +172,136 @@ def _prepare_sqlite_id(instance, model) -> None:
         setattr(instance, "id", _next_integer_id(model))
 
 
+def _with_diagnostic(error: ChatbotServiceError, diagnostic_id: Optional[str]) -> ChatbotServiceError:
+    """Carry the opaque diagnostic handle of the persisted error turn."""
+    error.diagnostic_id = diagnostic_id
+    return error
+
+
+def _new_diagnostic_id() -> str:
+    """Opaque, random handle that carries no information about the turn."""
+    return secrets.token_urlsafe(12)
+
+
+def _identity_columns(result: Optional[Dict[str, Any]], report_id: Optional[int]) -> Dict[str, Any]:
+    """Effective identity of a turn, as recorded by the execution layer.
+
+    Raises ``ChatbotServiceError`` when the agent reports it ran for a different
+    report than the one being served: that answer must never reach the client.
+    """
+    result = result or {}
+    metadata = result.get("execution_metadata") or {}
+    executed_report = metadata.get("reportid")
+    if executed_report is not None and report_id is not None and str(executed_report) != str(report_id):
+        logging.error(
+            "[ChatbotService] identity_inconsistency executed_report_id=%s request_report_id=%s",
+            executed_report,
+            report_id,
+        )
+        raise ChatbotServiceError("Execution context does not match the requested report")
+    return {
+        "report_id_fk": report_id,
+        "dataset_hash": metadata.get("datasethash"),
+        "workspace_hash": metadata.get("workspacehash"),
+        "credential_ref": metadata.get("credentialref"),
+        "dataset_source": metadata.get("datasetsource"),
+        "trace_id": result.get("trace_id"),
+    }
+
+
+def _session_reuse_mismatch(
+    session: ChatSession,
+    *,
+    slug: str,
+    report_id: Optional[int],
+    owner_hash: Optional[str],
+) -> Optional[str]:
+    """Why ``session`` must NOT be reused for this request, or ``None`` if it may be."""
+    if report_id is None or session.report_id_fk != report_id:
+        return "report_mismatch"
+    if (session.slug or "") != slug:
+        return "slug_mismatch"
+    if not session_owner.owners_match(session.owner_hash, owner_hash):
+        return "owner_mismatch"
+    return None
+
+
 def _ensure_session_for_turn(
     *,
     slug: str,
     conversation_id: Optional[str],
     reset_history: bool,
     question: str,
+    channel: Optional[str] = None,
+    is_staff: bool = False,
+    report_id: Optional[int] = None,
+    owner_hash: Optional[str] = None,
 ) -> ChatSession:
+    """Return the session for this turn, creating a new one when it cannot be reused.
+
+    A ``conversation_id`` is only a lookup hint, never a credential. The stored
+    session is reused only if it belongs to the same report, the same public slug
+    AND the same authorized owner (see ``session_owner``). Anything else -
+    including legacy rows without an owner - starts a fresh session and leaves
+    the existing one untouched.
+    """
     session: Optional[ChatSession] = None
     session_id = _extract_session_id(conversation_id)
 
     if session_id is not None and not reset_history:
-        session = db.session.get(ChatSession, session_id)
+        candidate = db.session.get(ChatSession, session_id)
+        if candidate is not None:
+            mismatch = _session_reuse_mismatch(
+                candidate, slug=slug, report_id=report_id, owner_hash=owner_hash
+            )
+            if mismatch is None:
+                session = candidate
+            else:
+                # Never log the owner values; ids are enough to investigate.
+                logging.warning(
+                    "[ChatbotService] session_reuse_rejected reason=%s session_id=%s "
+                    "requested_report_id=%s requested_slug_hash=%s",
+                    mismatch,
+                    candidate.id,
+                    report_id,
+                    hash_identifier(slug, prefix="slug"),
+                )
 
-    if session is None or reset_history:
-        session = ChatSession(slug=slug, title=_build_session_title(question))
+    if session is None:
+        session = ChatSession(
+            slug=slug,
+            title=_build_session_title(question),
+            channel=channel,
+            is_staff=is_staff,
+            report_id_fk=report_id,
+            owner_hash=owner_hash,
+        )
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
         return session
 
-    if not session.slug:
-        session.slug = slug
     if not session.title:
         session.title = _build_session_title(question)
+    # Self-heal: a session created before ``channel`` existed, or created
+    # without it for any other reason, gets classified the moment we have
+    # reliable evidence for it (this same request already knows its real
+    # channel). Never overwrite a channel that was already set explicitly.
+    if not session.channel and channel:
+        session.channel = channel
+    # Sticky: once a staff user chats in a session, the session is internal activity.
+    if is_staff and not session.is_staff:
+        session.is_staff = True
     return session
 
 
 @retry_on_db_error(max_retries=3, delay=1)
-def _resolve_report_and_dataset_sync(slug: str) -> Tuple[Report, str, Dict[str, str]]:
-    try:
-        resolved = get_report_and_dataset_by_slug(slug)
-    except Exception as exc:
-        logging.exception("[ChatbotService] Failed to resolve dataset for slug %s", slug)
-        resolved = None
-        resolution_error = exc
-    else:
-        resolution_error = None
-
-    if resolved:
-        report, dataset_id = resolved
-    else:
-        link = (
-            PublicLink.query
-            .filter_by(custom_slug=slug, is_active=True)
-            .first()
-        )
-        if not link:
-            raise ChatbotNotFoundError(f"Slug not found or inactive: {slug}") from resolution_error
-
-        report = link.report
-        dataset_id = os.getenv("CHATBOT_DATASET_ID") or report.report_id
-
-    powerbi_credentials = resolve_powerbi_env_for_report(report)
-    return report, dataset_id, powerbi_credentials
+def _resolve_report_sync(slug: str) -> Report:
+    """Resolve the Chat-specific public slug without preparing analytics context."""
+    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
+    if not link:
+        raise ChatbotNotFoundError(f"Slug not found or inactive: {slug}")
+    return link.report
 
 
 @retry_on_db_error(max_retries=3, delay=1)
@@ -177,34 +312,64 @@ def _prepare_turn_sync(
     conversation_id: Optional[str],
     reset_history: bool,
     question: str,
-) -> Tuple[int, List[Dict[str, Any]]]:
+    requested_model_key: Optional[str] = None,
+    channel: Optional[str] = None,
+    is_staff: bool = False,
+    owner_hash: Optional[str] = None,
+) -> Tuple[int, int, List[Dict[str, Any]]]:
     session = _ensure_session_for_turn(
         slug=slug,
         conversation_id=conversation_id,
         reset_history=reset_history,
         question=question,
+        channel=channel,
+        is_staff=is_staff,
+        report_id=billing_context.report_id,
+        owner_hash=owner_hash,
     )
-    session.workspace_id_fk = billing_context.workspace_id
-    session.report_id_fk = billing_context.report_id
-    session.empresa_id = billing_context.empresa_id
+    # Identity of an existing session is never rewritten: a reused session has
+    # already been verified to belong to this report, so only fill gaps.
+    if session.workspace_id_fk is None:
+        session.workspace_id_fk = billing_context.workspace_id
+    if session.report_id_fk is None:
+        session.report_id_fk = billing_context.report_id
+    if session.empresa_id is None:
+        session.empresa_id = billing_context.empresa_id
+
+    # Invariant: the session this turn writes to belongs to the report being
+    # served. Reuse is already gated, so a violation means a bug or tampering:
+    # stop before anything is written or sent to the model.
+    if session.report_id_fk != billing_context.report_id:
+        logging.error(
+            "[ChatbotService] identity_inconsistency session_id=%s session_report_id=%s "
+            "request_report_id=%s",
+            session.id,
+            session.report_id_fk,
+            billing_context.report_id,
+        )
+        db.session.rollback()
+        raise ChatbotServiceError("Session does not belong to the requested report")
 
     user_message = ChatMessage(
         session_id=session.id,
         role="user",
         content=question,
+        requested_model_key=requested_model_key,
+        report_id_fk=billing_context.report_id,
     )
     _prepare_sqlite_id(user_message, ChatMessage)
     db.session.add(user_message)
     db.session.flush()
 
-    history = _load_anthropic_history(
+    history = _load_history(
         session_id=session.id,
         exclude_message_id=user_message.id,
+        report_id=billing_context.report_id,
     )
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     db.session.commit()
-    return session.id, history
+    return session.id, user_message.id, history
 
 
 def _record_result_usage_events(
@@ -215,12 +380,14 @@ def _record_result_usage_events(
     billing_context: ai_billing.BillingContext,
     model: str,
     had_error: bool,
+    source: str = "chat",
 ) -> int:
     persisted_events = 0
+    cost_events = []
     for raw_event in result.get("ai_usage_events") or []:
         event_payload = dict(raw_event)
         metadata_json = event_payload.pop("metadata_json", None)
-        ai_billing.record_ai_usage_event(
+        recorded_event = ai_billing.record_ai_usage_event(
             session_id=session_id,
             message_id=message_id,
             workspace_id=billing_context.workspace_id,
@@ -231,12 +398,13 @@ def _record_result_usage_events(
             metadata_json=metadata_json,
             **event_payload,
         )
+        cost_events.append(recorded_event)
         persisted_events += 1
 
     input_tokens = result.get("input_tokens")
     output_tokens = result.get("output_tokens")
     if persisted_events == 0 and (input_tokens is not None or output_tokens is not None):
-        ai_billing.record_ai_usage_event(
+        recorded_event = ai_billing.record_ai_usage_event(
             session_id=session_id,
             message_id=message_id,
             workspace_id=billing_context.workspace_id,
@@ -244,10 +412,15 @@ def _record_result_usage_events(
             empresa_id=billing_context.empresa_id,
             billing_scope_type=billing_context.billing_scope_type,
             billing_scope_id=billing_context.billing_scope_id,
-            provider="anthropic",
+            provider=result.get("provider") or "anthropic",
             model=model,
             event_type="generation",
-            source_type="chat",
+            # Bug fixed: this used to hardcode "chat" regardless of the real
+            # execution source, so a WhatsApp interaction that fell back to
+            # this estimate (no ai_usage_events from the pipeline) would be
+            # misclassified as chat in billing/analytics. Always use the
+            # actual source ("chat"/"whatsapp"/...) instead.
+            source_type=source,
             trigger_type="user_request",
             operation_name="chat-response-fallback",
             status="error" if had_error else "success",
@@ -255,12 +428,16 @@ def _record_result_usage_events(
             output_tokens=output_tokens,
             total_tokens=int(input_tokens or 0) + int(output_tokens or 0),
             metadata_json={
+                "component": "main_agent",
+                "execution_source": source,
                 "estimated_usage": True,
                 "fallback_reason": "missing_ai_usage_events",
             },
         )
+        cost_events.append(recorded_event)
         persisted_events += 1
 
+    result["cost_breakdown"] = ai_billing.summarize_pipeline_costs(cost_events)
     return persisted_events
 
 
@@ -273,18 +450,32 @@ def _persist_success_sync(
     result: Dict[str, Any],
     latency_ms: int,
     anthropic_model: str,
+    requested_model_key: Optional[str] = None,
+    user_message_id: Optional[int] = None,
+    source: str = "chat",
 ) -> Dict[str, Any]:
     session = db.session.get(ChatSession, session_id)
     if session is None:
         raise ChatbotServiceError(f"Chat session not found: {session_id}")
 
     had_error = bool(result.get("had_error"))
+    identity = _identity_columns(result, report_id)
+    diagnostic_id = _new_diagnostic_id()
     assistant_message = ChatMessage(
         session_id=session.id,
         role="assistant",
         content=result.get("answer", ""),
+        diagnostic_id=diagnostic_id,
+        **identity,
         latency_ms=latency_ms,
         model_used=result.get("model") or anthropic_model,
+        requested_model_key=requested_model_key,
+        model_key=result.get("model_key"),
+        model_provider=result.get("provider"),
+        physical_model=result.get("model"),
+        model_gateway=result.get("gateway"),
+        service_tier=result.get("service_tier"),
+        actual_model=result.get("actual_model"),
         input_tokens=result.get("input_tokens"),
         output_tokens=result.get("output_tokens"),
         # NOTA: Se utiliza el campo heredado mcp_used para almacenar si el agente ejecutó herramientas (tools_called) en este turno, evitando migraciones de DB.
@@ -293,6 +484,7 @@ def _persist_success_sync(
         dax_query=result.get("dax_query"),
         had_error=had_error,
         error_message=result.get("error_message") if had_error else None,
+        reply_to_message_id=user_message_id,
     )
     _prepare_sqlite_id(assistant_message, ChatMessage)
     db.session.add(assistant_message)
@@ -305,10 +497,12 @@ def _persist_success_sync(
         billing_context=billing_context,
         model=result.get("model") or anthropic_model,
         had_error=had_error,
+        source=source,
     )
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     session.had_errors = bool(session.had_errors or had_error)
+    session.last_model_key = result.get("model_key") or session.last_model_key
 
     db.session.commit()
 
@@ -327,10 +521,16 @@ def _persist_success_sync(
         "answer": result.get("answer", ""),
         "conversation_id": session.id,
         "report_id": report_id,
+        "diagnostic_id": diagnostic_id,
         "tool_rounds": result.get("tool_rounds", 0),
         "input_tokens": result.get("input_tokens"),
         "output_tokens": result.get("output_tokens"),
         "model": result.get("model") or anthropic_model,
+        "model_key": result.get("model_key"),
+        "provider": result.get("provider"),
+        "gateway": result.get("gateway"),
+        "service_tier": result.get("service_tier"),
+        "actual_model": result.get("actual_model"),
         "latency_ms": assistant_message.latency_ms,
         "mcp_used": bool(result.get("tools_called")),
         "tools_called": result.get("tools_called") or [],
@@ -341,6 +541,8 @@ def _persist_success_sync(
         "route_metadata_json": result.get("route_metadata_json"),
         "route_validation_warnings": result.get("route_validation_warnings") or [],
         "total_cost_usd": assistant_message.total_cost_usd or 0.0,
+        "cost_breakdown": result.get("cost_breakdown"),
+        "latency_by_component_ms": result.get("latency_by_component_ms"),
     }
 
 
@@ -353,12 +555,28 @@ def _persist_error_sync(
     error_message: str,
     billing_context: Optional[ai_billing.BillingContext] = None,
     result: Optional[Dict[str, Any]] = None,
+    requested_model_key: Optional[str] = None,
+    user_message_id: Optional[int] = None,
+    source: str = "chat",
+    is_staff: bool = False,
+    report_id: Optional[int] = None,
+    owner_hash: Optional[str] = None,
 ) -> None:
     db.session.rollback()
 
+    # ``session_id`` always comes from this same request's _prepare_turn_sync, so
+    # it was already verified as owned by the requester; it is never client input.
     session = db.session.get(ChatSession, session_id) if session_id is not None else None
+    reply_to_message_id = user_message_id
     if session is None:
-        session = ChatSession(slug=slug, title=_build_session_title(question))
+        session = ChatSession(
+            slug=slug,
+            title=_build_session_title(question),
+            channel=_channel_for_source(source),
+            is_staff=is_staff,
+            report_id_fk=report_id,
+            owner_hash=owner_hash,
+        )
         _prepare_sqlite_id(session, ChatSession)
         db.session.add(session)
         db.session.flush()
@@ -366,13 +584,32 @@ def _persist_error_sync(
             session.workspace_id_fk = billing_context.workspace_id
             session.report_id_fk = billing_context.report_id
             session.empresa_id = billing_context.empresa_id
+        # user_message_id (if any) belonged to the original session lookup,
+        # which failed here; it does not exist in this freshly created one.
+        reply_to_message_id = None
 
+    error_metadata = (result or {}).get("execution_metadata") or {}
+    diagnostic_id = _new_diagnostic_id()
     error_log = ChatMessage(
         session_id=session.id,
         role="assistant",
         content=f"Error al procesar la consulta: {error_message}",
+        diagnostic_id=diagnostic_id,
+        report_id_fk=session.report_id_fk or report_id,
+        dataset_hash=error_metadata.get("datasethash"),
+        workspace_hash=error_metadata.get("workspacehash"),
+        credential_ref=error_metadata.get("credentialref"),
+        dataset_source=error_metadata.get("datasetsource"),
+        trace_id=(result or {}).get("trace_id"),
         latency_ms=result.get("latency_ms") if result else None,
         model_used=result.get("model") if result else None,
+        requested_model_key=requested_model_key,
+        model_key=result.get("model_key") if result else None,
+        model_provider=result.get("provider") if result else None,
+        physical_model=result.get("model") if result else None,
+        model_gateway=result.get("gateway") if result else None,
+        service_tier=result.get("service_tier") if result else None,
+        actual_model=result.get("actual_model") if result else None,
         input_tokens=result.get("input_tokens") if result else None,
         output_tokens=result.get("output_tokens") if result else None,
         mcp_used=bool(result.get("tools_called")) if result else None,
@@ -380,6 +617,7 @@ def _persist_error_sync(
         dax_query=result.get("dax_query") if result else None,
         had_error=True,
         error_message=error_message,
+        reply_to_message_id=reply_to_message_id,
     )
     _prepare_sqlite_id(error_log, ChatMessage)
     db.session.add(error_log)
@@ -393,12 +631,15 @@ def _persist_error_sync(
             billing_context=billing_context,
             model=result.get("model") or DEFAULT_MODEL,
             had_error=True,
+            source=source,
         )
     # If we are reusing an existing session, the user message was already
     # committed during turn preparation, so only the assistant error is added.
     session.total_messages = (session.total_messages or 0) + 1
     session.last_message_at = datetime.now(timezone.utc)
     session.had_errors = True
+    if result and result.get("model_key"):
+        session.last_model_key = result["model_key"]
 
     db.session.commit()
 
@@ -412,31 +653,7 @@ def _persist_error_sync(
                 "[ChatbotService] Failed to refresh aggregated usage totals for error message %s",
                 error_log.id,
             )
-
-
-def _validate_chat_pricing_sync(report: Report, settings: chat_mcp.RuntimeSettings) -> None:
-    ai_billing.resolve_pricing(
-        provider="anthropic",
-        model=settings.anthropic_model,
-        event_type="generation",
-    )
-    ai_billing.resolve_pricing(
-        provider="anthropic",
-        model="claude-haiku-4-5-20251001",
-        event_type="generation",
-    )
-    ai_billing.resolve_pricing(
-        provider="voyageai",
-        model="voyage-4",
-        event_type="embedding",
-    )
-    if settings.skill_router_settings.selector_enabled:
-        ai_billing.resolve_pricing(
-            provider="anthropic",
-            model=settings.skill_router_settings.selector_model,
-            event_type="generation",
-        )
-    ai_billing.enforce_limit_for_report(report)
+    return diagnostic_id
 
 
 async def procesar_interaccion_completa(
@@ -447,9 +664,21 @@ async def procesar_interaccion_completa(
     conversation_id: Optional[str] = None,
     reset_history: bool = False,
     config: Optional[Dict[str, Any]] = None,
+    source: str = "chat",
+    model_key: Optional[str] = None,
+    is_staff: bool = False,
+    owner_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Execute the full chatbot interaction.
+
+    ``owner_hash`` identifies the authorized context that owns the conversation
+    (see ``session_owner``). Without it an existing ``conversation_id`` is never
+    reused: the turn starts a fresh session instead.
+
+    ``is_staff`` marks a turn made by a logged-in Sudata staff user: it is stored
+    on the session and tagged on logs, Langfuse traces and usage events so
+    internal activity stays apart from client activity.
 
     Sync database work is offloaded with ``asyncio.to_thread`` so the Anthropic
     request can await without blocking the event loop.
@@ -461,40 +690,102 @@ async def procesar_interaccion_completa(
     if not pregunta:
         raise ValueError("La pregunta no puede estar vacia")
 
-    settings = chat_mcp.build_runtime_settings(config or dict(current_app.config))
+    runtime_config = config or dict(current_app.config)
     start = time.monotonic()
     session_id: Optional[int] = None
+    user_message_id: Optional[int] = None
     report: Optional[Report] = None
     billing_context: Optional[ai_billing.BillingContext] = None
     result: Optional[Dict[str, Any]] = None
+    user_turn_persisted = False
     trace_version = os.getenv("RELEASE_VERSION") or os.getenv("GIT_SHA")
+    channel = _channel_for_source(source)
 
-    with start_observation(
+    async def persist_execution_error(exc: Exception) -> Optional[str]:
+        if not user_turn_persisted:
+            return None
+        try:
+            return await asyncio.to_thread(
+                _persist_error_sync,
+                session_id=session_id,
+                slug=slug,
+                question=pregunta,
+                error_message=str(exc),
+                billing_context=billing_context,
+                result=result,
+                requested_model_key=model_key,
+                user_message_id=user_message_id,
+                source=source,
+                is_staff=is_staff,
+                report_id=report.id if report is not None else None,
+                owner_hash=owner_hash,
+            )
+        except Exception:
+            logging.exception("[ChatbotService] Failed to log error to DB")
+            return None
+
+    with chat_actor_context(is_staff=is_staff), start_observation(
         name="public-chat-request",
         as_type="span",
         input={"message": pregunta},
     ) as root_observation:
         try:
-            report, dataset_id, powerbi_credentials = await asyncio.to_thread(_resolve_report_and_dataset_sync, slug)
-            billing_context = ai_billing.resolve_report_billing_context(report)
-            custom_instructions = await asyncio.to_thread(agent_prompts.resolve_agent_prompt_instructions, report)
-            await asyncio.to_thread(_validate_chat_pricing_sync, report, settings)
-            session_id, history = await asyncio.to_thread(
+            report = await asyncio.to_thread(_resolve_report_sync, slug)
+            if not report.chatbot_enabled:
+                raise ChatbotDisabledError(DISABLED_MESSAGE)
+            billing_context = await asyncio.to_thread(ai_billing.resolve_report_billing_context, report)
+            previous_model_key = await asyncio.to_thread(
+                model_catalog.session_model_key,
+                conversation_id,
+                report_id=report.id,
+                owner_hash=owner_hash,
+            )
+            try:
+                model_selection = await asyncio.to_thread(
+                    model_catalog.resolve_client_selection,
+                    requested_model_key=model_key,
+                    session_model_key=previous_model_key,
+                    report_id=report.id,
+                    empresa_id=billing_context.empresa_id,
+                    config=runtime_config,
+                )
+            except model_catalog.ModelSelectionError as exc:
+                raise ChatbotModelNotAllowedError(str(exc)) from exc
+            analytics: AnalyticsExecutor = build_analytics_engine(runtime_config)
+            prepared = await analytics.prepare(AnalyticsRequest(
+                report_id=report.id,
+                question=pregunta,
+                source=source,
+                model_key=model_selection.model.model_key if model_selection else None,
+            ))
+            session_id, user_message_id, history = await asyncio.to_thread(
                 _prepare_turn_sync,
                 billing_context=billing_context,
                 slug=slug,
                 conversation_id=conversation_id,
                 reset_history=reset_history,
                 question=pregunta,
+                requested_model_key=model_key,
+                channel=channel,
+                is_staff=is_staff,
+                owner_hash=owner_hash,
             )
+            user_turn_persisted = True
 
             trace_metadata = {
                 "feature": "publicchat",
                 "reportid": str(report.id),
-                "datasethash": hash_identifier(dataset_id, prefix="dataset"),
+                "reportname": report.name,
+                "empresa": str(billing_context.empresa_id),
+                "source": source,
                 "slughash": hash_identifier(slug, prefix="slug"),
                 "resethistory": str(bool(reset_history)).lower(),
                 "hashistory": str(bool(history)).lower(),
+                "requestedmodelkey": model_key,
+                "selectedmodelkey": model_selection.model.model_key if model_selection else None,
+                "modelselectionsource": model_selection.source if model_selection else "legacy_default",
+                "staff": "true" if is_staff else "false",
+                "ownerbound": "true" if owner_hash else "false",
             }
             if root_observation is not None:
                 root_observation.update(metadata=trace_metadata)
@@ -504,23 +795,16 @@ async def procesar_interaccion_completa(
                 session_id=str(session_id),
                 trace_name="public-chat-request",
                 metadata=trace_metadata,
-                tags=["public-chat", "powerbi", "anthropic"],
+                tags=[source, "powerbi", "staff" if is_staff else "client"],
                 version=trace_version,
             ):
-                result = await chat_mcp.run_chat_turn(
-                    user_message=pregunta,
-                    dataset_id=dataset_id,
+                analytics_result = await analytics.execute_prepared(
+                    prepared,
                     history=history,
-                    settings=settings,
-                    conversation_id=str(session_id),
-                    report_id=report.id,
-                    empresa_id=billing_context.empresa_id,
-                    powerbi_credentials=powerbi_credentials,
-                    custom_instructions=custom_instructions,
-                    schema_retrieval_prompt=report.schema_retrieval_prompt,
-                    schema_table_context_limit=report.schema_table_context_limit,
-                    schema_measure_context_limit=report.schema_measure_context_limit,
+                    execution_id=str(session_id),
+                    trace_context=trace_metadata,
                 )
+                result = analytics_result.to_dict()
 
             latency_ms = int((time.monotonic() - start) * 1000)
             persisted = await asyncio.to_thread(
@@ -530,7 +814,10 @@ async def procesar_interaccion_completa(
                 report_id=report.id,
                 result=result,
                 latency_ms=latency_ms,
-                anthropic_model=settings.anthropic_model,
+                anthropic_model=DEFAULT_MODEL,
+                requested_model_key=model_key,
+                user_message_id=user_message_id,
+                source=source,
             )
 
             if root_observation is not None:
@@ -539,34 +826,58 @@ async def procesar_interaccion_completa(
                         "answer": observation_preview(persisted.get("answer", ""), max_length=1200),
                         "tool_rounds": persisted.get("tool_rounds", 0),
                         "report_id": persisted.get("report_id"),
+                        "cost_breakdown": persisted.get("cost_breakdown"),
                     }
                 )
             return persisted
 
+        except ChatbotDisabledError:
+            if root_observation is not None:
+                root_observation.update(output={"error": "chatbot_disabled"})
+            raise
         except ChatbotNotFoundError:
             if root_observation is not None:
                 root_observation.update(output={"error": "slug_not_found"})
             raise
-        except ai_billing.BillingLimitExceeded as exc:
+        except AnalyticsReportNotFoundError as exc:
+            if root_observation is not None:
+                root_observation.update(output={"error": "report_not_found"})
+            raise ChatbotNotFoundError(str(exc)) from exc
+        except AnalyticsConfigurationError as exc:
+            # Dataset/credentials/billing configuration could not be resolved.
+            # Fail closed: never answer with a substitute context. The detail is
+            # kept in the log and in the persisted error, not in the response.
+            logging.error(
+                "[ChatbotService] analytics_unavailable report_id=%s slug_hash=%s reason=%s",
+                report.id if report is not None else None,
+                hash_identifier(slug, prefix="slug"),
+                exc,
+            )
+            if root_observation is not None:
+                root_observation.update(output={"error": "analytics_unavailable"})
+            diagnostic_id = await persist_execution_error(exc)
+            raise _with_diagnostic(ChatbotUnavailableError(UNAVAILABLE_MESSAGE), diagnostic_id) from exc
+        except ChatbotModelNotAllowedError:
+            if root_observation is not None:
+                root_observation.update(output={"error": "model_not_allowed"})
+            raise
+        except AnalyticsModelError as exc:
+            if root_observation is not None:
+                root_observation.update(output={"error": "model_not_allowed"})
+            await persist_execution_error(exc)
+            raise ChatbotModelNotAllowedError(str(exc)) from exc
+        except (ai_billing.BillingLimitExceeded, AnalyticsBillingLimitExceededError) as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": "billing_limit_exceeded"})
-            raise ChatbotLimitExceededError(str(exc)) from exc
+            diagnostic_id = await persist_execution_error(exc)
+            raise _with_diagnostic(ChatbotLimitExceededError(str(exc)), diagnostic_id) from exc
         except Exception as exc:
             if root_observation is not None:
                 root_observation.update(output={"error": observation_preview(str(exc), max_length=500)})
-            try:
-                await asyncio.to_thread(
-                    _persist_error_sync,
-                    session_id=session_id,
-                    slug=slug,
-                    question=pregunta,
-                    error_message=str(exc),
-                    billing_context=billing_context,
-                    result=result,
-                )
-            except Exception:
-                logging.exception("[ChatbotService] Failed to log error to DB")
-            raise ChatbotServiceError(f"Error al procesar la consulta: {str(exc)}") from exc
+            diagnostic_id = await persist_execution_error(exc)
+            raise _with_diagnostic(
+                ChatbotServiceError(f"Error al procesar la consulta: {str(exc)}"), diagnostic_id
+            ) from exc
 
 
 async def procesar_pregunta(
@@ -578,6 +889,10 @@ async def procesar_pregunta(
     conversation_id: Optional[str] = None,
     reset_history: bool = False,
     config: Optional[Dict[str, Any]] = None,
+    source: str = "chat",
+    model_key: Optional[str] = None,
+    is_staff: bool = False,
+    owner_hash: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Legacy compatibility wrapper.
@@ -604,4 +919,12 @@ async def procesar_pregunta(
         conversation_id=conversation_id,
         reset_history=reset_history,
         config=config,
+        source=source,
+        model_key=model_key,
+        is_staff=is_staff,
+        owner_hash=owner_hash,
     )
+
+# Transitional aliases for integrations importing the former helper names.
+_chat_message_to_anthropic_message = _chat_message_to_history_message
+_load_anthropic_history = _load_history

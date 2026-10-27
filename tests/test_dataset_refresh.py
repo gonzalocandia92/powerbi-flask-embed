@@ -71,14 +71,7 @@ def _create_report(session, workspace, usuario, **kwargs):
     return report
 
 
-def _create_public_link(
-    session,
-    report,
-    allow_refresh=False,
-    allow_reset_to_default=False,
-    is_active=True,
-    slug=None
-):
+def _create_public_link(session, report, is_active=True, slug=None):
     """Create a test PublicLink."""
     if slug is None:
         slug = f"test-slug-{_id()}"
@@ -88,8 +81,6 @@ def _create_public_link(
         custom_slug=slug,
         report_id_fk=report.id,
         is_active=is_active,
-        allow_refresh=allow_refresh,
-        allow_reset_to_default=allow_reset_to_default,
     )
     session.add(link)
     session.flush()
@@ -126,10 +117,11 @@ class TestPublicRefreshEndpoint(_BaseTestCase):
         """Helper to set up a full hierarchy and return the slug."""
         with self.app.app_context():
             _, _, workspace, usuario = _create_test_hierarchy(db.session)
-            report = _create_report(db.session, workspace, usuario)
+            report = _create_report(
+                db.session, workspace, usuario, allow_refresh=allow_refresh
+            )
             link = _create_public_link(
-                db.session, report, allow_refresh=allow_refresh,
-                is_active=is_active, slug='test-slug'
+                db.session, report, is_active=is_active, slug='test-slug'
             )
             db.session.commit()
             return link.custom_slug
@@ -277,86 +269,42 @@ class TestAdminRefreshEndpoint(_BaseTestCase):
         self.assertEqual(data['dataset_id'], 'admin-ds')
 
 
-class TestPublicLinkModelAllowRefresh(_BaseTestCase):
-    """Tests for the allow_refresh field on PublicLink model."""
+class TestReportModelActionFlags(_BaseTestCase):
+    """Tests for the user action flags on the Report model."""
 
-    def test_public_link_model_allow_refresh_default(self):
-        """PublicLink created without allow_refresh defaults to False."""
+    FLAGS = ('allow_refresh', 'allow_reset_to_default', 'allow_refresh_visuals')
+
+    def _create(self, *flag_sets):
+        """Create one report per flag set under a single hierarchy and return their ids."""
         with self.app.app_context():
             _, _, workspace, usuario = _create_test_hierarchy(db.session)
-            report = _create_report(db.session, workspace, usuario)
-            link = PublicLink(
-                id=_id(),
-                token=uuid.uuid4().hex[:16],
-                custom_slug='default-slug',
-                report_id_fk=report.id,
-                is_active=True,
-            )
-            db.session.add(link)
+            reports = [
+                _create_report(db.session, workspace, usuario, **flags) for flags in flag_sets
+            ]
             db.session.commit()
+            return [report.id for report in reports]
 
-            fetched = PublicLink.query.filter_by(custom_slug='default-slug').first()
-            self.assertFalse(fetched.allow_refresh)
-
-    def test_public_link_model_allow_refresh_true(self):
-        """PublicLink created with allow_refresh=True persists correctly."""
+    def test_flags_default_to_false(self):
+        """Report created without any action flag defaults them all to False."""
+        (report_id,) = self._create({})
         with self.app.app_context():
-            _, _, workspace, usuario = _create_test_hierarchy(db.session)
-            report = _create_report(db.session, workspace, usuario)
-            link = PublicLink(
-                id=_id(),
-                token=uuid.uuid4().hex[:16],
-                custom_slug='refresh-enabled-slug',
-                report_id_fk=report.id,
-                is_active=True,
-                allow_refresh=True,
-            )
-            db.session.add(link)
-            db.session.commit()
+            report = db.session.get(Report, report_id)
+            for flag in self.FLAGS:
+                self.assertFalse(getattr(report, flag), flag)
 
-            fetched = PublicLink.query.filter_by(custom_slug='refresh-enabled-slug').first()
-            self.assertTrue(fetched.allow_refresh)
-
-
-class TestPublicLinkModelResetToDefault(_BaseTestCase):
-    """Tests for the allow_reset_to_default field on PublicLink model."""
-
-    def test_public_link_model_allow_reset_to_default_default(self):
-        """PublicLink created without allow_reset_to_default defaults to False."""
+    def test_each_flag_persists_independently(self):
+        """Enabling one flag does not enable the others."""
+        report_ids = self._create(*[{flag: True} for flag in self.FLAGS])
         with self.app.app_context():
-            _, _, workspace, usuario = _create_test_hierarchy(db.session)
-            report = _create_report(db.session, workspace, usuario)
-            link = PublicLink(
-                id=_id(),
-                token=uuid.uuid4().hex[:16],
-                custom_slug='default-reset-slug',
-                report_id_fk=report.id,
-                is_active=True,
-            )
-            db.session.add(link)
-            db.session.commit()
+            for enabled, report_id in zip(self.FLAGS, report_ids):
+                report = db.session.get(Report, report_id)
+                for flag in self.FLAGS:
+                    self.assertEqual(getattr(report, flag), flag == enabled, (enabled, flag))
 
-            fetched = PublicLink.query.filter_by(custom_slug='default-reset-slug').first()
-            self.assertFalse(fetched.allow_reset_to_default)
-
-    def test_public_link_model_allow_reset_to_default_true(self):
-        """PublicLink created with allow_reset_to_default=True persists correctly."""
-        with self.app.app_context():
-            _, _, workspace, usuario = _create_test_hierarchy(db.session)
-            report = _create_report(db.session, workspace, usuario)
-            link = PublicLink(
-                id=_id(),
-                token=uuid.uuid4().hex[:16],
-                custom_slug='reset-enabled-slug',
-                report_id_fk=report.id,
-                is_active=True,
-                allow_reset_to_default=True,
-            )
-            db.session.add(link)
-            db.session.commit()
-
-            fetched = PublicLink.query.filter_by(custom_slug='reset-enabled-slug').first()
-            self.assertTrue(fetched.allow_reset_to_default)
+    def test_public_link_no_longer_has_action_flags(self):
+        """The flags moved to the report; PublicLink must not carry stale copies."""
+        self.assertFalse(hasattr(PublicLink, 'allow_refresh'))
+        self.assertFalse(hasattr(PublicLink, 'allow_reset_to_default'))
 
 
 class TestPublicResetToDefaultSupport(_BaseTestCase):
@@ -372,11 +320,13 @@ class TestPublicResetToDefaultSupport(_BaseTestCase):
     def _setup_link(self, allow_reset_to_default):
         with self.app.app_context():
             _, _, workspace, usuario = _create_test_hierarchy(db.session)
-            report = _create_report(db.session, workspace, usuario)
+            report = _create_report(
+                db.session, workspace, usuario,
+                allow_reset_to_default=allow_reset_to_default,
+            )
             link = _create_public_link(
                 db.session,
                 report,
-                allow_reset_to_default=allow_reset_to_default,
                 slug=f'reset-support-{uuid.uuid4().hex[:8]}',
             )
             db.session.commit()
@@ -391,8 +341,22 @@ class TestPublicResetToDefaultSupport(_BaseTestCase):
 
         self.http.post('/login', data={'username': 'admin-reset', 'password': 'adminpass'})
 
-    def test_new_link_form_exposes_allow_reset_to_default(self):
-        """GET public link creation form shows the reset-to-default option."""
+    def test_report_form_exposes_user_actions(self):
+        """GET report creation form shows the three user actions."""
+        self._login_admin()
+
+        resp = self.http.get('/reports/new')
+
+        self.assertEqual(resp.status_code, 200)
+        html = resp.get_data(as_text=True)
+        self.assertIn('Permitir restablecer a valores predeterminados', html)
+        self.assertIn('Permitir actualizar objetos visuales', html)
+        self.assertIn('Permitir actualización de datos', html)
+        for field in ('allow_reset_to_default', 'allow_refresh_visuals', 'allow_refresh'):
+            self.assertIn(f'name="{field}"', html)
+
+    def test_new_link_form_no_longer_exposes_user_actions(self):
+        """GET public link creation form points to the report instead of showing the flags."""
         report_id = self._setup_report()
         self._login_admin()
 
@@ -400,8 +364,36 @@ class TestPublicResetToDefaultSupport(_BaseTestCase):
 
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
-        self.assertIn('Permitir restablecer a valores predeterminados', html)
-        self.assertIn('allow_reset_to_default', html)
+        self.assertNotIn('name="allow_reset_to_default"', html)
+        self.assertNotIn('name="allow_refresh"', html)
+        self.assertIn(f'/reports/{report_id}/edit', html)
+
+    def test_report_edit_saves_user_actions(self):
+        """Posting the report edit form stores the three flags on the report."""
+        report_id = self._setup_report()
+        self._login_admin()
+
+        with self.app.app_context():
+            report = db.session.get(Report, report_id)
+            data = {
+                'name': report.name,
+                'report_id': report.report_id,
+                'workspace': report.workspace_id_fk,
+                'usuario_pbi': report.usuario_pbi_id,
+                'empresa_facturadora_id': 0,
+                'es_publico': 'y',
+                'allow_reset_to_default': 'y',
+                'allow_refresh_visuals': 'y',
+            }
+
+        resp = self.http.post(f'/reports/{report_id}/edit', data=data)
+
+        self.assertEqual(resp.status_code, 302)
+        with self.app.app_context():
+            report = db.session.get(Report, report_id)
+            self.assertTrue(report.allow_reset_to_default)
+            self.assertTrue(report.allow_refresh_visuals)
+            self.assertFalse(report.allow_refresh)
 
     @patch('app.routes.public.track_visit')
     @patch('app.routes.public.get_embed_for_report')

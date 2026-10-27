@@ -18,7 +18,7 @@ from wtforms import (
     TextAreaField,
 )
 
-from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional, ValidationError
+from wtforms.validators import DataRequired, Email, Length, NumberRange, Optional, Regexp, ValidationError
 
 from app.utils.powerbi import MCP_API_KEY_PREFIX
 
@@ -78,6 +78,10 @@ class ReportForm(FlaskForm):
     es_privado = BooleanField("Es Privado (requiere autenticación de empresa)")
     chatbot_enabled = BooleanField("Habilitar chatbot KLARA en links públicos")
     show_dax_query = BooleanField("Mostrar consultas DAX en el chat")
+    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
+    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
+    allow_refresh_visuals = BooleanField('Permitir actualizar objetos visuales', default=False)
+    requires_login = BooleanField('Requiere login para abrir los links públicos', default=False)
     empresas = SelectMultipleField("Empresas Asociadas", coerce=int, validators=[])
     empresa_facturadora_id = SelectField(
         "Empresa facturadora AI",
@@ -115,8 +119,6 @@ class PublicLinkForm(FlaskForm):
         "Nombre personalizado para el link",
         validators=[DataRequired(), Length(max=120)]
     )
-    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
-    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
     submit = SubmitField("Crear Link")
 
 
@@ -145,6 +147,9 @@ class PublicUrlReportForm(FlaskForm):
     usuario_pbi = SelectField("Usuario Power BI", coerce=int, validators=[DataRequired()])
     es_publico = BooleanField("Es Público", default=True)
     es_privado = BooleanField("Es Privado", default=False)
+    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
+    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
+    allow_refresh_visuals = BooleanField('Permitir actualizar objetos visuales', default=False)
     submit = SubmitField("Continuar")
 
 
@@ -155,8 +160,6 @@ class PublicUrlLinkForm(FlaskForm):
         "Nombre del Link Público",
         validators=[DataRequired(), Length(max=120)]
     )
-    allow_refresh = BooleanField('Permitir actualización de datos', default=False)
-    allow_reset_to_default = BooleanField('Permitir restablecer a valores predeterminados', default=False)
     submit = SubmitField("Crear Link Público")
 
 
@@ -296,27 +299,37 @@ class AIModelPricingForm(FlaskForm):
             ("generation", "Chat / Generacion"),
             ("embedding", "Embedding"),
             ("rerank", "Rerank"),
+            ("decision", "Decisión"),
         ],
         validators=[DataRequired()],
     )
+    service_tier = StringField(
+        "Service tier (opcional)", validators=[Optional(), Length(max=50)],
+    )
+    pricing_tier = StringField(
+        "Pricing tier (opcional)", validators=[Optional(), Length(max=50)],
+    )
+    gateway = SelectField("Gateway", choices=[('', 'Historico / sin especificar'), ('direct', 'Directo'), ('openrouter', 'OpenRouter')], validators=[Optional()])
+    context_band = SelectField("Banda de contexto", choices=[('', 'No aplica'), ('short', 'Corto'), ('long', 'Largo')], validators=[Optional()])
+    source_url = StringField("Fuente de tarifa", validators=[Optional(), Length(max=500)])
     input_cost_per_million_usd = DecimalField(
         "Input / 1M USD",
-        places=6,
+        places=9,
         validators=[Optional(), NumberRange(min=0)],
     )
     output_cost_per_million_usd = DecimalField(
         "Output / 1M USD",
-        places=6,
+        places=9,
         validators=[Optional(), NumberRange(min=0)],
     )
     cache_write_cost_per_million_usd = DecimalField(
         "Cache write / 1M USD",
-        places=6,
+        places=9,
         validators=[Optional(), NumberRange(min=0)],
     )
     cache_read_cost_per_million_usd = DecimalField(
         "Cache read / 1M USD",
-        places=6,
+        places=9,
         validators=[Optional(), NumberRange(min=0)],
     )
     effective_from = DateField(
@@ -326,6 +339,44 @@ class AIModelPricingForm(FlaskForm):
     effective_to = DateField("Vigente hasta", validators=[Optional()])
     is_active = BooleanField("Pricing activo", default=True)
     submit = SubmitField("Guardar pricing")
+
+
+class AIModelConfigForm(FlaskForm):
+    """Administrative form for the provider-neutral model catalog."""
+
+    model_key = StringField("Clave interna", validators=[
+        DataRequired(), Length(max=120),
+        Regexp(r'^[A-Za-z0-9][A-Za-z0-9._-]*$', message="Usa letras, numeros, punto, guion o guion bajo."),
+    ])
+    display_name = StringField("Nombre visible", validators=[DataRequired(), Length(max=160)])
+    provider = SelectField(
+        "Proveedor",
+        choices=[("anthropic", "Anthropic"), ("openai", "OpenAI"), ("deepseek", "DeepSeek")],
+        validators=[DataRequired()],
+    )
+    family_key = SelectField("Familia de modelo", choices=[('', 'Seleccionar familia')], validators=[Optional()])
+    physical_model = StringField("Modelo fisico", validators=[DataRequired(), Length(max=200)])
+    gateway = SelectField(
+        "Gateway", choices=[("direct", "Directo"), ("openrouter", "OpenRouter")],
+        validators=[DataRequired()],
+    )
+    context_window = IntegerField("Ventana de contexto", validators=[DataRequired(), NumberRange(min=1)])
+    max_output_tokens = IntegerField("Maximo de salida", validators=[DataRequired(), NumberRange(min=1)])
+    default_reasoning_effort = SelectField("Nivel de thinking", choices=[('', 'Seleccionar nivel')], validators=[Optional()])
+    default_verbosity = SelectField("Verbosity", choices=[('', 'Default del proveedor')], validators=[Optional()])
+    thinking_mode = SelectField("Thinking", choices=[('', 'Seleccionar'), ('off', 'Desactivado'), ('on', 'Activado')], validators=[Optional()])
+    budget_tokens = IntegerField("Presupuesto de thinking (tokens)", validators=[Optional(), NumberRange(min=1024)])
+    default_service_tier = SelectField("Service tier", choices=[('', 'Estándar'), ('flex', 'Flex')], validators=[Optional()])
+    pricing_tier = StringField("Pricing tier", validators=[Optional(), Length(max=50)])
+    provider_options_json = TextAreaField("Opciones del proveedor (JSON)", validators=[Optional()])
+    enabled = BooleanField("Habilitado")
+    client_selectable = BooleanField("Seleccionable por el usuario")
+    supports_tools = BooleanField("Tool calling", default=True)
+    supports_reasoning = BooleanField("Reasoning")
+    supports_cache_key = BooleanField("Cache key")
+    cache_by_report = BooleanField("Agrupar caché por empresa y reporte")
+    supports_flex = BooleanField("Flex processing")
+    submit = SubmitField("Guardar modelo")
 
 
 class RequiredSchemaItemForm(Form):
@@ -416,6 +467,7 @@ class AnalyticsSkillForm(FlaskForm):
     preferred_tables = TextAreaField("Tablas preferidas", validators=[Optional()])
     allowed_dimensions = TextAreaField("Dimensiones permitidas", validators=[Optional()])
     constraints = TextAreaField("Restricciones", validators=[Optional()])
+    semantic_notes = TextAreaField("Notas semanticas", validators=[Optional()])
     required_schema_items = FieldList(
         FormField(RequiredSchemaItemForm),
         min_entries=1,
@@ -442,6 +494,7 @@ class UserForm(FlaskForm):
     password = PasswordField("Contraseña", validators=[Optional(), Length(min=6)])
     password_confirm = PasswordField("Confirmar Contraseña", validators=[Optional()])
     is_admin = BooleanField("Es Administrador")
+    is_staff = BooleanField("Es Staff (Sudata)")
     is_active = BooleanField("Activo", default=True)
     submit = SubmitField("Guardar")
 

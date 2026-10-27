@@ -1,0 +1,125 @@
+{% extends "admin/ai/shell.html" %}
+
+{% set active_ai_section = 'reporting_reviews' %}
+{% set page_crumb = 'Reporting · Revisión' %}
+{% set page_title = 'Revisión del informe' %}
+{% set page_subtitle = 'El PDF que ves es exactamente el archivo guardado: tu decisión queda vinculada a él.' %}
+
+{% block header_actions %}
+<a class="ai-btn-secondary" href="{{ url_for('ai_reporting_review_pages.inbox_page') }}">
+  <i class="bi bi-inbox me-1"></i>Bandeja de revisión
+</a>
+{% endblock %}
+
+{% block ai_content %}
+<div id="review-detail-page">
+  <div id="rv-message" class="alert alert-danger d-none" role="alert" aria-live="polite"></div>
+  <div id="rv-loading" class="text-muted py-4">
+    <span class="spinner-border spinner-border-sm me-2" role="status"></span>Cargando revisión…
+  </div>
+
+  <div id="rv-content" class="d-none">
+    <div class="row g-3">
+      <div class="col-lg-8">
+        <div class="ai-surface">
+          <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+            <div>
+              <h3 class="ai-surface-title">PDF del informe</h3>
+              <div class="ai-cell-sub font-monospace" id="rv-pdf-hash"></div>
+            </div>
+            <div class="d-flex gap-2">
+              <a class="ai-btn-secondary btn-sm" id="rv-pdf-open" target="_blank" rel="noopener">
+                <i class="bi bi-box-arrow-up-right me-1"></i>Abrir en otra pestaña
+              </a>
+              <a class="ai-btn-secondary btn-sm" id="rv-pdf-download">
+                <i class="bi bi-download me-1"></i>Descargar
+              </a>
+            </div>
+          </div>
+          <div class="ai-surface-body">
+            <iframe id="rv-pdf-frame" class="ai-pdf-frame d-none" title="PDF del informe en revisión"></iframe>
+            <div id="rv-pdf-empty" class="ai-empty"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="col-lg-4">
+        <div class="ai-surface mb-3">
+          <div class="ai-surface-header">
+            <h3 class="ai-surface-title" id="rv-title"></h3>
+            <div class="ai-cell-sub" id="rv-subtitle"></div>
+          </div>
+          <div class="ai-surface-body">
+            <div class="d-flex flex-wrap gap-2 mb-3 align-items-center">
+              <span id="rv-review-status"></span>
+              <span class="ai-pill tone-warning d-none" id="rv-self-review" title="Quien envió o generó el informe es quien lo revisa">Autorrevisión</span>
+            </div>
+            <dl class="ai-spec-list mb-0">
+              <dt>Ejecución</dt><dd id="rv-run-status"></dd>
+              <dt>Generado por</dt><dd id="rv-generated-by"></dd>
+              <dt>Generado el</dt><dd id="rv-generated-at"></dd>
+              <dt>Enviado por</dt><dd id="rv-submitted-by"></dd>
+              <dt>Enviado el</dt><dd id="rv-submitted-at"></dd>
+              <dt>Decidido por</dt><dd id="rv-decided-by"></dd>
+              <dt>Decidido el</dt><dd id="rv-decided-at"></dd>
+            </dl>
+            <div id="rv-rejection" class="ai-callout tone-danger mt-3 d-none">
+              <b>Motivo del rechazo</b>
+              <div id="rv-rejection-reason"></div>
+            </div>
+            <div id="rv-eligibility" class="alert alert-warning mt-3 mb-0 d-none" role="status"></div>
+          </div>
+        </div>
+
+        <div class="ai-surface mb-3">
+          <div class="ai-surface-header"><h3 class="ai-surface-title">Acciones</h3></div>
+          <div class="ai-surface-body">
+            <div id="rv-actions" class="d-flex flex-wrap gap-2"></div>
+
+            <div id="rv-reject-panel" class="mt-3 d-none">
+              <label class="form-label" for="rv-reject-reason">Motivo del rechazo (obligatorio)</label>
+              <textarea class="form-control" id="rv-reject-reason" rows="3" maxlength="2000"></textarea>
+              <div class="d-flex gap-2 mt-2">
+                <button class="ai-btn-danger btn-sm" id="rv-reject-confirm" type="button">Confirmar rechazo</button>
+                <button class="ai-btn-ghost btn-sm" id="rv-reject-cancel" type="button">Cancelar</button>
+              </div>
+            </div>
+
+            <div id="rv-comment-panel" class="mt-3 d-none">
+              <label class="form-label" for="rv-comment-text">Observación</label>
+              <textarea class="form-control" id="rv-comment-text" rows="3" maxlength="2000"></textarea>
+              <div class="d-flex gap-2 mt-2">
+                <button class="ai-btn-primary btn-sm" id="rv-comment-submit" type="button">Registrar observación</button>
+                <button class="ai-btn-ghost btn-sm" id="rv-comment-cancel" type="button">Cancelar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="ai-surface">
+          <div class="ai-surface-header"><h3 class="ai-surface-title">Historial</h3></div>
+          <div class="ai-surface-body">
+            <ol class="ai-timeline list-unstyled mb-0" id="rv-timeline"></ol>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>window.KLARA_REVIEW = {{ review_config|tojson }};</script>
+<script src="{{ url_for('static', filename='js/klara_review_api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_dom.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_detail.js') }}"></script>
+<script>
+  KlaraReviewDetail.mount({
+    config: window.KLARA_REVIEW,
+    csrf: document.querySelector('meta[name="csrf-token"]').content,
+    doc: document,
+  });
+</script>
+{% endblock %}

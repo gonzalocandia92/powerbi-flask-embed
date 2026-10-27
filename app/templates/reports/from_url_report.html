@@ -82,6 +82,31 @@
               </div>
             </div>
 
+            <div class="card mb-3">
+              <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-hand-index-thumb me-2"></i>Acciones para usuarios</h6>
+              </div>
+              <div class="card-body">
+                <div class="form-check mb-2">
+                  {{ form.allow_reset_to_default(class="form-check-input") }}
+                  {{ form.allow_reset_to_default.label(class="form-check-label") }}
+                  <div class="form-text">Links públicos y API privada. Requiere Persistent Filters y permisos de estado de usuario en Azure AD.</div>
+                </div>
+
+                <div class="form-check mb-2">
+                  {{ form.allow_refresh_visuals(class="form-check-input") }}
+                  {{ form.allow_refresh_visuals.label(class="form-check-label") }}
+                  <div class="form-text">API privada. Ejecuta <code>report.refresh()</code> en el cliente.</div>
+                </div>
+
+                <div class="form-check">
+                  {{ form.allow_refresh(class="form-check-input") }}
+                  {{ form.allow_refresh.label(class="form-check-label") }}
+                  <div class="form-text">Solo links públicos. ⚠️ Power BI Pro tiene un límite de 8 actualizaciones por día por dataset.</div>
+                </div>
+              </div>
+            </div>
+
             <div class="d-grid gap-2 d-md-flex justify-content-md-end">
               <a href="{{ url_for('reports.from_url') }}" class="btn btn-outline-secondary">
                 Cancelar

@@ -11,6 +11,7 @@ from app import csrf, db, limiter
 from app.models import McpSecurityAuditLog
 from app.services.mcp_access_service import list_user_grants, resolve_grant
 from app.services.mcp_jwt_service import audit, validate_access_token
+from app.services.mcp_interaction_service import record_mcp_question
 from app.services.mcp_skill_service import (
     SkillReportContextError,
     SkillSelectionProviderError,
@@ -319,6 +320,15 @@ def select_skills():
                 **_skill_context_audit_details(resolution),
             },
         )
+        # Best-effort: persists the analytical question for the admin
+        # interactions screen. This is the first step of the
+        # skills -> schema -> execute_dax funnel, so most logical questions
+        # are captured here; relevant_schema below records the same question
+        # again only as a fallback (see record_mcp_question's dedup notes).
+        record_mcp_question(
+            question=body.get('question'), oauth_session=oauth_session, grant=grant,
+            source_tool='select_skills',
+        )
         db.session.commit()
         return jsonify(result), 200, {'Cache-Control': 'no-store', 'Pragma': 'no-cache'}
     except ValueError as exc:
@@ -413,6 +423,15 @@ def relevant_schema():
                 'fallback_recommended': retrieval['fallback_recommended'],
                 **_skill_context_audit_details(resolution),
             },
+        )
+        # Best-effort fallback capture: if select-skills was skipped for this
+        # question (e.g. a host that goes straight to schema retrieval), this
+        # is the only broker call that still carries the raw question.
+        # record_mcp_question dedupes against an equal question already
+        # recorded for this OAuth session a few minutes ago.
+        record_mcp_question(
+            question=body.get('question'), oauth_session=oauth_session, grant=grant,
+            source_tool='relevant_schema',
         )
         db.session.commit()
         return jsonify(result), 200, {'Cache-Control': 'no-store', 'Pragma': 'no-cache'}

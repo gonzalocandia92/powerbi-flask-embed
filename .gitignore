@@ -9,6 +9,7 @@ __pycache__/
 
 # Virtual environment folder (aunque usas Docker, por las dudas)
 .venv/
+.venv-klara/
 .env/
 venv/
 
@@ -54,3 +55,9 @@ agent_core_debug.txt
 # MCP build artifacts
 services/mcp_aklara/lib/
 Microsoft.AnalysisServices*.zip
+# Local Pi runtime state
+.atl/
+
+# Database backups (contain production data)
+backups/
+*.dump

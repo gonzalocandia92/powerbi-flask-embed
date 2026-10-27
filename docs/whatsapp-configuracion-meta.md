@@ -114,6 +114,14 @@ META_WA_APP_SECRET=abc123...
 META_WA_TEST_MODE=true   # true en local, false en producción
 ```
 
+> **`META_WA_APP_SECRET` es obligatorio.** El webhook rechaza (403) todo POST cuando no está definido,
+> porque el número remitente decide a qué reportes de qué empresa se accede y sin la firma
+> `X-Hub-Signature-256` cualquiera podría suplantarlo. Solo para desarrollo local se puede aceptar
+> tráfico sin firmar con `META_WA_ALLOW_UNSIGNED=true` (no usar en producción).
+>
+> Cada conversación queda atada al número que la inició y a un único reporte: al cambiar de tablero
+> con `menu`/`cambiar` se descarta la conversación anterior y se abre una nueva.
+
 ---
 
 ## Checklist de verificación

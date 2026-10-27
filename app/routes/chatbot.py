@@ -4,22 +4,63 @@ Chatbot endpoint accessible from public report pages without authentication.
 Contract:
     POST /chat
     Body:  { "message"|"pregunta": "...", "slug": "...", "conversation_id"|"session_id": 123 }
-    200:   { "answer": "...", "conversation_id": 123, "report_id": 1, "tool_rounds": 1 }
+    200:   { "answer": "...", "conversation_id": 123, "diagnostic_id": "opaque", "tool_rounds": 1 }
     400:   { "error": "..." }
     404:   { "error": "..." }
-    500:   { "error": "..." }
+    403/503: { "error": "...", "code": "chatbot_disabled"|"chatbot_unavailable" }
+    500:   { "error": "..." }   (no internal details; "diagnostic_id" when recorded)
 """
 import logging
 from datetime import datetime, timezone
 
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, current_app, g, jsonify, request
+from flask_login import current_user
 
 from app import db
-from app.models import ChatMessage, ChatSession
-from app.services import chatbot_service
-from app.utils.chatbot_context import get_all_active_reports, get_workspace_info
+from app.models import ChatMessage, ChatSession, PublicLink
+from app.services import ai_billing, chatbot_service, model_catalog, session_owner
+from app.services.report_access import (
+    access_denied_json,
+    active_link_report,
+    has_backoffice_access,
+    is_staff_actor,
+    user_can_view_report,
+)
+from app.utils.chatbot_context import (
+    DatasetResolutionError,
+    get_all_active_reports,
+    get_workspace_info,
+)
 
 bp = Blueprint("chatbot", __name__)
+
+
+@bp.after_request
+def _attach_owner_cookie(response):
+    """Set the signed visitor cookie issued while handling /chat (if any)."""
+    return session_owner.attach_owner_cookie(response, g.get("klara_owner_cookie"))
+
+
+def _slug_access_error(slug):
+    """Error response when `slug` belongs to a report that requires a login the caller lacks."""
+    try:
+        report = active_link_report(slug)
+        if report is None or user_can_view_report(current_user, report):
+            return None
+        return access_denied_json(current_user)
+    except Exception:
+        return None
+
+
+def _backoffice_required():
+    """Error response unless the caller is a logged-in backoffice user.
+
+    Chat transcripts, report inventories and Power BI identifiers are internal
+    data: they are never exposed to anonymous or merely authenticated callers.
+    """
+    if has_backoffice_access(current_user):
+        return None
+    return access_denied_json(current_user)
 
 
 @bp.route("/chat", methods=["POST"])
@@ -36,16 +77,32 @@ async def chat():
     if not slug:
         return jsonify({"error": "slug is required"}), 400
 
+    denied = _slug_access_error(slug)
+    if denied is not None:
+        return denied
+
     conversation_id = data.get("conversation_id") or data.get("session_id")
     conversation_id_value = str(conversation_id).strip() if conversation_id is not None else None
     if not conversation_id_value:
         conversation_id_value = None
 
     reset_history = bool(data.get("reset_history", False))
+    model_key = (data.get("model_key") or "").strip() or None
 
     client_ip = request.headers.get("X-Forwarded-For") or request.remote_addr or "unknown"
     client_ip = client_ip.split(",")[0].strip()
     user_key = f"public:{client_ip}"
+
+    # The conversation is bound to who started it (signed visitor cookie or
+    # logged-in user). The cookie is issued on the first turn of a visitor.
+    owner_hash, g.klara_owner_cookie = session_owner.resolve_web_owner(current_user)
+
+    def _error(body, status, exc=None):
+        # ``diagnostic_id`` is an opaque handle for support; it carries no identity.
+        diagnostic_id = getattr(exc, "diagnostic_id", None)
+        if diagnostic_id:
+            body = {**body, "diagnostic_id": diagnostic_id}
+        return jsonify(body), status
 
     try:
         resultado = await chatbot_service.procesar_interaccion_completa(
@@ -54,29 +111,82 @@ async def chat():
             user_key=user_key,
             conversation_id=conversation_id_value,
             reset_history=reset_history,
+            model_key=model_key,
+            is_staff=is_staff_actor(current_user),
+            owner_hash=owner_hash,
         )
     except chatbot_service.ChatbotNotFoundError as exc:
-        return jsonify({"error": str(exc)}), 404
+        return _error({"error": str(exc)}, 404, exc)
     except chatbot_service.ChatbotLimitExceededError as exc:
-        return jsonify({"error": str(exc)}), 403
-    except Exception as exc:
+        return _error({"error": str(exc)}, 403, exc)
+    except chatbot_service.ChatbotModelNotAllowedError as exc:
+        return _error({"error": str(exc), "code": "model_not_allowed"}, 400, exc)
+    except chatbot_service.ChatbotDisabledError as exc:
+        return _error({"error": str(exc), "code": "chatbot_disabled"}, 403, exc)
+    except chatbot_service.ChatbotUnavailableError as exc:
+        return _error({"error": str(exc), "code": "chatbot_unavailable"}, 503, exc)
+    except chatbot_service.ChatbotServiceError as exc:
+        # Internal details (SQL, identifiers, provider errors) stay in the log.
         logging.exception("[Chatbot] Failed to process /chat request")
-        return jsonify({"error": f"Error al procesar la consulta: {str(exc)}"}), 500
+        return _error({"error": "Error al procesar la consulta."}, 500, exc)
+    except Exception:
+        logging.exception("[Chatbot] Failed to process /chat request")
+        return jsonify({"error": "Error al procesar la consulta."}), 500
 
-    return jsonify(
-        {
-            "answer": resultado["answer"],
-            "conversation_id": resultado["conversation_id"],
-            "report_id": resultado["report_id"],
-            "tool_rounds": resultado.get("tool_rounds", 0),
-            "dax_query": resultado.get("dax_query"),
-        }
+    # The public answer never carries internal identifiers (report, dataset,
+    # workspace); the opaque diagnostic_id is the only handle for support.
+    payload = {
+        "answer": resultado["answer"],
+        "conversation_id": resultado["conversation_id"],
+        "tool_rounds": resultado.get("tool_rounds", 0),
+        "dax_query": resultado.get("dax_query"),
+    }
+    if resultado.get("diagnostic_id"):
+        payload["diagnostic_id"] = resultado["diagnostic_id"]
+    for key in ("model_key", "provider", "actual_model"):
+        if resultado.get(key) is not None:
+            payload[key] = resultado[key]
+    return jsonify(payload)
+
+
+@bp.route("/api/chatbot/models", methods=["GET"])
+def chat_models():
+    """Return only evaluated models permitted for the report's effective scope."""
+    slug = (request.args.get("slug") or "").strip()
+    if not slug:
+        return jsonify({"error": "slug is required"}), 400
+    link = PublicLink.query.filter_by(custom_slug=slug, is_active=True).first()
+    if link is None:
+        return jsonify({"error": "Slug not found or inactive"}), 404
+    report = link.report
+    if not user_can_view_report(current_user, report):
+        return access_denied_json(current_user)
+    billing = ai_billing.resolve_report_billing_context(report)
+    models = model_catalog.available_client_models(
+        report_id=report.id, empresa_id=billing.empresa_id, config=dict(current_app.config)
     )
+    owner_hash, _unused_cookie = session_owner.resolve_web_owner(current_user)
+    selected_key = model_catalog.session_model_key(
+        request.args.get("conversation_id"), report_id=report.id, owner_hash=owner_hash
+    )
+    allowed_keys = {item["model_key"] for item in models}
+    if selected_key not in allowed_keys:
+        selected_key = next((item["model_key"] for item in models if item["is_default"]), None)
+        if selected_key is None and models:
+            selected_key = models[0]["model_key"]
+    return jsonify({"models": models, "selected_model_key": selected_key})
 
 
 @bp.route("/api/chatbot/context/<slug>", methods=["GET"])
 def report_context(slug):
-    info = get_workspace_info(slug)
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
+    try:
+        info = get_workspace_info(slug)
+    except DatasetResolutionError:
+        logging.exception("[Chatbot] Dataset could not be resolved for context request")
+        return jsonify({"error": "Dataset could not be resolved"}), 503
     if not info:
         return jsonify({"error": "Slug not found or inactive"}), 404
     return jsonify(info)
@@ -84,7 +194,43 @@ def report_context(slug):
 
 @bp.route("/api/chatbot/reports", methods=["GET"])
 def active_reports():
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
     return jsonify(get_all_active_reports())
+
+
+@bp.route("/api/chatbot/diagnostics/<diagnostic_id>", methods=["GET"])
+def diagnostic_lookup(diagnostic_id):
+    """Resolve the opaque ``diagnostic_id`` shown to a client to the recorded turn.
+
+    Backoffice only: it returns the effective identity (report, hashed dataset /
+    workspace / credential) that is deliberately never sent to the browser.
+    """
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
+    message = ChatMessage.query.filter_by(diagnostic_id=diagnostic_id).first()
+    if message is None:
+        return jsonify({"error": "Diagnostic not found"}), 404
+    session = message.session
+    return jsonify(
+        {
+            "diagnostic_id": message.diagnostic_id,
+            "message_id": message.id,
+            "session_id": message.session_id,
+            "session_slug": session.slug if session else None,
+            "session_report_id": session.report_id_fk if session else None,
+            "report_id": message.report_id_fk,
+            "dataset_hash": message.dataset_hash,
+            "workspace_hash": message.workspace_hash,
+            "credential_ref": message.credential_ref,
+            "dataset_source": message.dataset_source,
+            "trace_id": message.trace_id,
+            "had_error": message.had_error,
+            "created_at": message.created_at.isoformat() if message.created_at else None,
+        }
+    )
 
 
 @bp.route("/api/chatbot/test-agent", methods=["POST"])
@@ -201,6 +347,9 @@ def test_agent_log():
 
 @bp.route("/api/chatbot/sessions", methods=["GET"])
 def list_sessions():
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
     limit = min(int(request.args.get("limit", 50)), 200)
     slug = request.args.get("slug") or None
     q = ChatSession.query.order_by(ChatSession.created_at.desc())
@@ -217,6 +366,7 @@ def list_sessions():
                 "last_message_at": s.last_message_at.isoformat(),
                 "total_messages": s.total_messages,
                 "had_errors": s.had_errors,
+                "last_model_key": s.last_model_key,
             }
             for s in sessions
         ]
@@ -225,6 +375,9 @@ def list_sessions():
 
 @bp.route("/api/chatbot/sessions/<int:session_id>", methods=["GET"])
 def get_session(session_id):
+    denied = _backoffice_required()
+    if denied is not None:
+        return denied
     session = db.session.get(ChatSession, session_id)
     if not session:
         return jsonify({"error": "Session not found"}), 404
@@ -238,6 +391,7 @@ def get_session(session_id):
             "last_message_at": session.last_message_at.isoformat(),
             "total_messages": session.total_messages,
             "had_errors": session.had_errors,
+            "last_model_key": session.last_model_key,
             "messages": [
                 {
                     "id": m.id,
@@ -246,6 +400,13 @@ def get_session(session_id):
                     "created_at": m.created_at.isoformat(),
                     "latency_ms": m.latency_ms,
                     "model_used": m.model_used,
+                    "requested_model_key": m.requested_model_key,
+                    "model_key": m.model_key,
+                    "model_provider": m.model_provider,
+                    "physical_model": m.physical_model,
+                    "model_gateway": m.model_gateway,
+                    "service_tier": m.service_tier,
+                    "actual_model": m.actual_model,
                     "input_tokens": m.input_tokens,
                     "output_tokens": m.output_tokens,
                     "mcp_used": m.mcp_used,

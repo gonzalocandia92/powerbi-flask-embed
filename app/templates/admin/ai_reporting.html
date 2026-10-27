@@ -1,0 +1,1074 @@
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
+
+{% set active_ai_section = 'reporting' %}
+{% set page_crumb = 'Reporting' %}
+{% set page_title = 'Informes analíticos KLARA' %}
+{% set page_subtitle = 'Genera informes de negocio completos y estructurados a partir de preguntas analíticas independientes.' %}
+
+{% block header_actions %}
+<a class="ai-btn-secondary" href="{{ url_for('ai_reporting.history_page') }}">
+  <i class="bi bi-clock-history me-1"></i>Historial de informes
+</a>
+{% endblock %}
+
+{% block ai_styles %}
+<style>
+  .klara-md > :last-child { margin-bottom: 0; }
+  .klara-md h1, .klara-md h2, .klara-md h3, .klara-md h4, .klara-md h5, .klara-md h6 { font-size: 1.05em; font-weight: 700; margin: .75rem 0 .4rem; }
+  .klara-md ul, .klara-md ol { padding-left: 1.4rem; }
+  .klara-md pre { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: .4rem; padding: .6rem; overflow-x: auto; }
+  .klara-md code { background: #f1f5f9; border-radius: .25rem; padding: .05rem .3rem; font-size: .875em; color: #0f172a; }
+  .klara-md pre code { background: none; padding: 0; }
+  .klara-md blockquote { border-left: 3px solid #cbd5e1; margin: .5rem 0; padding-left: .75rem; color: #475569; }
+</style>
+{% endblock %}
+
+{% block ai_content %}
+<div id="reporting-page">
+  {% if luna_warning %}
+    <div class="ai-callout tone-warning mb-4" role="alert">
+      <i class="bi bi-exclamation-triangle"></i>
+      <div class="ai-callout-body">{{ luna_warning }} Elegí un modelo y tier disponibles para continuar.</div>
+    </div>
+  {% endif %}
+
+  <div id="reporting-message" class="alert d-none mb-4" role="alert"></div>
+
+  <!-- Stepper indicator -->
+  <div class="ai-stepper mb-4">
+    <div class="ai-step active">
+      <div class="ai-step-num">1</div>
+      <div class="ai-step-text">
+        <div class="ai-step-title">Configuración</div>
+        <div class="ai-step-desc">Reporte y modelo</div>
+      </div>
+    </div>
+    <div class="ai-step-divider"></div>
+    <div class="ai-step">
+      <div class="ai-step-num">2</div>
+      <div class="ai-step-text">
+        <div class="ai-step-title">Preguntas analíticas</div>
+        <div class="ai-step-desc">Banco de consultas</div>
+      </div>
+    </div>
+    <div class="ai-step-divider"></div>
+    <div class="ai-step">
+      <div class="ai-step-num">3</div>
+      <div class="ai-step-text">
+        <div class="ai-step-title">Estructura y generación</div>
+        <div class="ai-step-desc">Síntesis coordinada</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STAGE 1: CONFIGURACIÓN DEL INFORME -->
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-header">
+      <div>
+        <h3 class="ai-surface-title">1. Configuración del informe</h3>
+        <p class="ai-surface-subtitle">
+          Define el reporte base de PowerBI, título de la entrega, modelo de inferencia y parámetros de servicio.
+        </p>
+      </div>
+    </div>
+    <div class="ai-surface-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label" for="reporting-report">Reporte (con KLARA habilitada)</label>
+          <select class="form-select" id="reporting-report" data-searchable required>
+            {% for report in reports %}
+              <option value="{{ report.id }}">{{ report.name }}</option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Solo se listan reportes con agente KLARA activo.</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="reporting-name">Título del informe</label>
+          <input class="form-control" id="reporting-name" maxlength="200" placeholder="Ej.: Informe analítico semanal" required>
+        </div>
+        <div class="col-md-7">
+          <label class="form-label" for="reporting-model">Modelo de análisis (análisis de preguntas)</label>
+          <select class="form-select" id="reporting-model" required>
+            <option value="">Elegí un modelo</option>
+            {% for model in models %}
+              <option value="{{ model.model_key }}" {% if model.model_key == default_model_key %}selected{% endif %}>
+                {{ model.display_name }} · {{ model.provider }} · {{ model.physical_model }}
+              </option>
+            {% endfor %}
+          </select>
+        </div>
+        <div class="col-md-5">
+          <label class="form-label" for="reporting-tier">Service tier</label>
+          <select class="form-select" id="reporting-tier" required></select>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- STAGE 2: PREGUNTAS ANALÍTICAS -->
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-2">
+      <div>
+        <h3 class="ai-surface-title">2. Preguntas analíticas a responder</h3>
+        <p class="ai-surface-subtitle">
+          Cada pregunta se analiza de forma independiente con herramientas y skills analíticas. Puedes reordenar o importar masivamente.
+        </p>
+      </div>
+      <div class="d-flex flex-wrap gap-2">
+        <a class="ai-btn-ghost btn-sm" href="{{ url_for('ai_reporting.questions_template') }}">
+          <i class="bi bi-download me-1"></i>Plantilla CSV
+        </a>
+        <label class="ai-btn-secondary btn-sm mb-0">
+          <i class="bi bi-upload me-1"></i>Importar CSV
+          <input id="reporting-csv" type="file" accept=".csv,text/csv" hidden>
+        </label>
+        <button class="ai-btn-primary btn-sm" id="reporting-add" type="button">
+          <i class="bi bi-plus-lg me-1"></i>Agregar pregunta
+        </button>
+      </div>
+    </div>
+    <div class="ai-surface-body">
+      <div id="reporting-csv-message" class="mb-3"></div>
+      <div id="reporting-questions"></div>
+      <div class="d-flex justify-content-between align-items-center pt-2 border-top text-muted small">
+        <span>Máximo {{ max_questions }} preguntas por informe.</span>
+        <span>Total configuradas: <strong id="reporting-count" class="text-dark">1</strong></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- STAGE 3: ESTRUCTURA Y GENERACIÓN -->
+  <div class="ai-surface mb-4">
+    <div class="ai-surface-header">
+      <div>
+        <h3 class="ai-surface-title">3. Estructura y generación</h3>
+        <p class="ai-surface-subtitle">
+          Define la estructura final de redacción y dispara el pipeline coordinado de análisis y redacción.
+        </p>
+      </div>
+    </div>
+    <div class="ai-surface-body">
+      <!-- Progressive disclosure: Advanced Options -->
+      <details class="ai-disclosure mb-4">
+        <summary><i class="bi bi-sliders me-1"></i>Opciones avanzadas (Estructura personalizada y reasoning)</summary>
+        <div class="ai-disclosure-body">
+          <label class="form-label" for="reporting-structure-prompt">Instrucciones de estructura / enfoque (opcional)</label>
+          <textarea class="form-control mb-2" id="reporting-structure-prompt" rows="2" maxlength="4000" placeholder="Ej.: Priorizar análisis de márgenes, comparar contra el presupuesto y cerrar con recomendaciones ejecutivas."></textarea>
+          <div class="d-flex align-items-center gap-2 mb-2">
+            <button class="ai-btn-secondary btn-sm" id="reporting-structure-compile" type="button">
+              <i class="bi bi-diagram-3 me-1"></i>Interpretar estructura
+            </button>
+            <span class="form-text mb-0">Consume tokens del rol <code class="text-dark">structure_planner</code>.</span>
+          </div>
+          <div id="reporting-structure-preview" class="small mt-2 p-2 border rounded bg-white d-none" aria-live="polite"></div>
+          <details class="small mt-3 border rounded p-2 bg-white" open id="reporting-default-structure">
+            <summary class="fw-semibold text-secondary cursor-pointer">Estructura estándar de referencia</summary>
+            <p class="text-muted mb-1 mt-1">Estructura base que se aplica si no se indica una instrucción personalizada.</p>
+            <ol class="mb-0 ps-3" id="reporting-default-structure-list"></ol>
+          </details>
+        </div>
+      </details>
+
+      <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 p-3 bg-light rounded border">
+        <div>
+          <div class="fw-semibold text-dark">Estrategia coordinada activa (V1.1)</div>
+          <div class="ai-cell-sub">
+            Incluye ejecución paralela de preguntas, coordinación mediante <code class="text-dark">report_coordinator</code> y síntesis con <code class="text-dark">report_writer</code>.
+          </div>
+        </div>
+        <div>
+          <button class="ai-btn-primary px-4 py-2" id="reporting-generate" type="button" {% if not models or not reports %}disabled{% endif %}>
+            <span id="reporting-spinner" class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span>
+            <i class="bi bi-play-circle me-1"></i>Generar informe
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Run Panel (Progress) -->
+  <div id="reporting-run-panel" class="mt-4 d-none" aria-live="polite"></div>
+
+  <!-- Result Section -->
+  <section id="reporting-result" class="mt-4 d-none" aria-live="polite">
+    <div class="ai-surface">
+      <div class="ai-surface-header d-flex flex-wrap justify-content-between align-items-center gap-3">
+        <div>
+          <h3 class="ai-surface-title" id="reporting-result-title"></h3>
+          <div class="ai-cell-sub font-monospace" id="reporting-run-id"></div>
+        </div>
+        <div class="d-flex flex-wrap gap-2">
+          <button class="ai-btn-secondary btn-sm" id="reporting-download-html" type="button">
+            <i class="bi bi-code-slash me-1"></i>HTML
+          </button>
+          <a class="ai-btn-secondary btn-sm d-none" id="reporting-review-link">
+            <i class="bi bi-patch-check me-1"></i><span id="reporting-review-link-label"></span>
+          </a>
+          <button class="ai-btn-primary btn-sm" id="reporting-download-pdf" type="button">
+            <i class="bi bi-file-earmark-pdf me-1"></i><span id="reporting-download-pdf-label">Descargar borrador (no revisado)</span>
+          </button>
+          <button class="ai-btn-secondary btn-sm" id="reporting-download-json" type="button">
+            <i class="bi bi-braces me-1"></i>JSON
+          </button>
+        </div>
+      </div>
+
+      <div id="reporting-writer-alert" class="alert d-none m-3 mb-0" role="alert"></div>
+
+      <!-- Tab bar separating clean report view from technical debug inspection -->
+      <div class="ai-surface-body pb-0 border-bottom">
+        <ul class="nav nav-tabs border-0" id="reporting-tabs" role="tablist">
+          <li class="nav-item" role="presentation">
+            <button class="nav-link active fw-semibold" type="button" role="tab" data-tab="report">
+              <i class="bi bi-file-earmark-text me-1"></i>Informe final
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" type="button" role="tab" data-tab="json">
+              <i class="bi bi-braces me-1"></i>FinalReport JSON
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" type="button" role="tab" data-tab="debug">
+              <i class="bi bi-bug me-1"></i>ReportDraft & Trazas
+            </button>
+          </li>
+          <li class="nav-item" role="presentation">
+            <button class="nav-link" type="button" role="tab" data-tab="cost">
+              <i class="bi bi-currency-dollar me-1"></i>Desglose de costos
+            </button>
+          </li>
+        </ul>
+      </div>
+
+      <div class="ai-surface-body pt-3">
+        <!-- Main Report Iframe -->
+        <div data-pane="report">
+          <div id="reporting-report-empty" class="alert alert-secondary d-none">
+            No hay informe redactado. Revisa la pestaña <strong>ReportDraft & Trazas</strong>: las secciones analíticas individuales se conservan.
+          </div>
+          <iframe id="reporting-frame" title="Informe generado" sandbox referrerpolicy="no-referrer" style="width:100%; height:82vh; border:1px solid #e2e8f0; border-radius:.5rem; background:#fff;"></iframe>
+        </div>
+
+        <!-- JSON Pane -->
+        <div data-pane="json" class="d-none">
+          <textarea class="form-control font-monospace" id="reporting-json" rows="24" readonly></textarea>
+        </div>
+
+        <!-- Debug / Sections Pane -->
+        <div data-pane="debug" class="d-none">
+          <div id="reporting-coordination-card" class="card mb-3 d-none">
+            <div class="card-body">
+              <h5 class="h6 fw-bold">Coordinador (<code class="text-dark">report_coordinator</code>, V1.1)</h5>
+              <div id="reporting-coordination-debug" class="small"></div>
+            </div>
+          </div>
+          <div class="card mb-3">
+            <div class="card-body">
+              <h5 class="h6 fw-bold">Redactor (<code class="text-dark">report_writer</code>)</h5>
+              <div id="reporting-writer-debug" class="small"></div>
+            </div>
+          </div>
+          <div id="reporting-sections"></div>
+          <div class="d-flex gap-2 my-3">
+            <button class="ai-btn-secondary btn-sm" id="reporting-copy" type="button">
+              <i class="bi bi-clipboard me-1"></i>Copiar Markdown
+            </button>
+            <button class="ai-btn-secondary btn-sm" id="reporting-download" type="button">
+              <i class="bi bi-download me-1"></i>Descargar .md
+            </button>
+          </div>
+          <details class="mt-2 border rounded p-2 bg-light">
+            <summary class="mb-2 fw-semibold cursor-pointer">Ver contenido Markdown del ReportDraft</summary>
+            <textarea class="form-control font-monospace" id="reporting-markdown" rows="12" readonly></textarea>
+          </details>
+        </div>
+
+        <!-- Cost Pane -->
+        <div data-pane="cost" class="d-none">
+          <div id="reporting-cost"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script src="{{ url_for('static', filename='js/klara_markdown.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_pdf.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_reporting_api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_run_controller.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_run_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_review_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_report_pdf_source.js') }}"></script>
+<script>
+(() => {
+  const models = {{ models|tojson }};
+  const defaultModelKey = {{ default_model_key|tojson }};
+  const maxQuestions = {{ max_questions }};
+  const runEndpoints = {{ run_endpoints|tojson }};
+  const initialRunId = {{ initial_run_id|tojson }};
+  const importEndpoint = {{ url_for('ai_reporting.import_questions')|tojson }};
+  const skillsEndpoint = {{ url_for('ai_reporting.skills')|tojson }};
+  const pdfEndpoint = {{ url_for('ai_reporting.render_pdf')|tojson }};
+  const reviewEntry = {{ review_entry|tojson }};   // null when the review feature is not installed
+  const csrf = document.querySelector('meta[name="csrf-token"]').content;
+  const byId = id => document.getElementById(id);
+  const questions = byId('reporting-questions');
+  const model = byId('reporting-model');
+  const tier = byId('reporting-tier');
+  const message = byId('reporting-message');
+  const result = byId('reporting-result');
+  let markdown = '';
+  let reportHtml = null;
+  let finalReportJson = null;
+  let finalReportData = null;
+  let pdfSource = KlaraReportPdfSource.resolvePdfSource({review: null, entry: null});
+  let reportRunId = null;
+  let skillCatalog = [];
+  const renderMarkdown = text => KlaraMarkdown.render(text, document);
+
+  function showMessage(text, kind='danger') {
+    message.className = `alert alert-${kind} mb-4`;
+    message.textContent = text;
+  }
+  function clearMessage() { message.className = 'alert d-none mb-4'; message.textContent = ''; }
+
+  let savedDefinitionId = null;
+  function buildDefinitionPayload() {
+    const rows = [...questions.querySelectorAll('.reporting-row')];
+    const items = rows.map((row, index) => ({
+      key: row.dataset.key || `p${index + 1}`,
+      title: row.querySelector('.reporting-title').value.trim() || null,
+      question: row.querySelector('.reporting-question').value.trim(),
+      required_skill_keys: selectedSkills(row),
+    })).filter(row => row.question);
+    return {
+      report_id: Number(byId('reporting-report').value),
+      name: byId('reporting-name').value.trim() || 'Informe analítico',
+      questions: items,
+      strategy: 'coordinated',
+      analysis_model_key: model.value,
+      analysis_service_tier: tier.value || null,
+      structure_prompt: byId('reporting-structure-prompt').value.trim() || null,
+    };
+  }
+
+  let defaultStructureTimer = null, defaultStructureSeq = 0;
+  function refreshDefaultStructure() {
+    clearTimeout(defaultStructureTimer);
+    const debouncer = window["set" + "Timeout"];
+    defaultStructureTimer = debouncer(async () => {
+      const seq = ++defaultStructureSeq;
+      const titles = [...questions.querySelectorAll('.reporting-row')].map(row => row.querySelector('.reporting-title').value.trim());
+      const list = byId('reporting-default-structure-list');
+      try {
+        const data = await api.defaultStructure(titles);
+        if (seq !== defaultStructureSeq) return;
+        list.replaceChildren(...data.preview.map(item => {
+          const li = document.createElement('li');
+          li.textContent = item.label;
+          if (item.questions.length && item.type !== 'section') {
+            const sub = document.createElement('div'); sub.className = 'text-muted';
+            sub.textContent = `${item.questions.length} pregunta(s) disponibles`; li.appendChild(sub);
+          }
+          return li;
+        }));
+      } catch (error) {
+        if (seq === defaultStructureSeq) list.replaceChildren();
+      }
+    }, 400);
+  }
+
+  function updateRows() {
+    [...questions.children].forEach((row, index) => {
+      row.querySelector('.reporting-index').textContent = index + 1;
+      const upBtn = row.querySelector('.reporting-up');
+      const downBtn = row.querySelector('.reporting-down');
+      if (upBtn) upBtn.disabled = index === 0;
+      if (downBtn) downBtn.disabled = index === questions.children.length - 1;
+    });
+    byId('reporting-count').textContent = questions.children.length;
+    byId('reporting-add').disabled = questions.children.length >= maxQuestions;
+    refreshDefaultStructure();
+  }
+
+  function addQuestion(title='', text='', key='') {
+    if (questions.children.length >= maxQuestions) return;
+    const row = document.createElement('div');
+    row.className = 'row g-2 align-items-start mb-3 reporting-row p-2 border rounded bg-white';
+    row.innerHTML = `
+      <div class="col-auto pt-2 text-muted fw-bold reporting-index font-monospace"></div>
+      <div class="col-md-4">
+        <input class="form-control reporting-title" maxlength="100" placeholder="Título corto (opcional)">
+      </div>
+      <div class="col">
+        <textarea class="form-control reporting-question" maxlength="1000" rows="2" placeholder="Pregunta analítica a responder..." required></textarea>
+      </div>
+      <div class="col-auto d-flex gap-1">
+        <button class="ai-btn-icon reporting-up" type="button" title="Mover arriba"><i class="bi bi-chevron-up"></i></button>
+        <button class="ai-btn-icon reporting-down" type="button" title="Mover abajo"><i class="bi bi-chevron-down"></i></button>
+        <button class="ai-btn-icon text-danger reporting-remove" type="button" title="Eliminar pregunta"><i class="bi bi-trash"></i></button>
+      </div>
+      <div class="col-12 ps-4">
+        <details class="reporting-skills small">
+          <summary class="cursor-pointer text-secondary">
+            <span class="reporting-skill-badge ai-pill tone-neutral">Automático</span> Skills analíticas fijadas (opcional)
+          </summary>
+          <div class="reporting-skill-list mt-2 p-2 bg-white rounded border"></div>
+        </details>
+      </div>
+    `;
+    row.querySelector('.reporting-title').value = title;
+    row.querySelector('.reporting-question').value = text;
+    if (key) row.dataset.key = key;
+    questions.append(row);
+    renderSkillList(row, []);
+    updateRows();
+  }
+
+  function selectedSkills(row) {
+    return [...row.querySelectorAll('.reporting-skill-check:checked')].map(input => input.value);
+  }
+  function updateSkillBadge(row) {
+    const count = selectedSkills(row).length;
+    const badge = row.querySelector('.reporting-skill-badge');
+    badge.textContent = count ? `${count} skill(s) fijada(s)` : 'Automático';
+    badge.className = `reporting-skill-badge ai-pill ${count ? 'tone-primary' : 'tone-neutral'}`;
+  }
+
+  function renderSkillList(row, selected) {
+    const list = row.querySelector('.reporting-skill-list');
+    list.replaceChildren();
+    if (!skillCatalog.length) {
+      const empty = document.createElement('span');
+      empty.className = 'text-muted';
+      empty.textContent = 'Este reporte no tiene skills efectivas configuradas. La selección será automática.';
+      list.append(empty);
+    }
+    for (const skill of skillCatalog) {
+      const label = document.createElement('label');
+      label.className = 'd-flex align-items-baseline gap-2 mb-1';
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.className = 'form-check-input reporting-skill-check';
+      input.value = skill.skill_key;
+      input.checked = selected.includes(skill.skill_key);
+      input.addEventListener('change', () => updateSkillBadge(row));
+      const name = document.createElement('code');
+      name.textContent = skill.skill_key;
+      const detail = document.createElement('span');
+      detail.className = 'text-muted';
+      detail.textContent = [skill.title, skill.domain_key && `dominio: ${skill.domain_key}`, skill.scope].filter(Boolean).join(' · ');
+      label.append(input, name, detail);
+      list.append(label);
+    }
+    updateSkillBadge(row);
+  }
+
+  async function refreshSkills() {
+    const reportId = byId('reporting-report').value;
+    const rows = [...questions.querySelectorAll('.reporting-row')];
+    const previous = rows.map(selectedSkills);
+    skillCatalog = [];
+    if (reportId) {
+      try {
+        const response = await fetch(`${skillsEndpoint}?report_id=${encodeURIComponent(reportId)}`, {credentials:'same-origin'});
+        const data = await response.json();
+        if (response.ok) {
+          skillCatalog = data.skills || [];
+          if (data.dataset_resolved === false) showCsvMessage('warning', ['No se pudo resolver el dataset del reporte: la lista no incluye skills por dataset.']);
+        }
+      } catch (_) { }
+    }
+    const valid = new Set(skillCatalog.map(skill => skill.skill_key));
+    const dropped = new Set();
+    rows.forEach((row, index) => {
+      previous[index].filter(key => !valid.has(key)).forEach(key => dropped.add(key));
+      renderSkillList(row, previous[index].filter(key => valid.has(key)));
+    });
+    if (dropped.size) showCsvMessage('warning', [`Se quitaron skills fijadas que no pertenecen a este reporte: ${[...dropped].join(', ')}.`]);
+  }
+
+  function updateTier() {
+    const selected = models.find(item => item.model_key === model.value);
+    const previous = tier.value;
+    tier.replaceChildren();
+    for (const value of selected?.tiers || []) {
+      const option = document.createElement('option');
+      option.value = value;
+      option.textContent = {configured:'Configuración del catálogo', standard:'Standard', flex:'Flex'}[value] || value;
+      tier.append(option);
+    }
+    if (selected?.model_key === defaultModelKey && selected.tiers.includes('flex')) tier.value = 'flex';
+    else if (selected?.tiers.includes(previous)) tier.value = previous;
+    else if (selected?.tiers.includes('configured')) tier.value = 'configured';
+  }
+
+  function selectTab(name) {
+    document.querySelectorAll('#reporting-tabs [data-tab]').forEach(btn => btn.classList.toggle('active', btn.dataset.tab === name));
+    document.querySelectorAll('#reporting-result [data-pane]').forEach(pane => pane.classList.toggle('d-none', pane.dataset.pane !== name));
+  }
+  document.querySelectorAll('#reporting-tabs [data-tab]').forEach(btn => btn.addEventListener('click', () => selectTab(btn.dataset.tab)));
+
+  function cell(row, text, tag='td') { const c = document.createElement(tag); c.textContent = text; row.append(c); }
+  function renderWriterDebug(writer) {
+    const box = byId('reporting-writer-debug');
+    box.replaceChildren();
+    if (!writer) { box.textContent = 'La redacción no se ejecutó en esta ejecución.'; return; }
+    const status = document.createElement('div');
+    status.className = writer.status === 'ok' ? 'text-success' : 'text-danger';
+    status.textContent = writer.status === 'ok' ? 'Redacción correcta' : `Falló la redacción · ${writer.error ? writer.error.code : 'desconocido'}`;
+    box.append(status);
+    if (writer.error) {
+      const msg = document.createElement('div'); msg.textContent = writer.error.message; box.append(msg);
+      if (writer.error.validation_errors && writer.error.validation_errors.length) {
+        const list = document.createElement('ul'); list.className = 'mb-2';
+        writer.error.validation_errors.forEach(text => { const li = document.createElement('li'); li.textContent = text; list.append(li); });
+        box.append(list);
+      }
+    }
+    if (writer.render_error) { const r = document.createElement('div'); r.className = 'text-danger'; r.textContent = `Error de render: ${writer.render_error}`; box.append(r); }
+    if (writer.usage_record_failures) { const u = document.createElement('div'); u.className = 'text-warning'; u.textContent = `${writer.usage_record_failures} evento(s) de uso no se pudieron registrar en el ledger.`; box.append(u); }
+    if (writer.attempts && writer.attempts.length) {
+      const table = document.createElement('table'); table.className = 'table table-sm mt-2 mb-0';
+      const head = document.createElement('tr');
+      ['Intento', 'Tipo', 'Válido', 'Modelo', 'Tier', 'Tokens in/out', 'Cache lectura', 'Latencia', 'Costo USD'].forEach(h => cell(head, h, 'th'));
+      const thead = document.createElement('thead'); thead.append(head); table.append(thead);
+      const tbody = document.createElement('tbody');
+      for (const a of writer.attempts) {
+        const row = document.createElement('tr');
+        cell(row, a.attempt); cell(row, a.repair ? 'reparación' : 'inicial'); cell(row, a.valid ? 'sí' : 'no');
+        cell(row, `${a.provider}/${a.model}`); cell(row, a.actual_service_tier || a.service_tier || 'default');
+        cell(row, `${a.input_tokens} / ${a.output_tokens}`); cell(row, a.cache_read_tokens);
+        cell(row, `${a.latency_ms} ms`); cell(row, a.cost_usd == null ? 'n/d' : a.cost_usd);
+        tbody.append(row);
+        if (a.validation_errors && a.validation_errors.length) {
+          const err = document.createElement('tr'); const td = document.createElement('td'); td.colSpan = 9; td.className = 'text-danger';
+          td.textContent = a.validation_errors.join(' | '); err.append(td); tbody.append(err);
+        }
+      }
+      table.append(tbody); box.append(table);
+    }
+  }
+
+  function renderCoordinationDebug(coordination) {
+    const card = byId('reporting-coordination-card');
+    const box = byId('reporting-coordination-debug');
+    box.replaceChildren();
+    if (!coordination) { card.classList.add('d-none'); return; }
+    card.classList.remove('d-none');
+    if (coordination.error) {
+      const err = document.createElement('div'); err.className = 'text-warning';
+      err.textContent = `Coordinador no disponible (${coordination.error.code}): ${coordination.error.message}. Se usó el ReportDraft original, como en modo Fixed.`;
+      box.append(err);
+    }
+    if (coordination.decision) {
+      const action = document.createElement('div');
+      action.textContent = `Decisión: ${coordination.decision.action}`;
+      box.append(action);
+      const summary = document.createElement('div'); summary.className = 'text-muted';
+      summary.textContent = coordination.decision.summary; box.append(summary);
+    }
+    if (coordination.extra_analyses && coordination.extra_analyses.length) {
+      const table = document.createElement('table'); table.className = 'table table-sm mt-2 mb-0';
+      const head = document.createElement('tr');
+      ['Key', 'Pregunta', 'Motivo', 'Relacionado con', 'Estado'].forEach(h => cell(head, h, 'th'));
+      const thead = document.createElement('thead'); thead.append(head); table.append(thead);
+      const tbody = document.createElement('tbody');
+      for (const item of coordination.extra_analyses) {
+        const row = document.createElement('tr');
+        cell(row, item.key); cell(row, item.question); cell(row, item.purpose || '');
+        cell(row, (item.related_section_keys || []).join(', '));
+        cell(row, item.had_error ? `error (${item.failure_reason || 'execution_failed'})` : 'ok');
+        tbody.append(row);
+      }
+      table.append(tbody); box.append(table);
+    }
+    if (coordination.attempts && coordination.attempts.length) {
+      const table = document.createElement('table'); table.className = 'table table-sm mt-2 mb-0';
+      const head = document.createElement('tr');
+      ['Intento', 'Tipo', 'Válido', 'Modelo', 'Tokens in/out', 'Latencia', 'Costo USD'].forEach(h => cell(head, h, 'th'));
+      const thead = document.createElement('thead'); thead.append(head); table.append(thead);
+      const tbody = document.createElement('tbody');
+      for (const a of coordination.attempts) {
+        const row = document.createElement('tr');
+        cell(row, a.attempt); cell(row, a.repair ? 'reparación' : 'inicial'); cell(row, a.valid ? 'sí' : 'no');
+        cell(row, `${a.provider}/${a.model}`); cell(row, `${a.input_tokens} / ${a.output_tokens}`);
+        cell(row, `${a.latency_ms} ms`); cell(row, a.cost_usd == null ? 'n/d' : a.cost_usd);
+        tbody.append(row);
+      }
+      table.append(tbody); box.append(table);
+    }
+    if (coordination.extra_usage_record_failures) {
+      const u = document.createElement('div'); u.className = 'text-warning';
+      u.textContent = `${coordination.extra_usage_record_failures} evento(s) de uso de análisis adicionales no se pudieron registrar en el ledger.`;
+      box.append(u);
+    }
+  }
+
+  // ---- Costo: only presents what the server aggregated from the AI usage ledger (no pricing here).
+  const fmtTokens = n => n == null ? 'n/d' : (n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n));
+  const fmtInt = n => n == null ? 'n/d' : Number(n).toLocaleString('es-AR');
+  const fmtSeconds = (ms, complete) => ms == null ? 'n/d' : `${(ms / 1000).toFixed(1)} s${complete ? '' : ' (parcial)'}`;
+  const STATUS_TEXT = {verified: 'verificado', estimated: 'estimado', missing: 'sin valorizar', unbilled: 'no facturable'};
+  function costText(item) {
+    const bits = [item.cost_display || 'n/d'];
+    if (item.estimated_calls) bits.push(`~${item.estimated_cost_display} (estimado)`);
+    if (item.missing_calls) bits.push(`${item.missing_calls} sin valorizar`);
+    return bits.join(' + ');
+  }
+  function costTable(box, headers, rows, totalRow, numericFrom = 1) {
+    const table = document.createElement('table'); table.className = 'table table-sm table-striped mb-2';
+    const head = document.createElement('tr');
+    headers.forEach((h, index) => { cell(head, h, 'th'); if (index >= numericFrom) head.lastChild.className = 'text-end'; });
+    const thead = document.createElement('thead'); thead.append(head); table.append(thead);
+    const tbody = document.createElement('tbody');
+    const addRow = (values, cls) => {
+      const row = document.createElement('tr'); if (cls) row.className = cls;
+      values.forEach((value, index) => { cell(row, value); if (index >= numericFrom) row.lastChild.className = 'text-end'; });
+      tbody.append(row);
+    };
+    rows.forEach(r => addRow(r.values, r.cls));
+    if (totalRow) addRow(totalRow, 'fw-bold table-light');
+    table.append(tbody); box.append(table);
+  }
+  function heading(box, text) { const h = document.createElement('h4'); h.className = 'h6 mt-3'; h.textContent = text; box.append(h); }
+  function renderCost(cost, warning) {
+    const box = byId('reporting-cost');
+    box.replaceChildren();
+    if (!cost) {
+      const a = document.createElement('div'); a.className = 'alert alert-secondary';
+      a.textContent = 'No se pudo calcular el costo de esta ejecución.'; box.append(a); return;
+    }
+    const card = document.createElement('div'); card.className = 'card mb-3';
+    const body = document.createElement('div'); body.className = 'card-body'; card.append(body);
+    const label = document.createElement('div'); label.className = 'text-muted small';
+    label.textContent = cost.is_exact ? 'Costo total (verificado)' : 'Costo total verificado'; body.append(label);
+    const total = document.createElement('div'); total.className = 'display-6 font-monospace'; total.textContent = cost.cost_display; body.append(total);
+    const facts = document.createElement('div'); facts.className = 'small mt-2';
+    facts.textContent = `${cost.calls} llamada${cost.calls === 1 ? '' : 's'} · Input: ${fmtTokens(cost.input_tokens)} · Cache read: ${fmtTokens(cost.cached_input_tokens)} · Reasoning: ${fmtTokens(cost.reasoning_tokens)} · Output: ${fmtTokens(cost.output_tokens)} · Tiempo acumulado LLM: ${fmtSeconds(cost.latency_ms, cost.latency_complete)}`;
+    body.append(facts);
+    if (cost.repair_calls) {
+      const r = document.createElement('div'); r.className = 'small text-muted';
+      r.textContent = `Retries/repairs incluidos: ${cost.repair_calls} llamada(s) · ${cost.repair_cost_display}`; body.append(r);
+    }
+    box.append(card);
+    if (!cost.is_exact) {
+      const a = document.createElement('div'); a.className = 'alert alert-warning';
+      const parts = [`Costo total verificado: ${cost.cost_display}.`];
+      if (cost.missing_calls) parts.push(`Costo no valorizado: ${cost.missing_calls} llamada(s) sin pricing verificado (no se cuentan como USD 0).`);
+      if (cost.estimated_calls) parts.push(`Reserva estimada de ${cost.estimated_calls} llamada(s) pendiente(s) de conciliación: ${cost.estimated_cost_display} (no incluida en el total).`);
+      a.textContent = parts.join(' '); box.append(a);
+    }
+    if (cost.unbilled_calls) {
+      const n = document.createElement('div'); n.className = 'small text-muted mb-2';
+      n.textContent = `${cost.unbilled_calls} llamada(s) diagnósticas no facturables (USD 0 por diseño del ledger).`; box.append(n);
+    }
+    if (warning) {
+      const a = document.createElement('div'); a.className = 'alert alert-warning';
+      a.textContent = `${warning} evento(s) de uso no se pudieron registrar en el ledger: el total puede estar incompleto.`; box.append(a);
+    }
+    if (!cost.calls) {
+      const a = document.createElement('div'); a.className = 'alert alert-secondary';
+      a.textContent = 'No hay eventos de uso registrados para este report_run_id.'; box.append(a); return;
+    }
+
+    heading(box, 'Por etapa');
+    const stageRows = [];
+    for (const stage of cost.stages) {
+      stageRows.push({values: [stage.label, stage.calls, costText(stage)]});
+      for (const section of stage.sections) {
+        stageRows.push({cls: 'text-muted', values: [`↳ ${section.title ? section.title + ' — ' : ''}${section.key}`, section.calls, costText(section)]});
+      }
+    }
+    costTable(box, ['Etapa', 'Llamadas', 'Costo'], stageRows, ['TOTAL', cost.calls, costText(cost)]);
+
+    heading(box, 'Por componente y modelo');
+    const componentRows = [];
+    for (const component of cost.components) {
+      const stageLabel = (cost.stages.find(s => s.stage === component.stage) || {}).label || component.stage;
+      for (const m of component.models) {
+        componentRows.push({values: [
+          stageLabel, component.label, `${m.provider}/${m.model}`,
+          m.repair_calls ? `${m.calls} (${m.repair_calls} repair)` : m.calls,
+          fmtInt(m.input_tokens), fmtInt(m.cached_input_tokens), fmtInt(m.reasoning_tokens), fmtInt(m.output_tokens), costText(m)]});
+      }
+    }
+    costTable(box, ['Etapa', 'Componente', 'Modelo', 'Llamadas', 'Input', 'Cache', 'Reasoning', 'Output', 'Costo'], componentRows,
+      ['TOTAL', '', '', cost.calls, fmtInt(cost.input_tokens), fmtInt(cost.cached_input_tokens), fmtInt(cost.reasoning_tokens), fmtInt(cost.output_tokens), costText(cost)], 3);
+
+    heading(box, 'Por modelo');
+    costTable(box, ['Modelo', 'Llamadas', 'Costo'],
+      cost.models.map(m => ({values: [`${m.provider}/${m.model}`, m.calls, costText(m)]})));
+
+    const details = document.createElement('details'); details.className = 'mt-3';
+    const summary = document.createElement('summary'); summary.textContent = 'Ver detalle de llamadas'; details.append(summary);
+    const callRows = [];
+    for (const component of cost.components) {
+      for (const c of component.calls_detail) {
+        const kind = c.kind === 'repair' ? `repair ${Math.max((c.attempt || 2) - 1, 1)}` : c.kind === 'retry' ? 'retry' : c.kind === 'initial' ? (c.attempt ? `attempt ${c.attempt}` : 'inicial') : '';
+        const name = [c.label, c.section_key, kind].filter(Boolean).join(' · ');
+        const cost_ = c.cost_display || (c.billing_status === 'estimated' ? `~${c.estimated_cost_display} (estimado)` : 'n/d (sin pricing)');
+        callRows.push({values: [name, `${c.provider}/${c.model}`, c.thinking || '—', fmtInt(c.input_tokens), fmtInt(c.cached_input_tokens), fmtInt(c.reasoning_tokens), fmtInt(c.output_tokens), c.latency_ms == null ? 'n/d' : `${(c.latency_ms / 1000).toFixed(1)} s`, `${cost_} · ${STATUS_TEXT[c.billing_status] || c.billing_status}`]});
+      }
+    }
+    costTable(details, ['Llamada', 'Modelo', 'Thinking', 'Input', 'Cache read', 'Reasoning', 'Output', 'Latencia', 'Costo'], callRows, null, 3);
+    box.append(details);
+  }
+
+  // `data` is the normalized payload from KlaraReportRunView.toResultPayload (name, report_run_id, html,
+  // final_report, markdown, writer, coordination, sections, cost).
+  function renderFinalReport(data) {
+    const writer = data.writer; // null when the run ended before the writer ran
+    reportHtml = data.html || null;
+    finalReportJson = data.final_report ? JSON.stringify(data.final_report, null, 2) : null;
+    finalReportData = data.final_report || null;
+    reportRunId = data.report_run_id || null;
+    // sandbox without allow-scripts/allow-same-origin: model text can never run code or reach this page.
+    byId('reporting-frame').srcdoc = reportHtml || '';
+    byId('reporting-frame').classList.toggle('d-none', !reportHtml);
+    byId('reporting-report-empty').classList.toggle('d-none', !!reportHtml);
+    byId('reporting-json').value = finalReportJson || '';
+    byId('reporting-download-html').disabled = !reportHtml;
+    byId('reporting-download-json').disabled = !finalReportJson;
+    applyReviewState(data);
+    const alert = byId('reporting-writer-alert');
+    if (!writer) {
+      alert.className = 'alert alert-secondary m-3 mb-0';
+      alert.textContent = 'La ejecución terminó antes de redactar el informe. El análisis completado se conserva en “ReportDraft & Trazas”.';
+    } else if (writer.status === 'ok' && !writer.render_error) { alert.className = 'alert d-none m-3 mb-0'; alert.textContent = ''; }
+    else {
+      alert.className = 'alert alert-warning m-3 mb-0';
+      alert.textContent = writer.status === 'ok'
+        ? 'El informe se redactó pero no pudo renderizarse. El FinalReport y el análisis están disponibles.'
+        : 'El análisis fue correcto pero falló la redacción del informe. El ReportDraft se conserva en “ReportDraft & Trazas”.';
+    }
+    renderWriterDebug(writer);
+    renderCoordinationDebug(data.coordination || null);
+    renderCost(data.cost || null, data.cost ? data.cost.ledger_record_failures : 0);
+    selectTab(reportHtml ? 'report' : 'debug');
+  }
+
+  // The PDF button hands out the persisted (reviewed) PDF when there is one, else a labelled draft [M8].
+  function applyReviewState(data) {
+    const statusLabel = status => KlaraReviewView.statusInfo(status).label;
+    pdfSource = KlaraReportPdfSource.resolvePdfSource({review: data.review, entry: reviewEntry, statusLabel});
+    const button = byId('reporting-download-pdf');
+    byId('reporting-download-pdf-label').textContent = pdfSource.label;
+    button.title = pdfSource.hint;
+    button.disabled = pdfSource.kind === 'draft' && !finalReportData;
+    const link = KlaraReportPdfSource.resolveReviewLink({
+      review: data.review, runStatus: data.run_status, runId: data.report_run_id, entry: reviewEntry, statusLabel});
+    byId('reporting-review-link').classList.toggle('d-none', !link);
+    if (link) {
+      byId('reporting-review-link').href = link.href;
+      byId('reporting-review-link-label').textContent = link.label;
+    }
+  }
+
+  function downloadText(text, name, type) {
+    const url = URL.createObjectURL(new Blob([text], {type}));
+    const link = document.createElement('a'); link.href = url; link.download = name; link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function renderResult(data) {
+    markdown = data.markdown;
+    renderFinalReport(data);
+    byId('reporting-result-title').textContent = data.name;
+    byId('reporting-run-id').textContent = data.report_run_id ? `Run ID: ${data.report_run_id}` : '';
+    byId('reporting-markdown').value = markdown;
+
+    const container = byId('reporting-sections');
+    container.replaceChildren();
+    for (const section of data.sections) {
+      const card = document.createElement('article');
+      card.className = 'ai-surface mb-3';
+      const body = document.createElement('div');
+      body.className = 'ai-surface-body';
+      const heading = document.createElement('h4');
+      heading.className = 'h5 mb-3';
+      heading.textContent = section.title;
+      const status = document.createElement('p');
+      status.className = `small mb-2 ${section.had_error ? 'text-danger' : section.recovered_error_count ? 'text-warning' : 'text-success'}`;
+      status.textContent = section.had_error
+        ? `No se completó · ${section.failure_reason || 'execution_failed'}`
+        : section.recovered_error_count
+          ? `Generado correctamente · ${section.recovered_error_count} error(es) intermedio(s) recuperado(s): ${(section.recovered_errors || []).map(item => item.reason).join(', ')}`
+          : 'Generado correctamente';
+      // Markdown is rendered through DOM nodes (no innerHTML): raw HTML in answers stays inert text.
+      const routing = section.skill_routing || {};
+      if (section.had_error && routing.unavailable && routing.unavailable.length) {
+        const unavailable = document.createElement('p');
+        unavailable.className = 'small text-danger mb-2';
+        const reasons = {not_found:'no existe', inactive:'inactiva', not_effective_for_report:'no es efectiva para este Report'};
+        unavailable.textContent = 'Skill fijada no disponible: ' + routing.unavailable.map(item => `${item.skill_key} (${reasons[item.reason] || item.reason})`).join(', ');
+        body.append(unavailable);
+      }
+      const answer = document.createElement('div');
+      answer.className = `klara-md ${section.had_error ? 'text-warning' : ''}`.trim();
+      answer.append(renderMarkdown(section.had_error ? 'No se pudo generar esta sección.' : section.answer));
+      body.append(heading, status, answer);
+      if (routing.mode) {
+        const details = document.createElement('details');
+        details.className = 'mt-3 small';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Routing de skills';
+        const info = document.createElement('div');
+        info.className = 'mt-2';
+        const lines = [`Modo: ${routing.mode}`];
+        if (routing.mode === 'dynamic') lines.push(`Selector: ${routing.selector || 'n/d'}`);
+        if (routing.pinned_skill_keys && routing.pinned_skill_keys.length) lines.push(`Fijadas: ${routing.pinned_skill_keys.join(', ')}`);
+        lines.forEach(line => { const p = document.createElement('div'); p.textContent = line; info.append(p); });
+        const list = document.createElement('ul');
+        list.className = 'mb-0';
+        for (const key of routing.skills || []) { const item = document.createElement('li'); item.textContent = key; list.append(item); }
+        info.append(list);
+        details.append(summary, info);
+        body.append(details);
+      }
+      if (section.semantic_notes && section.semantic_notes.length) {
+        const details = document.createElement('details');
+        details.className = 'mt-3 small';
+        const summary = document.createElement('summary');
+        summary.textContent = 'Contexto semántico';
+        const list = document.createElement('ul');
+        list.className = 'mb-0 mt-2';
+        for (const note of section.semantic_notes) {
+          const item = document.createElement('li');
+          item.textContent = note;
+          list.append(item);
+        }
+        details.append(summary, list);
+        body.append(details);
+      }
+      card.append(body);
+      container.append(card);
+    }
+    result.classList.remove('d-none');
+    result.scrollIntoView({behavior:'smooth', block:'start'});
+  }
+
+  function showCsvMessage(kind, lines) {
+    const box = byId('reporting-csv-message');
+    box.replaceChildren();
+    const alert = document.createElement('div');
+    alert.className = `alert alert-${kind} small mb-0`;
+    lines.forEach((line, index) => {
+      if (index) alert.append(document.createElement('br'));
+      alert.append(document.createTextNode(line));
+    });
+    box.append(alert);
+  }
+
+  byId('reporting-csv').addEventListener('change', async event => {
+    const input = event.target;
+    const file = input.files[0];
+    if (!file) return;
+    const body = new FormData();
+    body.append('csv_file', file);
+    try {
+      const response = await fetch(importEndpoint, {method:'POST', credentials:'same-origin', headers:{'X-CSRFToken':csrf}, body});
+      const data = await response.json();
+      if (!response.ok) return showCsvMessage('danger', data.errors || data.error || ['CSV inválido.']);
+      const current = [...questions.querySelectorAll('.reporting-row')];
+      const blank = current.filter(row => !row.querySelector('.reporting-title').value.trim() && !row.querySelector('.reporting-question').value.trim());
+      const kept = current.length - blank.length;
+      if (kept + data.rows.length > maxQuestions) return showCsvMessage('danger', [`El total superaría ${maxQuestions} preguntas (ya hay ${kept}, el CSV trae ${data.rows.length}).`]);
+      blank.forEach(row => row.remove());
+      data.rows.forEach(row => addQuestion(row.title, row.question));
+      updateRows();
+      showCsvMessage('success', [`Se agregaron ${data.rows.length} pregunta(s).`, ...(data.warnings || [])]);
+    } catch (_) {
+      showCsvMessage('danger', ['No se pudo leer el CSV.']);
+    } finally {
+      input.value = '';
+    }
+  });
+
+  const api = KlaraReportingApi.createReportingApi({endpoints: runEndpoints, csrf});
+  let runPanel = null;
+  const controller = KlaraReportRunController.createReportRunController({
+    api,
+    onChange: state => {
+      if (runPanel) runPanel.render(state);
+      if (state.phase === 'finished') {
+        byId('reporting-generate').disabled = false;
+        byId('reporting-spinner').classList.add('d-none');
+        if (state.run && state.run.result) {
+          const payload = KlaraReportRunView.toResultPayload(state.run);
+          renderResult(payload);
+        } else if (state.run && state.run.status === 'failed') {
+          showMessage((state.run.error && state.run.error.message) || 'La generación falló.');
+        }
+      }
+    },
+  });
+  runPanel = KlaraReportRunView.createRunPanel({
+    root: byId('reporting-run-panel'),
+    handlers: {
+      onCancel: () => controller.cancel(),
+      onRetry: () => controller.track(controller.getState().runId),
+    },
+  });
+
+  questions.addEventListener('click', event => {
+    const target = event.target.closest('button');
+    if (!target) return;
+    const row = target.closest('.reporting-row');
+    if (target.classList.contains('reporting-remove')) {
+      if (questions.children.length === 1) {
+        row.querySelector('.reporting-title').value = '';
+        row.querySelector('.reporting-question').value = '';
+        row.querySelectorAll('.reporting-skill-check').forEach(input => input.checked = false);
+        updateSkillBadge(row);
+      } else { row.remove(); }
+      updateRows();
+    } else if (target.classList.contains('reporting-up') && row.previousElementSibling) {
+      row.parentNode.insertBefore(row, row.previousElementSibling);
+      updateRows();
+    } else if (target.classList.contains('reporting-down') && row.nextElementSibling) {
+      row.parentNode.insertBefore(row.nextElementSibling, row);
+      updateRows();
+    }
+  });
+
+  questions.addEventListener('input', event => {
+    if (event.target.classList.contains('reporting-title')) refreshDefaultStructure();
+  });
+
+  byId('reporting-add').addEventListener('click', () => addQuestion());
+  model.addEventListener('change', updateTier);
+  byId('reporting-report').addEventListener('change', refreshSkills);
+
+  byId('reporting-structure-compile').addEventListener('click', async () => {
+    const prompt = byId('reporting-structure-prompt').value.trim();
+    const btn = byId('reporting-structure-compile');
+    const preview = byId('reporting-structure-preview');
+    if (!prompt) {
+      preview.classList.remove('d-none');
+      preview.textContent = 'Escribí una instrucción antes de interpretar la estructura.';
+      return;
+    }
+    const payload = buildDefinitionPayload();
+    if (!payload.questions.length) { preview.textContent = 'Ingresá al menos una pregunta analítica antes de interpretar la estructura.'; return; }
+    if (!payload.analysis_model_key) { preview.textContent = 'Seleccioná un modelo de análisis antes de interpretar la estructura.'; return; }
+    if (!payload.report_id) { preview.textContent = 'Seleccioná un reporte habilitado antes de interpretar la estructura.'; return; }
+    btn.disabled = true;
+    preview.classList.remove('d-none');
+    preview.textContent = 'Interpretando estructura con structure_planner…';
+    try {
+      // The endpoint works on a saved definition: save (or update) it first, then compile.
+      const def = await api.saveDefinition({definitionId: savedDefinitionId, payload});
+      savedDefinitionId = def.id;
+      const data = await api.compileStructure({definitionId: def.id, force: true});
+      preview.replaceChildren();
+      const items = Array.isArray(data.preview) ? data.preview : [];
+      const title = document.createElement('strong');
+      title.textContent = `Estructura planificada (${items.length} secciones):`;
+      preview.append(title);
+      const list = document.createElement('ol');
+      list.className = 'mb-1 mt-1 ps-3';
+      items.forEach(item => {
+        const li = document.createElement('li');
+        li.textContent = item.label;
+        list.append(li);
+      });
+      preview.append(list);
+      if (data.fallback_used || data.error) {
+        const warn = document.createElement('div');
+        warn.className = 'text-danger';
+        warn.textContent = `No se pudo interpretar el prompt; se usa la estructura estándar.${data.error ? ' ' + data.error : ''}`;
+        preview.append(warn);
+      }
+    } catch (error) {
+      preview.textContent = `Error al interpretar la estructura: ${error.message}`;
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  byId('reporting-copy').addEventListener('click', async () => {
+    await navigator.clipboard.writeText(markdown);
+    showMessage('Markdown copiado al portapapeles.', 'success');
+  });
+
+  byId('reporting-download').addEventListener('click', () => {
+    const slug = (byId('reporting-name').value.trim() || 'informe_klara').replace(/[^a-z0-9_-]+/gi, '_');
+    downloadText(markdown, `${slug}.md`, 'text/markdown;charset=utf-8');
+  });
+
+  byId('reporting-download-html').addEventListener('click', () => {
+    if (!reportHtml) return;
+    const slug = (byId('reporting-name').value.trim() || 'informe_klara').replace(/[^a-z0-9_-]+/gi, '_');
+    downloadText(reportHtml, `${slug}.html`, 'text/html;charset=utf-8');
+  });
+
+  byId('reporting-download-json').addEventListener('click', () => {
+    if (!finalReportJson) return;
+    const slug = (byId('reporting-name').value.trim() || 'informe_klara').replace(/[^a-z0-9_-]+/gi, '_');
+    downloadText(finalReportJson, `${slug}.json`, 'application/json;charset=utf-8');
+  });
+
+  byId('reporting-download-pdf').addEventListener('click', async () => {
+    if (pdfSource.kind === 'reviewed') { window.location.assign(pdfSource.href); return; }
+    if (!finalReportData) return;
+    const btn = byId('reporting-download-pdf');
+    btn.disabled = true;
+    try {
+      const {blob, filename} = await KlaraReportPdf.requestPdf({
+        endpoint: pdfEndpoint,
+        csrf,
+        finalReport: finalReportData,
+        reportRunId,
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      showMessage(`No se pudo descargar el PDF: ${error.message}`);
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
+  byId('reporting-generate').addEventListener('click', async () => {
+    clearMessage();
+    const payload = buildDefinitionPayload();
+
+    if (!payload.questions.length) { showMessage('Debes ingresar al menos una pregunta analítica.'); return; }
+    if (!model.value) { showMessage('Debes seleccionar un modelo de análisis.'); return; }
+    if (!byId('reporting-report').value) { showMessage('Debes seleccionar un reporte habilitado.'); return; }
+
+    byId('reporting-generate').disabled = true;
+    byId('reporting-spinner').classList.remove('d-none');
+    result.classList.add('d-none');
+
+    try {
+      await controller.launch(async () => {
+        const def = await api.saveDefinition({definitionId: savedDefinitionId, payload});
+        savedDefinitionId = def.id;
+        return api.createRun({definitionId: def.id});
+      });
+    } catch (error) {
+      byId('reporting-generate').disabled = false;
+      byId('reporting-spinner').classList.add('d-none');
+      showMessage(error.message || 'Error al iniciar la ejecución.');
+    }
+  });
+
+  updateTier();
+  addQuestion();
+  refreshSkills();
+
+  if (initialRunId) controller.track(initialRunId);
+})();
+</script>
+{% endblock %}

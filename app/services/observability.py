@@ -11,13 +11,37 @@ import hashlib
 import logging
 import os
 import threading
-from contextlib import nullcontext
-from typing import Any, Dict, Iterable, Optional
+from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
+from typing import Any, Dict, Iterable, Iterator, Optional
 
 _LOCK = threading.Lock()
 _INITIALIZED = False
 _LANGFUSE_CLIENT: Any = None
 _FLUSH_REGISTERED = False
+
+# Staff flag of the chat turn being processed; None outside a chat turn. A
+# ContextVar follows the turn across ``await`` and ``asyncio.to_thread``.
+_CHAT_STAFF: ContextVar[Optional[bool]] = ContextVar("chat_staff", default=None)
+
+
+@contextmanager
+def chat_actor_context(*, is_staff: bool) -> Iterator[None]:
+    """Mark every log record emitted during a chat turn with its staff flag."""
+    token = _CHAT_STAFF.set(bool(is_staff))
+    try:
+        yield
+    finally:
+        _CHAT_STAFF.reset(token)
+
+
+class StaffLogFilter(logging.Filter):
+    """Expose ``%(staff_tag)s``: `` [staff=true|false]`` inside a chat turn, empty elsewhere."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        is_staff = _CHAT_STAFF.get()
+        record.staff_tag = "" if is_staff is None else f" [staff={'true' if is_staff else 'false'}]"
+        return True
 
 
 def _has_langfuse_credentials() -> bool:
@@ -26,7 +50,7 @@ def _has_langfuse_credentials() -> bool:
 
 
 def init_langfuse() -> bool:
-    """Initialize Langfuse and Anthropic instrumentation once."""
+    """Initialize Langfuse once; generation tracing belongs to LLMRuntime."""
     global _INITIALIZED, _LANGFUSE_CLIENT, _FLUSH_REGISTERED
 
     with _LOCK:
@@ -52,22 +76,8 @@ def init_langfuse() -> bool:
             _LANGFUSE_CLIENT = None
             return False
 
-        try:
-            from opentelemetry.instrumentation.anthropic import AnthropicInstrumentor
-        except ImportError:
-            logging.warning(
-                "Langfuse initialized but Anthropic auto-instrumentation is unavailable; "
-                "install 'opentelemetry-instrumentation-anthropic' for generation traces"
-            )
-        else:
-            try:
-                instrumentor = AnthropicInstrumentor()
-                if not getattr(instrumentor, "is_instrumented_by_opentelemetry", False):
-                    instrumentor.instrument()
-            except Exception as exc:
-                if "already instrumented" not in str(exc).lower():
-                    logging.exception("Failed to instrument Anthropic SDK for Langfuse")
-
+        # Generation observations are owned by LLMRuntime. SDK instrumentation
+        # would duplicate them (and can export private continuation state).
         if not _FLUSH_REGISTERED:
             atexit.register(flush_langfuse)
             _FLUSH_REGISTERED = True

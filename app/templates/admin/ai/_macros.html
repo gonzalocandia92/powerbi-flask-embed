@@ -1,0 +1,105 @@
+{# Reusable building blocks of the KLARA AI console. Import with:
+   {% from "admin/ai/_macros.html" import page_header, kpi, badge, ... %} #}
+
+{% macro page_header(title, subtitle=none, crumb=none) -%}
+<header class="ai-page-header">
+  <div>
+    {% if crumb %}<div class="ai-kicker">{{ crumb }}</div>{% endif %}
+    <h1 class="ai-page-title">{{ title }}</h1>
+    {% if subtitle %}<p class="ai-page-subtitle">{{ subtitle }}</p>{% endif %}
+  </div>
+  <div class="ai-page-actions">{% if caller is defined %}{{ caller() }}{% endif %}</div>
+</header>
+{%- endmacro %}
+
+{% macro kpi(label, value, hint=none, tone=none, icon=none) -%}
+{%- if tone and (tone.startswith('bi-') or 'bi ' in tone) and not icon -%}
+  {%- set icon = tone -%}
+  {%- set tone = none -%}
+{%- endif -%}
+{# Icono por defecto derivado del estado cuando el caller no pasa uno. #}
+{%- set default_icons = {'success': 'bi-check2', 'warning': 'bi-exclamation-lg', 'danger': 'bi-x-lg', 'primary': 'bi-stars', 'info': 'bi-info-lg'} -%}
+{%- set icon = icon or default_icons.get(tone, 'bi-app') -%}
+<div class="ai-kpi{% if tone and tone != 'default' %} tone-{{ tone }}{% endif %}">
+  <div class="ai-kpi-top">
+    <div>
+      <div class="ai-kpi-label">{{ label }}</div>
+      <div class="ai-kpi-value">{{ value }}</div>
+    </div>
+    <span class="ai-kpi-icon" aria-hidden="true"><i class="bi {{ icon }}"></i></span>
+  </div>
+  {% if hint %}<div class="ai-kpi-hint">{{ hint }}</div>{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro pill(text, tone='neutral', icon=none, title=none) -%}
+<span class="ai-pill tone-{{ tone }}"{% if title %} title="{{ title }}"{% endif %}>{% if icon %}<i class="bi bi-{{ icon }}"></i>{% endif %}{{ text }}</span>
+{%- endmacro %}
+
+{% macro badge(text, tone='neutral', icon=none, title=none) -%}
+<span class="ai-pill tone-{{ tone }}"{% if title %} title="{{ title }}"{% endif %}>{% if icon %}<i class="bi bi-{{ icon }}"></i>{% endif %}{{ text }}</span>
+{%- endmacro %}
+
+{# Where an effective value comes from, relative to the scope being viewed. #}
+{% macro origin_badge(source, viewing=none) -%}
+{%- set names = {'global': 'Global', 'empresa': 'Empresa', 'report': 'Reporte'} -%}
+{%- if source == 'fallback' or source == 'none' or not source -%}
+<span class="ai-origin is-fallback" title="No hay configuración en ningún alcance"><i class="bi bi-gear"></i>Default del sistema</span>
+{%- elif source == viewing -%}
+<span class="ai-origin is-own"><i class="bi bi-pencil-square"></i>{% if source == 'global' %}Configurado en Global{% elif source == 'empresa' %}Override de Empresa{% else %}Configurado en Reporte{% endif %}</span>
+{%- else -%}
+<span class="ai-origin is-inherited"><i class="bi bi-arrow-down-short"></i>Heredado de {{ names.get(source, source) }}</span>
+{%- endif -%}
+{%- endmacro %}
+
+{% macro scope_badge(scope, label=none) -%}
+{%- set icons = {'global': 'globe2', 'empresa': 'buildings', 'report': 'file-earmark-bar-graph', 'dataset': 'database'} -%}
+{%- set names = {'global': 'Global', 'empresa': 'Empresa', 'report': 'Reporte', 'dataset': 'Dataset'} -%}
+<span class="ai-pill tone-neutral"><i class="bi bi-{{ icons.get(scope, 'dot') }}"></i>{{ label or names.get(scope, scope) }}</span>
+{%- endmacro %}
+
+{# Run / evaluation lifecycle states rendered as clean status indicators. #}
+{% macro status_badge(status, tone=none) -%}
+{%- set map = {
+  'completed': ('Completado', 'success'), 'success': ('Correcto', 'success'), 'ready': ('Listo', 'success'),
+  'completed_with_errors': ('Con errores', 'warning'), 'failed': ('Fallido', 'danger'), 'blocked': ('Bloqueado', 'danger'),
+  'error': ('Error', 'danger'), 'interrupted': ('Interrumpido', 'danger'),
+  'cancelled': ('Cancelado', 'neutral'), 'queued': ('En cola', 'info'), 'pending': ('Pendiente', 'warning'),
+  'running': ('En ejecución', 'primary'), 'cancel_requested': ('Cancelando', 'warning')
+} -%}
+{%- set entry = (status, tone) if tone else map.get(status, (status, 'neutral')) -%}
+<span class="ai-status tone-{{ entry[1] }}"><span class="ai-status-dot"></span><span>{{ entry[0] }}</span></span>
+{%- endmacro %}
+
+{% macro active_badge(active, on='Activo', off='Inactivo') -%}
+<span class="ai-status tone-{{ 'success' if active else 'neutral' }}"><span class="ai-status-dot"></span><span>{{ on if active else off }}</span></span>
+{%- endmacro %}
+
+{% macro empty_state(icon, title, text=none) -%}
+<div class="ai-empty"><i class="bi bi-{{ icon }}"></i><strong>{{ title }}</strong>{% if text %}<span>{{ text }}</span>{% endif %}</div>
+{%- endmacro %}
+
+{% macro progress(percent, tone='primary') -%}
+<div class="ai-progress tone-{{ tone }}" role="progressbar" aria-valuenow="{{ percent|round|int }}" aria-valuemin="0" aria-valuemax="100"><span style="width: {{ [percent, 100]|min|round|int }}%"></span></div>
+{%- endmacro %}
+
+{% macro callout(tone='info', icon='info-circle') -%}
+<div class="ai-callout tone-{{ tone }}" role="status"><i class="bi bi-{{ icon }}"></i><div class="ai-callout-body">{{ caller() }}</div></div>
+{%- endmacro %}
+
+{# Native <select> enhanced by ai_console.js (search, keyboard, clear, empty state).
+   options: list of {value, label, meta?, warning?} #}
+{% macro searchable_select(id, options, selected=none, placeholder='Seleccionar…', search_placeholder='Buscar…', empty_text='Sin resultados.', clearable=false, name=none, blank_label=none, required=false) -%}
+<select class="form-select" id="{{ id }}"{% if name %} name="{{ name }}"{% endif %}{% if required %} required{% endif %}
+        data-searchable data-placeholder="{{ placeholder }}" data-search-placeholder="{{ search_placeholder }}"
+        data-empty-text="{{ empty_text }}"{% if clearable %} data-clearable{% endif %}>
+  {% if blank_label is not none %}<option value="">{{ blank_label }}</option>{% endif %}
+  {% for option in options %}
+  <option value="{{ option.value }}"{% if option.meta %} data-meta="{{ option.meta }}"{% endif %}{% if option.warning %} data-warning="{{ option.warning }}"{% endif %}{% if selected is not none and option.value|string == selected|string %} selected{% endif %}>{{ option.label }}</option>
+  {% endfor %}
+</select>
+{%- endmacro %}
+
+{% macro money(value, digits=2) -%}
+{%- if value is none -%}—{%- else -%}USD {{ ('%.' ~ digits ~ 'f')|format(value) }}{%- endif -%}
+{%- endmacro %}

@@ -28,32 +28,13 @@
                             {% endif %}
                         </div>
 
-                        <div class="mb-3">
-                            <div class="form-check">
-                                {{ form.allow_refresh(class="form-check-input") }}
-                                <label class="form-check-label" for="allow_refresh">
-                                    <i class="fas fa-sync-alt me-1"></i>
-                                    Permitir que los usuarios actualicen el modelo de datos
-                                </label>
-                                <small class="form-text text-muted d-block mt-1">
-                                    ⚠️ Power BI Pro tiene un límite de 8 actualizaciones por día por dataset.
-                                </small>
-                            </div>
+                        <div class="alert alert-info small">
+                            Las acciones de usuario (actualizar datos, restablecer valores predeterminados y
+                            actualizar objetos visuales) se configuran en el
+                            <a href="{{ url_for('reports.edit', report_id=report.id) }}" class="alert-link">reporte</a>
+                            y aplican a todos sus links públicos.
                         </div>
 
-                        <div class="mb-3">
-                            <div class="form-check">
-                                {{ form.allow_reset_to_default(class="form-check-input") }}
-                                <label class="form-check-label" for="allow_reset_to_default">
-                                    <i class="fas fa-rotate-left me-1"></i>
-                                    Permitir restablecer a valores predeterminados
-                                </label>
-                                <small class="form-text text-muted d-block mt-1">
-                                    Requiere soporte de Power BI Persistent Filters y permisos de estado de usuario en Azure AD.
-                                </small>
-                            </div>
-                        </div>
-                        
                         {% with messages = get_flashed_messages(with_categories=true) %}
                             {% if messages %}
                                 {% for category, message in messages %}

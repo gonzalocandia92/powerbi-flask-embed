@@ -1,0 +1,41 @@
+{# Shared shell for every /admin/ai-* screen: left navigation + content area, inside the
+   regular admin layout. Child templates set `active_ai_section` and fill `ai_content`
+   (and optionally `ai_styles` / `ai_scripts`). #}
+{% extends "layout.html" %}
+
+{% block body_class %}ai-admin-page{% endblock %}
+
+{% block styles %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/ai_console.css') }}">
+{% block ai_styles %}{% endblock %}
+{% endblock %}
+
+{% block body %}
+<div class="ai-console">
+  <div class="ai-shell">
+    {% include "admin/ai_config/_navigation.html" %}
+    <main class="ai-main">
+      {% block ai_header %}
+        {% if page_title %}
+        <header class="ai-page-header">
+          <div>
+            {% if page_crumb %}<div class="ai-kicker">{{ page_crumb }}</div>{% endif %}
+            <h1 class="ai-page-title">{{ page_title }}</h1>
+            {% if page_subtitle %}<p class="ai-page-subtitle">{{ page_subtitle }}</p>{% endif %}
+          </div>
+          <div class="ai-page-actions">
+            {% block header_actions %}{% endblock %}
+          </div>
+        </header>
+        {% endif %}
+      {% endblock %}
+      {% block ai_content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}{{ super() }}
+<script src="{{ url_for('static', filename='js/ai_console.js') }}"></script>
+{% block ai_scripts %}{% endblock %}
+{% endblock %}

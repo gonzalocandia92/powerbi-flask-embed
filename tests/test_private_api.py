@@ -4,6 +4,7 @@ Integration tests for private API endpoints.
 import os
 import unittest
 import json
+from unittest.mock import patch
 
 os.environ.setdefault('FERNET_KEY', 'o9eBKpiFgJRzgZNyBbFaQ8YeHImGZ5QpFnLn4EP9nj0=')
 os.environ.setdefault('SECRET_KEY', 'test-secret')
@@ -352,6 +353,84 @@ class PrivateAPITestCase(unittest.TestCase):
             self.assertEqual(response.status_code, 403)
             data = json.loads(response.data)
             self.assertIn('error', data)
+
+    def _config_for_private_report(self, **report_flags):
+        """Create a private report owned by the test empresa and return its report-config JSON."""
+        with self.app.app_context():
+            _client, _tenant, workspace, usuario = _create_test_hierarchy(db.session)
+            report = Report(
+                id=_id(),
+                name="Private Report",
+                report_id="private-report-guid",
+                workspace_id_fk=workspace.id,
+                usuario_pbi_id=usuario.id,
+                es_publico=False,
+                es_privado=True,
+                **report_flags
+            )
+            db.session.add(report)
+            db.session.flush()
+            empresa = db.session.get(Empresa, self._empresa_id)
+            empresa.reports.append(report)
+            db.session.commit()
+            report_pk = report.id
+
+            login_response = self.client.post(
+                '/private/login',
+                data=json.dumps({
+                    'client_id': self.test_client_id,
+                    'client_secret': self.test_client_secret
+                }),
+                content_type='application/json'
+            )
+            token = json.loads(login_response.data)['access_token']
+
+        with patch('app.routes.private.get_embed_for_report') as mock_embed:
+            mock_embed.return_value = ('pbi-token', 'https://app.powerbi.com/reportEmbed?reportId=1', 'private-report-guid')
+            response = self.client.get(
+                f'/private/report-config?report_id={report_pk}',
+                headers={'Authorization': f'Bearer {token}'}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        return json.loads(response.data)
+
+    def test_report_config_keeps_existing_keys(self):
+        """The embed keys clients already consume are unchanged."""
+        data = self._config_for_private_report()
+
+        self.assertEqual(data['embedUrl'], 'https://app.powerbi.com/reportEmbed?reportId=1')
+        self.assertEqual(data['reportId'], 'private-report-guid')
+        self.assertEqual(data['accessToken'], 'pbi-token')
+        self.assertEqual(data['workspaceId'], 'test-workspace-id')
+
+    def test_report_config_actions_disabled_by_default(self):
+        """A report without flags exposes no actions and no persistent filters."""
+        data = self._config_for_private_report()
+
+        self.assertEqual(data['actions'], {'resetToDefault': False, 'refreshVisuals': False})
+        self.assertEqual(data['settings'], {'persistentFiltersEnabled': False})
+
+    def test_report_config_reset_to_default_enables_persistent_filters(self):
+        """resetToDefault also turns on persistentFiltersEnabled, which the SDK needs at load time."""
+        data = self._config_for_private_report(allow_reset_to_default=True)
+
+        self.assertEqual(data['actions'], {'resetToDefault': True, 'refreshVisuals': False})
+        self.assertEqual(data['settings'], {'persistentFiltersEnabled': True})
+
+    def test_report_config_refresh_visuals_is_independent(self):
+        """refreshVisuals does not depend on the reset flag and needs no persistent filters."""
+        data = self._config_for_private_report(allow_refresh_visuals=True)
+
+        self.assertEqual(data['actions'], {'resetToDefault': False, 'refreshVisuals': True})
+        self.assertEqual(data['settings'], {'persistentFiltersEnabled': False})
+
+    def test_report_config_ignores_dataset_refresh_flag(self):
+        """allow_refresh (public dataset refresh) is not exposed through the private API."""
+        data = self._config_for_private_report(allow_refresh=True)
+
+        self.assertEqual(data['actions'], {'resetToDefault': False, 'refreshVisuals': False})
+        self.assertNotIn('refreshDataset', data['actions'])
 
 
 if __name__ == '__main__':

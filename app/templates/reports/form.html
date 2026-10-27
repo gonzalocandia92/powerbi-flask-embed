@@ -89,6 +89,16 @@
                   <div class="form-text">El reporte puede ser accedido por empresas autenticadas vía API</div>
                 </div>
 
+                <div class="form-check mt-2">
+                  {{ form.requires_login(class="form-check-input") }}
+                  {{ form.requires_login.label(class="form-check-label") }}
+                  <div class="form-text">
+                    Quien abra un link público debe iniciar sesión con un usuario de la aplicación que tenga el permiso
+                    <code>reports.read</code> y pertenezca a una de las empresas asociadas a este reporte.
+                    El personal de backoffice siempre puede entrar.
+                  </div>
+                </div>
+
                 <hr class="my-3">
 
                 <div class="form-check">
@@ -153,6 +163,38 @@
 
             <div class="card mb-3">
               <div class="card-header">
+                <h6 class="mb-0"><i class="bi bi-hand-index-thumb me-2"></i>Acciones para usuarios</h6>
+              </div>
+              <div class="card-body">
+                <div class="form-check mb-3">
+                  {{ form.allow_reset_to_default(class="form-check-input") }}
+                  {{ form.allow_reset_to_default.label(class="form-check-label") }}
+                  <div class="form-text">
+                    Links públicos y API privada. Requiere Power BI Persistent Filters en el reporte y permisos de estado de usuario en Azure AD (<code>UserState.ReadWrite.All</code>).
+                  </div>
+                </div>
+
+                <div class="form-check mb-3">
+                  {{ form.allow_refresh_visuals(class="form-check-input") }}
+                  {{ form.allow_refresh_visuals.label(class="form-check-label") }}
+                  <div class="form-text">
+                    API privada. Ejecuta <code>report.refresh()</code> en el cliente. Según Microsoft, solo actualiza los datos en modelos DirectQuery.
+                  </div>
+                </div>
+
+                <div class="form-check">
+                  {{ form.allow_refresh(class="form-check-input") }}
+                  {{ form.allow_refresh.label(class="form-check-label") }}
+                  <div class="form-text">
+                    Solo links públicos. Dispara un refresh del modelo semántico desde el servidor.
+                    ⚠️ Power BI Pro tiene un límite de 8 actualizaciones por día por dataset.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card mb-3">
+              <div class="card-header">
                 <h6 class="mb-0"><i class="bi bi-funnel me-2"></i>Configuración de Filtros</h6>
               </div>
               <div class="card-body">
@@ -205,8 +247,9 @@
               </div>
               <div class="card-body">
                 <p class="text-muted small">
-                  Seleccione las empresas que tendrán acceso a este reporte vía API privada.
-                  Solo aplica si "Es Privado" está habilitado.
+                  Seleccione las empresas que tendrán acceso a este reporte vía API privada
+                  (si "Es Privado" está habilitado) y, si "Requiere login" está activo, las empresas
+                  cuyos usuarios podrán abrir los links públicos.
                 </p>
 
                 {% if all_empresas %}

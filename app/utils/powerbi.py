@@ -8,6 +8,51 @@ import hashlib
 import re
 import requests
 
+import os
+import threading
+import time
+
+# Every call to Azure AD / Power BI is bounded: an unbounded call used to hang a
+# worker and was the usual trigger of silent dataset substitution.
+POWERBI_HTTP_TIMEOUT_SECONDS = 30
+
+# Short-lived cache of report -> datasetId. Only successful resolutions are
+# cached; the key carries the Power BI report GUID and workspace GUID so editing
+# a report (new GUID/workspace) can never reuse a stale entry.
+_DATASET_CACHE_MAX_ENTRIES = 512
+_dataset_cache = {}
+_dataset_cache_lock = threading.Lock()
+_last_resolution = threading.local()
+
+
+def clear_last_dataset_source():
+    _last_resolution.source = None
+
+
+def last_dataset_source():
+    """How the last ``get_current_dataset_id`` call in this thread was resolved.
+
+    ``"cache"`` or ``"rest"``; ``None`` if nothing was resolved in this thread.
+    Recorded for audit only: it never changes which dataset is used.
+    """
+    return getattr(_last_resolution, "source", None)
+
+
+def _dataset_cache_ttl_seconds():
+    try:
+        return max(0, int(os.getenv("DATASET_ID_CACHE_TTL_SECONDS", "300")))
+    except ValueError:
+        return 300
+
+
+def _dataset_cache_key(report, workspace_id):
+    return (report.id, str(report.report_id), str(workspace_id))
+
+
+def clear_dataset_id_cache():
+    with _dataset_cache_lock:
+        _dataset_cache.clear()
+
 MCP_API_KEY_PREFIX = "mcp-key-"
 POWERBI_URL_PATTERN = re.compile(
     r'https?://app\.powerbi\.com/groups/([0-9a-f\-]{36})/reports/([0-9a-f\-]{36})',
@@ -143,7 +188,7 @@ def _get_access_token(report):
         "password": pass_pbi
     }
 
-    response = requests.post(token_url, data=data)
+    response = requests.post(token_url, data=data, timeout=POWERBI_HTTP_TIMEOUT_SECONDS)
     if not response.ok:
         logging.error(
             f"Azure AD token request failed — status: {response.status_code}, "
@@ -198,7 +243,7 @@ def get_embed_for_report(report):
         f"report: {report_id}, url: {report_url}"
     )
 
-    resp = requests.get(report_url, headers=headers)
+    resp = requests.get(report_url, headers=headers, timeout=POWERBI_HTTP_TIMEOUT_SECONDS)
     if not resp.ok:
         logging.error(
             f"Power BI report request failed — "
@@ -226,7 +271,38 @@ def get_embed_for_report(report):
 
 
 def get_current_dataset_id(report):
-    """Resolve the current Power BI dataset ID for a report."""
+    """Resolve the current Power BI dataset ID for a report.
+
+    Successful resolutions are cached briefly (``DATASET_ID_CACHE_TTL_SECONDS``,
+    default 300, ``0`` disables) so a burst of questions does not hit Azure AD
+    once per question. Failures are never cached and never replaced by a
+    substitute: callers must treat an exception as "dataset unavailable".
+    """
+    ttl = _dataset_cache_ttl_seconds()
+    key = _dataset_cache_key(report, report.workspace.workspace_id) if ttl else None
+    if key is not None:
+        now = time.monotonic()
+        with _dataset_cache_lock:
+            entry = _dataset_cache.get(key)
+            if entry is not None and entry[1] > now:
+                _last_resolution.source = "cache"
+                return entry[0]
+
+    dataset_id = _fetch_dataset_id(report)
+    _last_resolution.source = "rest"
+
+    if key is not None:
+        with _dataset_cache_lock:
+            if len(_dataset_cache) >= _DATASET_CACHE_MAX_ENTRIES:
+                for stale_key in sorted(_dataset_cache, key=lambda k: _dataset_cache[k][1])[
+                    : _DATASET_CACHE_MAX_ENTRIES // 4
+                ]:
+                    _dataset_cache.pop(stale_key, None)
+            _dataset_cache[key] = (dataset_id, time.monotonic() + ttl)
+    return dataset_id
+
+
+def _fetch_dataset_id(report):
     access_token = _get_access_token(report)
     headers = {
         "Authorization": f"Bearer {access_token}",
@@ -243,7 +319,7 @@ def get_current_dataset_id(report):
         f"Fetching report info for dataset_id — workspace: {workspace_id}, "
         f"report: {report.report_id}, url: {report_url}"
     )
-    resp = requests.get(report_url, headers=headers)
+    resp = requests.get(report_url, headers=headers, timeout=POWERBI_HTTP_TIMEOUT_SECONDS)
     if not resp.ok:
         logging.error(
             f"Failed to fetch report info — status: {resp.status_code}, "
@@ -283,7 +359,7 @@ def refresh_dataset(report):
     # Step 2: Trigger refresh
     refresh_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}/refreshes"
     logging.debug(f"Triggering dataset refresh — workspace: {workspace_id}, dataset: {dataset_id}")
-    resp = requests.post(refresh_url, headers=headers, json={"notifyOption": "NoNotification"})
+    resp = requests.post(refresh_url, headers=headers, json={"notifyOption": "NoNotification"}, timeout=POWERBI_HTTP_TIMEOUT_SECONDS)
     if not resp.ok:
         logging.error(
             f"Dataset refresh request failed — status: {resp.status_code}, "
@@ -318,7 +394,7 @@ def get_refresh_history(report, top=1):
     # Resolve dataset_id from report info
     report_url = f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}/reports/{report.report_id}"
     logging.debug(f"Fetching report info for refresh history — workspace: {workspace_id}, report: {report.report_id}")
-    resp = requests.get(report_url, headers=headers)
+    resp = requests.get(report_url, headers=headers, timeout=POWERBI_HTTP_TIMEOUT_SECONDS)
     if not resp.ok:
         logging.error(
             f"Failed to fetch report info for refresh history — status: {resp.status_code}, "
@@ -333,7 +409,7 @@ def get_refresh_history(report, top=1):
         f"https://api.powerbi.com/v1.0/myorg/groups/{workspace_id}"
         f"/datasets/{dataset_id}/refreshes?$top={top}"
     )
-    resp = requests.get(history_url, headers=headers)
+    resp = requests.get(history_url, headers=headers, timeout=POWERBI_HTTP_TIMEOUT_SECONDS)
     if not resp.ok:
         logging.error(
             f"Failed to fetch refresh history — status: {resp.status_code}, "

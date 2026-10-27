@@ -1,0 +1,159 @@
+{% extends "admin/ai/shell.html" %}
+{% import "admin/ai/_macros.html" as ui %}
+
+{% set active_ai_section = 'catalog' %}
+{% set page_crumb = 'Gobierno' %}
+{% set page_title = 'Editar modelo' if model else 'Nuevo modelo' %}
+{% set page_subtitle = 'Las credenciales se configuran exclusivamente mediante variables de entorno del servidor.' %}
+
+{% block header_actions %}
+<a class="ai-btn-secondary" href="{{ url_for('model_catalog.catalog_page') }}">
+  <i class="bi bi-arrow-left me-1"></i>Volver al catálogo
+</a>
+{% endblock %}
+
+{% macro field(item, cls='col-md-6') %}
+<div class="{{ cls }}">
+  {{ item.label(class='form-label') }}
+  {{ item(class='form-control' + (' is-invalid' if item.errors else '')) }}
+  {% for error in item.errors %}<div class="invalid-feedback">{{ error }}</div>{% endfor %}
+</div>
+{% endmacro %}
+
+{% block ai_content %}
+<div class="row justify-content-center">
+  <div class="col-xl-9 col-lg-11">
+    <div class="ai-surface">
+      <div class="ai-surface-header">
+        <div>
+          <h3 class="ai-surface-title">
+            <i class="bi bi-cpu me-2 text-primary"></i>Parámetros técnicos del modelo
+          </h3>
+          <p class="ai-surface-subtitle">
+            Configuración de proveedor, gateway, ventanas de contexto y capacidades de reasoning.
+          </p>
+        </div>
+      </div>
+      <div class="ai-surface-body">
+        <form method="post">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+          <div class="row g-3">
+            <div class="col-md-6">
+              {{ form.model_key.label(class='form-label') }}
+              {{ form.model_key(class='form-control font-monospace', readonly=(model is not none)) }}
+              {% for error in form.model_key.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+            </div>
+            {{ field(form.family_key) }}
+            {{ field(form.display_name) }}
+            {{ field(form.provider) }}
+            {{ field(form.gateway) }}
+            {{ field(form.physical_model, 'col-12') }}
+            {{ field(form.context_window) }}
+            {{ field(form.max_output_tokens) }}
+            {{ field(form.thinking_mode) }}
+            <div class="col-md-6 family-thinking-level">
+              {{ form.default_reasoning_effort.label(class='form-label') }}
+              {{ form.default_reasoning_effort(class='form-control') }}
+            </div>
+            <div class="col-md-6 family-verbosity">
+              {{ form.default_verbosity.label(class='form-label') }}
+              {{ form.default_verbosity(class='form-control') }}
+            </div>
+            <div class="col-md-6 family-thinking-budget">
+              {{ form.budget_tokens.label(class='form-label') }}
+              {{ form.budget_tokens(class='form-control') }}
+            </div>
+            {{ field(form.default_service_tier) }}
+            {{ field(form.pricing_tier) }}
+            <div class="col-12">
+              {{ form.provider_options_json.label(class='form-label') }}
+              {{ form.provider_options_json(class='form-control font-monospace', rows=4) }}
+              {% for error in form.provider_options_json.errors %}<div class="text-danger small">{{ error }}</div>{% endfor %}
+            </div>
+            <div class="col-12 pt-2">
+              <div class="row g-2">
+                {% for item in [form.enabled, form.client_selectable, form.supports_tools] %}
+                <div class="col-sm-6 col-lg-4">
+                  <label class="form-check p-2 border rounded bg-white d-flex align-items-center gap-2 mb-0 cursor-pointer">
+                    {{ item(class='form-check-input mt-0') }}
+                    <span class="form-check-label fw-semibold">{{ item.label.text }}</span>
+                  </label>
+                </div>
+                {% endfor %}
+              </div>
+            </div>
+            <div class="col-12 family-report-cache pt-2">
+              <label class="form-check p-2 border rounded bg-white d-flex align-items-center gap-2 mb-1 cursor-pointer">
+                {{ form.cache_by_report(class='form-check-input mt-0') }}
+                <span class="form-check-label fw-semibold">{{ form.cache_by_report.label.text }}</span>
+              </label>
+              <div class="form-text small">La clave es estable por reporte. Los proveedores pueden almacenar prefijos automáticamente aun si esta opción está desmarcada; la casilla controla la separación por reporte.</div>
+            </div>
+          </div>
+
+          <div class="d-flex justify-content-end gap-2 mt-4 pt-3 border-top">
+            <a class="ai-btn-ghost" href="{{ url_for('model_catalog.catalog_page') }}">Cancelar</a>
+            {{ form.submit(class='ai-btn-primary px-4') }}
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>
+(() => {
+  const profiles = {{ families|tojson }};
+  const family = document.getElementById('family_key');
+  const model = document.getElementById('physical_model');
+  const provider = document.getElementById('provider');
+  const thinking = document.getElementById('thinking_mode');
+  const effort = document.getElementById('default_reasoning_effort');
+  const verbosity = document.getElementById('default_verbosity');
+  const budget = document.getElementById('budget_tokens');
+  const gateway = document.getElementById('gateway');
+  const reportCache = document.getElementById('cache_by_report');
+  const options = document.createElement('datalist'); options.id = 'family-model-options'; model.after(options); model.setAttribute('list', options.id);
+  function update() {
+    const profile = profiles.find(item => item.key === family.value);
+    const selectedEffort = effort.value;
+    const selectedVerbosity = verbosity.value;
+    effort.replaceChildren();
+    const emptyEffort = document.createElement('option'); emptyEffort.value = ''; emptyEffort.textContent = 'Seleccionar nivel'; effort.append(emptyEffort);
+    const modelLevels = profile?.model_levels?.[model.value] || profile?.levels || [];
+    for (const level of modelLevels) { const option = document.createElement('option'); option.value = level; option.textContent = level; effort.append(option); }
+    if (modelLevels.includes(selectedEffort)) effort.value = selectedEffort;
+    verbosity.replaceChildren();
+    const emptyVerbosity = document.createElement('option'); emptyVerbosity.value = ''; emptyVerbosity.textContent = 'Default del proveedor'; verbosity.append(emptyVerbosity);
+    for (const level of profile?.verbosity_levels || []) { const option = document.createElement('option'); option.value = level; option.textContent = level; verbosity.append(option); }
+    if ((profile?.verbosity_levels || []).includes(selectedVerbosity)) verbosity.value = selectedVerbosity;
+    document.querySelector('.family-verbosity').hidden = !(profile?.verbosity_levels || []).length;
+    options.replaceChildren();
+    for (const name of profile?.models || []) { const option = document.createElement('option'); option.value = name; options.append(option); }
+    if (profile) provider.value = profile.provider;
+    const enabled = !!profile?.supports_thinking;
+    thinking.closest('.col-md-6').hidden = !enabled;
+    document.querySelector('.family-thinking-level').hidden = !enabled || !modelLevels.length || thinking.value !== 'on';
+    document.querySelector('.family-thinking-budget').hidden = !(profile?.family_fields || []).includes('budget_tokens') || thinking.value !== 'on';
+    if (!enabled) { thinking.value = 'off'; effort.value = ''; budget.value = ''; }
+    if (thinking.value !== 'on') { effort.value = ''; budget.value = ''; }
+    document.getElementById('default_service_tier').closest('.col-md-6').hidden = !profile?.supports_flex;
+    if (!profile?.supports_flex) document.getElementById('default_service_tier').value = '';
+    const pricingTier = document.getElementById('pricing_tier');
+    pricingTier.closest('.col-md-6').hidden = !!profile;
+    if (profile) pricingTier.value = '';
+    const canGroupCache = !!profile?.supports_report_cache_scope && gateway.value === 'direct';
+    document.querySelector('.family-report-cache').hidden = !canGroupCache;
+    if (!canGroupCache) reportCache.checked = false;
+  }
+  family.addEventListener('change', () => { model.value = ''; update(); });
+  thinking.addEventListener('change', update);
+  model.addEventListener('change', update);
+  gateway.addEventListener('change', update);
+  update();
+})();
+</script>
+{% endblock %}

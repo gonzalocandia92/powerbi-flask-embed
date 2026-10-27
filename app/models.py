@@ -30,6 +30,7 @@ except ImportError:  # pragma: no cover - fallback for environments without pgve
             return f"VECTOR({self.dimensions})"
 
 from app import db
+from app.persistence import review_states, review_triggers
 
 FERNET_KEY = os.getenv('FERNET_KEY')
 if not FERNET_KEY:
@@ -121,6 +122,9 @@ class User(db.Model, UserMixin):
     email = db.Column(db.String(254), unique=True, nullable=True, index=True)
     password_hash = db.Column(db.String(256), nullable=True)
     is_admin = db.Column(db.Boolean, default=False, nullable=False)
+    # Sudata staff: their activity is internal and is kept apart from client activity
+    # (chat sessions, MCP interactions, visits, logs and Langfuse traces).
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
     is_active = db.Column(db.Boolean, default=True, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
@@ -273,6 +277,19 @@ class Report(db.Model):
     # Whether to show DAX queries in the chat (off by default for clients)
     show_dax_query = db.Column(db.Boolean, default=False, nullable=False)
 
+    # User-facing actions. They apply to every public link and to the private API.
+    # allow_refresh: dataset refresh through the backend (public links only).
+    # allow_reset_to_default / allow_refresh_visuals: Power BI client SDK actions
+    # (report.resetPersistentFilters() / report.refresh()).
+    allow_refresh = db.Column(db.Boolean, default=False, nullable=False)
+    allow_reset_to_default = db.Column(db.Boolean, default=False, nullable=False)
+    allow_refresh_visuals = db.Column(db.Boolean, default=False, nullable=False)
+
+    # When true, the public links of this report ask for a login with an application
+    # user: one with the reports.read permission who belongs to an active empresa
+    # associated with the report, or one with backoffice access.
+    requires_login = db.Column(db.Boolean, default=False, nullable=False)
+
     # Fixed schema retrieval limits for KLARA. Null values use runtime defaults.
     schema_retrieval_prompt = db.Column(db.Text, nullable=True)
     schema_table_context_limit = db.Column(db.Integer, nullable=True)
@@ -342,8 +359,6 @@ class PublicLink(db.Model):
     custom_slug = db.Column(db.String(120), unique=True, nullable=True)
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=False)
     is_active = db.Column(db.Boolean, default=True)
-    allow_refresh = db.Column(db.Boolean, default=False, nullable=False)
-    allow_reset_to_default = db.Column(db.Boolean, default=False, nullable=False)
     created_at = db.Column(db.DateTime, default=_utcnow)
 
     report = db.relationship('Report', back_populates='public_links')
@@ -354,7 +369,7 @@ class Visit(db.Model):
 
     __tablename__ = 'visits'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     link_slug = db.Column(db.String(120), nullable=False, index=True)
     timestamp = db.Column(db.DateTime, default=_utcnow, nullable=False, index=True)
     visitor_id = db.Column(db.String(36), nullable=True, index=True)
@@ -369,6 +384,8 @@ class Visit(db.Model):
     os = db.Column(db.String(100), nullable=True)
     country = db.Column(db.String(2), nullable=True)
     is_bot = db.Column(db.Boolean, default=False, nullable=False)
+    # Snapshot of User.is_staff for a logged-in visitor at visit time.
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
     session_duration = db.Column(db.Integer, nullable=True)
 
 
@@ -492,13 +509,25 @@ def _compile_vector_sqlite(type_, compiler, **kw):
 
 
 class ChatSession(db.Model):
-    """Chat conversation session — cabecera del log de KLARA."""
+    """Chat conversation session — cabecera del log de KLARA.
+
+    ``channel`` identifies the entry point that originated the conversation
+    (``klara_chat``, ``whatsapp``, and in the future other integrations such
+    as Telegram/Slack). It is a free-text string (never a Postgres ENUM) so
+    new channels can be added without a schema migration, and it is set
+    explicitly by the code path that creates the session — never inferred
+    from ``slug`` or other telemetry, since the same public slug is used by
+    both the web widget and WhatsApp. Historical rows created before this
+    column existed are NULL; see ``backfill_chat_channels.py`` for how they
+    are retroactively classified (never defaulted to ``klara_chat``).
+    """
 
     __tablename__ = 'chat_sessions'
 
     id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
     slug = db.Column(db.String(120), nullable=True, index=True)
     title = db.Column(db.String(200), nullable=True)
+    channel = db.Column(db.String(30), nullable=True, index=True)
     workspace_id_fk = db.Column(db.BigInteger, db.ForeignKey('workspaces.id'), nullable=True, index=True)
     report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=True, index=True)
     empresa_id = db.Column(db.BigInteger, db.ForeignKey('clientes_privados.id'), nullable=True, index=True)
@@ -506,6 +535,13 @@ class ChatSession(db.Model):
     last_message_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     total_messages = db.Column(db.Integer, default=0, nullable=False)
     had_errors = db.Column(db.Boolean, default=False, nullable=False)
+    last_model_key = db.Column(db.String(120), nullable=True)
+    # Snapshot of User.is_staff of the logged-in user who chatted in this session.
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
+    # HMAC of the authorized context that created the session (signed visitor
+    # cookie / user id / verified WhatsApp number). A session is only reused when
+    # the requester presents the same owner; NULL (legacy rows) is never reused.
+    owner_hash = db.Column(db.String(64), nullable=True, index=True)
 
     workspace = db.relationship('Workspace')
     report = db.relationship('Report')
@@ -532,6 +568,13 @@ class ChatMessage(db.Model):
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     latency_ms = db.Column(db.Integer, nullable=True)
     model_used = db.Column(db.String(100), nullable=True)
+    requested_model_key = db.Column(db.String(120), nullable=True)
+    model_key = db.Column(db.String(120), nullable=True)
+    model_provider = db.Column(db.String(50), nullable=True)
+    physical_model = db.Column(db.String(200), nullable=True)
+    model_gateway = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    actual_model = db.Column(db.String(200), nullable=True)
     input_tokens = db.Column(db.Integer, nullable=True)
     output_tokens = db.Column(db.Integer, nullable=True)
     total_cost_usd = db.Column(db.Float, nullable=True, default=0)
@@ -542,9 +585,28 @@ class ChatMessage(db.Model):
     dax_query = db.Column(db.Text, nullable=True)
     had_error = db.Column(db.Boolean, default=False, nullable=False)
     error_message = db.Column(db.Text, nullable=True)
+    # Explicit, non-fragile link from an assistant reply back to the user
+    # message it answers. Populated for every new turn (success or error) so
+    # pairing never has to guess from ordering alone; NULL on historical rows
+    # created before this column existed (see ChatInteractionProvider, which
+    # falls back to positional pairing only for those legacy rows).
+    reply_to_message_id = db.Column(
+        db.BigInteger, db.ForeignKey('chat_messages.id', ondelete='SET NULL'), nullable=True, index=True
+    )
+    # Effective identity of the turn, recorded internally for audit. These are
+    # never returned to public clients; ``diagnostic_id`` is the only opaque
+    # handle shared with the browser so support can locate the turn.
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id'), nullable=True, index=True)
+    dataset_hash = db.Column(db.String(64), nullable=True)
+    workspace_hash = db.Column(db.String(64), nullable=True)
+    credential_ref = db.Column(db.String(64), nullable=True)
+    dataset_source = db.Column(db.String(20), nullable=True)
+    trace_id = db.Column(db.String(120), nullable=True)
+    diagnostic_id = db.Column(db.String(32), nullable=True, unique=True, index=True)
 
     session = db.relationship('ChatSession', back_populates='messages')
     usage_events = db.relationship('AIUsageEvent', back_populates='message', lazy='dynamic')
+    replied_to = db.relationship('ChatMessage', remote_side='ChatMessage.id')
 
     __table_args__ = (
         db.Index('ix_chat_message_session_created', 'session_id', 'created_at'),
@@ -620,15 +682,20 @@ class AIModelPricing(db.Model):
 
     __tablename__ = 'ai_model_pricing'
 
-    id = db.Column(db.BigInteger, primary_key=True, autoincrement=True)
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
     provider = db.Column(db.String(50), nullable=False, index=True)
     model = db.Column(db.String(120), nullable=False, index=True)
     event_type = db.Column(db.String(30), nullable=False, index=True)
+    service_tier = db.Column(db.String(50), nullable=True, index=True)
+    pricing_tier = db.Column(db.String(50), nullable=True, index=True)
+    gateway = db.Column(db.String(50), nullable=True, index=True)
+    context_band = db.Column(db.String(20), nullable=True, index=True)
+    source_url = db.Column(db.String(500), nullable=True)
     currency = db.Column(db.String(10), nullable=False, default='USD')
-    input_cost_per_million_usd = db.Column(db.Float, nullable=True)
-    output_cost_per_million_usd = db.Column(db.Float, nullable=True)
-    cache_write_cost_per_million_usd = db.Column(db.Float, nullable=True)
-    cache_read_cost_per_million_usd = db.Column(db.Float, nullable=True)
+    input_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
+    output_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
+    cache_write_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
+    cache_read_cost_per_million_usd = db.Column(db.Numeric(20, 9), nullable=True)
     is_active = db.Column(db.Boolean, nullable=False, default=True)
     effective_from = db.Column(db.DateTime, default=_utcnow, nullable=False, index=True)
     effective_to = db.Column(db.DateTime, nullable=True)
@@ -636,6 +703,91 @@ class AIModelPricing(db.Model):
     updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
 
     usage_events = db.relationship('AIUsageEvent', back_populates='pricing', lazy='dynamic')
+
+
+class AIModelConfig(db.Model):
+    """Provider-neutral model catalog. Secrets always come from environment/config."""
+
+    __tablename__ = 'ai_model_configs'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    model_key = db.Column(db.String(120), nullable=False, unique=True, index=True)
+    display_name = db.Column(db.String(160), nullable=False)
+    provider = db.Column(db.String(50), nullable=False, index=True)
+    physical_model = db.Column(db.String(200), nullable=False)
+    gateway = db.Column(db.String(50), nullable=False, default='direct')
+    enabled = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    client_selectable = db.Column(db.Boolean, nullable=False, default=False, index=True)
+    validation_status = db.Column(db.String(30), nullable=False, default='pending', index=True)
+    validated_at = db.Column(db.DateTime, nullable=True)
+    supports_tools = db.Column(db.Boolean, nullable=False, default=True)
+    supports_reasoning = db.Column(db.Boolean, nullable=False, default=False)
+    supports_cache_key = db.Column(db.Boolean, nullable=False, default=False)
+    supports_flex = db.Column(db.Boolean, nullable=False, default=False)
+    context_window = db.Column(db.Integer, nullable=False, default=200000)
+    max_output_tokens = db.Column(db.Integer, nullable=False, default=4096)
+    default_reasoning_effort = db.Column(db.String(30), nullable=True)
+    default_verbosity = db.Column(db.String(10), nullable=True)
+    default_service_tier = db.Column(db.String(50), nullable=True)
+    pricing_tier = db.Column(db.String(50), nullable=True)
+    provider_options_json = db.Column(db.JSON, nullable=True)
+    family_key = db.Column(db.String(80), nullable=True, index=True)
+    family_options_json = db.Column(db.JSON, nullable=True)
+    thinking_mode = db.Column(db.String(10), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    role_assignments = db.relationship('AIModelRoleAssignment', back_populates='model', cascade='all, delete-orphan')
+    grants = db.relationship('AIModelGrant', back_populates='model', cascade='all, delete-orphan')
+
+
+class AIModelRoleAssignment(db.Model):
+    """Model assignment for a KLARA role with report > empresa > global precedence."""
+
+    __tablename__ = 'ai_model_role_assignments'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    model_id = db.Column(db.BigInteger, db.ForeignKey('ai_model_configs.id', ondelete='CASCADE'), nullable=True, index=True)
+    role = db.Column(db.String(50), nullable=False, index=True)
+    strategy = db.Column(db.String(30), nullable=False, default='model')
+    scope_type = db.Column(db.String(20), nullable=False, index=True)
+    scope_id = db.Column(db.String(120), nullable=True, index=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    max_output_tokens = db.Column(db.Integer, nullable=True)
+    reasoning_effort = db.Column(db.String(30), nullable=True)
+    thinking_mode = db.Column(db.String(10), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    provider_options_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    model = db.relationship('AIModelConfig', back_populates='role_assignments')
+
+    __table_args__ = (
+        db.Index('ix_ai_model_role_scope', 'role', 'scope_type', 'scope_id', 'is_active'),
+    )
+
+
+class AIModelGrant(db.Model):
+    """Allowlist/default policy for models at global, empresa or report scope."""
+
+    __tablename__ = 'ai_model_grants'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    model_id = db.Column(db.BigInteger, db.ForeignKey('ai_model_configs.id', ondelete='CASCADE'), nullable=False, index=True)
+    scope_type = db.Column(db.String(20), nullable=False, index=True)
+    scope_id = db.Column(db.String(120), nullable=True, index=True)
+    allowed = db.Column(db.Boolean, nullable=False, default=True)
+    is_default = db.Column(db.Boolean, nullable=False, default=False)
+    client_selectable = db.Column(db.Boolean, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    model = db.relationship('AIModelConfig', back_populates='grants')
+
+    __table_args__ = (
+        db.Index('ix_ai_model_grant_scope', 'scope_type', 'scope_id', 'allowed'),
+    )
 
 
 class AIUsageEvent(db.Model):
@@ -659,6 +811,15 @@ class AIUsageEvent(db.Model):
     trigger_type = db.Column(db.String(30), nullable=False)
     provider = db.Column(db.String(50), nullable=False, index=True)
     model = db.Column(db.String(120), nullable=False, index=True)
+    model_key = db.Column(db.String(120), nullable=True, index=True)
+    gateway = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    pricing_tier = db.Column(db.String(50), nullable=True)
+    context_band = db.Column(db.String(20), nullable=True)
+    billing_status = db.Column(db.String(30), nullable=False, default='verified', index=True)
+    reserved_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    effective_thinking_mode = db.Column(db.String(10), nullable=True)
+    actual_model = db.Column(db.String(200), nullable=True)
     event_type = db.Column(db.String(30), nullable=False, index=True)
     operation_name = db.Column(db.String(120), nullable=True)
     status = db.Column(db.String(20), nullable=False, default='success')
@@ -670,11 +831,11 @@ class AIUsageEvent(db.Model):
     cache_write_tokens = db.Column(db.Integer, nullable=True)
     cache_read_tokens = db.Column(db.Integer, nullable=True)
 
-    input_cost_usd = db.Column(db.Float, nullable=True)
-    output_cost_usd = db.Column(db.Float, nullable=True)
-    cache_write_cost_usd = db.Column(db.Float, nullable=True)
-    cache_read_cost_usd = db.Column(db.Float, nullable=True)
-    total_cost_usd = db.Column(db.Float, nullable=True)
+    input_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    output_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    cache_write_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    cache_read_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
+    total_cost_usd = db.Column(db.Numeric(20, 12), nullable=True)
     currency = db.Column(db.String(10), nullable=False, default='USD')
 
     pricing_id = db.Column(db.BigInteger, db.ForeignKey('ai_model_pricing.id', ondelete='SET NULL'), nullable=True, index=True)
@@ -695,6 +856,425 @@ class AIUsageEvent(db.Model):
         db.Index('ix_ai_usage_events_workspace_created', 'workspace_id_fk', 'created_at'),
         db.Index('ix_ai_usage_events_provider_model', 'provider', 'model'),
     )
+
+
+class ModelEvaluationRun(db.Model):
+    """A reproducible evaluation of one or more model/decision configurations."""
+
+    __tablename__ = 'model_evaluation_runs'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='SET NULL'), nullable=True, index=True)
+    requested_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    mode = db.Column(db.String(30), nullable=False, default='independent')
+    cache_mode = db.Column(db.String(30), nullable=False, default='cold')
+    status = db.Column(db.String(30), nullable=False, default='pending', index=True)
+    configuration_json = db.Column(db.JSON, nullable=True)
+    summary_json = db.Column(db.JSON, nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    total_cases = db.Column(db.Integer, nullable=False, default=0)
+    completed_cases = db.Column(db.Integer, nullable=False, default=0)
+    worker_id = db.Column(db.String(120), nullable=True, index=True)
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    cancel_requested_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    report = db.relationship('Report')
+    requested_by = db.relationship('User', foreign_keys=[requested_by_user_id])
+    cases = db.relationship(
+        'ModelEvaluationCase', back_populates='run', lazy='dynamic',
+        cascade='all, delete-orphan', order_by='ModelEvaluationCase.sequence_index'
+    )
+
+
+class ModelEvaluationCase(db.Model):
+    """One model/question execution and its complete observable outcome."""
+
+    __tablename__ = 'model_evaluation_cases'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    run_id = db.Column(db.BigInteger, db.ForeignKey('model_evaluation_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    sequence_index = db.Column(db.Integer, nullable=False)
+    question = db.Column(db.Text, nullable=False)
+    expected_answer = db.Column(db.Text, nullable=True)
+    answer = db.Column(db.Text, nullable=True)
+    model_key = db.Column(db.String(120), nullable=False, index=True)
+    cache_mode = db.Column(db.String(30), nullable=False, default='cold')
+    provider = db.Column(db.String(50), nullable=True)
+    physical_model = db.Column(db.String(200), nullable=True)
+    actual_model = db.Column(db.String(200), nullable=True)
+    gateway = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    status = db.Column(db.String(30), nullable=False, default='pending', index=True)
+    attempt_count = db.Column(db.Integer, nullable=False, default=0)
+    latency_ms = db.Column(db.Integer, nullable=True)
+    input_tokens = db.Column(db.Integer, nullable=True)
+    output_tokens = db.Column(db.Integer, nullable=True)
+    cache_read_tokens = db.Column(db.Integer, nullable=True)
+    cache_write_tokens = db.Column(db.Integer, nullable=True)
+    reasoning_tokens = db.Column(db.Integer, nullable=True)
+    main_model_cost = db.Column(db.Float, nullable=True)
+    decision_layer_cost = db.Column(db.Float, nullable=True)
+    pipeline_total_cost = db.Column(db.Float, nullable=True)
+    selected_skills_json = db.Column(db.JSON, nullable=True)
+    candidate_skills_json = db.Column(db.JSON, nullable=True)
+    complexity_assessment_json = db.Column(db.JSON, nullable=True)
+    execution_policy_json = db.Column(db.JSON, nullable=True)
+    tools_called_json = db.Column(db.JSON, nullable=True)
+    dax_query = db.Column(db.Text, nullable=True)
+    tool_rounds = db.Column(db.Integer, nullable=True)
+    failure_reason = db.Column(db.String(120), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    trace_id = db.Column(db.String(120), nullable=True)
+    metrics_json = db.Column(db.JSON, nullable=True)
+    review_status = db.Column(db.String(30), nullable=False, default='unreviewed', index=True)
+    review_notes = db.Column(db.Text, nullable=True)
+    reviewed_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    reviewed_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    run = db.relationship('ModelEvaluationRun', back_populates='cases')
+    reviewed_by = db.relationship('User', foreign_keys=[reviewed_by_user_id])
+
+    __table_args__ = (
+        db.Index('ix_model_evaluation_case_run_model', 'run_id', 'model_key'),
+        db.UniqueConstraint('run_id', 'sequence_index', name='uq_model_evaluation_case_run_sequence'),
+    )
+
+
+class AnalyticalReportDefinition(db.Model):
+    """Saved configuration of an analytical report (Reporting domain).
+
+    Not the Power BI ``Report``: it only references it. Editing a definition never
+    rewrites history, because every ``ReportRun`` keeps its own snapshot.
+    """
+
+    __tablename__ = 'analytical_report_definitions'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    name = db.Column(db.String(200), nullable=False)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False, index=True)
+    strategy = db.Column(db.String(30), nullable=False, default='fixed')  # fixed | coordinated
+    analysis_model_key = db.Column(db.String(120), nullable=True)
+    analysis_service_tier = db.Column(db.String(50), nullable=True)  # None = the model's configured tier
+    # Free text typed by the user.
+    structure_prompt = db.Column(db.Text, nullable=True)
+    # V1.3: the CURRENT interpretation of ``structure_prompt`` (ReportStructureSpec). Written together
+    # and atomically by an explicit compile; stale when ``structure_input_hash`` no longer matches the
+    # prompt + questions. Execution details of the planner stay in the AI usage ledger, not here.
+    structure_spec_json = db.Column(db.JSON, nullable=True)
+    structure_schema_version = db.Column(db.String(20), nullable=True)
+    structure_input_hash = db.Column(db.String(64), nullable=True)
+    structure_compiled_at = db.Column(db.DateTime, nullable=True)
+    # {"source": interpreted|fallback, "warnings": [...], "planner": {model_key,...}, "error": {...}|None}
+    structure_compile_json = db.Column(db.JSON, nullable=True)
+    # Room for future settings so new options do not need a column each.
+    config_json = db.Column(db.JSON, nullable=True)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    report = db.relationship('Report')
+    questions = db.relationship(
+        'AnalyticalReportQuestion', back_populates='definition', lazy='select',
+        cascade='all, delete-orphan', order_by='AnalyticalReportQuestion.position',
+    )
+
+
+class AnalyticalReportQuestion(db.Model):
+    """One question of a definition. ``key`` is its identity; ``position`` is only its order."""
+
+    __tablename__ = 'analytical_report_questions'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    definition_id = db.Column(
+        db.BigInteger, db.ForeignKey('analytical_report_definitions.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    key = db.Column(db.String(80), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    question = db.Column(db.Text, nullable=False)
+    position = db.Column(db.Integer, nullable=False, default=0)
+    required_skill_keys_json = db.Column(db.JSON, nullable=False, default=list)
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    definition = db.relationship('AnalyticalReportDefinition', back_populates='questions')
+
+    __table_args__ = (
+        db.UniqueConstraint('definition_id', 'key', name='uq_analytical_report_question_key'),
+    )
+
+
+class ReportRun(db.Model):
+    """One durable execution of a definition.
+
+    ``id`` IS the ``report_run_id`` used by the pipeline, ``AIUsageEvent.metadata_json``
+    and ``ReportCostService``: it is created here, before executing, and injected down.
+    ``definition_snapshot_json`` freezes what was actually run.
+    """
+
+    __tablename__ = 'report_runs'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    definition_id = db.Column(
+        db.BigInteger, db.ForeignKey('analytical_report_definitions.id', ondelete='SET NULL'),
+        nullable=True, index=True)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='CASCADE'), nullable=False, index=True)
+    requested_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    # queued | running | completed | completed_with_errors | failed | cancel_requested | cancelled
+    status = db.Column(db.String(30), nullable=False, default='queued', index=True)
+    # preflight | analysis | coordination | writing | rendering (independent of status)
+    current_stage = db.Column(db.String(30), nullable=True)
+    progress_current = db.Column(db.Integer, nullable=False, default=0)
+    progress_total = db.Column(db.Integer, nullable=False, default=0)
+    snapshot_schema_version = db.Column(db.Integer, nullable=False, default=1)
+    definition_snapshot_json = db.Column(db.JSON, nullable=False)
+    # Outcome that is not a section: writer status, coordination debug and (DEPRECATED, legacy
+    # fallback only) a mirror of the FinalReport; the source of truth is ReportRunArtifact.
+    result_json = db.Column(db.JSON, nullable=True)
+    error_code = db.Column(db.String(80), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    worker_id = db.Column(db.String(120), nullable=True, index=True)
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True, index=True)
+    cancel_requested_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    started_at = db.Column(db.DateTime, nullable=True)
+    completed_at = db.Column(db.DateTime, nullable=True)
+
+    definition = db.relationship('AnalyticalReportDefinition')
+    report = db.relationship('Report')
+    requested_by = db.relationship('User', foreign_keys=[requested_by_user_id])
+    sections = db.relationship(
+        'ReportRunSection', back_populates='run', lazy='select',
+        cascade='all, delete-orphan', order_by='ReportRunSection.position, ReportRunSection.sequence',
+    )
+    artifacts = db.relationship(
+        'ReportRunArtifact', back_populates='run', lazy='select',
+        cascade='all, delete-orphan', passive_deletes=True, order_by='ReportRunArtifact.id',
+    )
+    # No delete cascade and passive_deletes='all': the ORM must never try to nullify or remove a
+    # review; deleting a run that has one is refused by the database (ON DELETE RESTRICT).
+    reviews = db.relationship(
+        'ReportReview', back_populates='run', lazy='select', passive_deletes='all',
+        order_by='ReportReview.round',
+    )
+
+    __table_args__ = (
+        db.Index('ix_report_runs_status_created', 'status', 'created_at'),
+    )
+
+
+class ReportRunSection(db.Model):
+    """Result of one analysis of a run, written as soon as it finishes.
+
+    Tokens/costs live in ``AIUsageEvent`` (source of truth); only descriptive
+    model info is copied here for display.
+    """
+
+    __tablename__ = 'report_run_sections'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    run_id = db.Column(db.String(36), db.ForeignKey('report_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    question_key = db.Column(db.String(80), nullable=False)
+    sequence = db.Column(db.Integer, nullable=False, default=0)  # order of COMPLETION within the run (not display order)
+    title = db.Column(db.String(300), nullable=False)
+    question = db.Column(db.Text, nullable=False)
+    position = db.Column(db.Integer, nullable=False, default=0)  # logical/display order in this run (definition snapshot)
+    origin = db.Column(db.String(20), nullable=False, default='definition')  # definition | coordinator
+    status = db.Column(db.String(20), nullable=False)  # completed | failed
+    answer = db.Column(db.Text, nullable=True)
+    failure_reason = db.Column(db.String(120), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    recovered_errors_json = db.Column(db.JSON, nullable=True)
+    dax_query = db.Column(db.Text, nullable=True)
+    tools_called_json = db.Column(db.JSON, nullable=True)
+    model_key = db.Column(db.String(120), nullable=True)
+    model = db.Column(db.String(200), nullable=True)
+    provider = db.Column(db.String(50), nullable=True)
+    service_tier = db.Column(db.String(50), nullable=True)
+    actual_service_tier = db.Column(db.String(50), nullable=True)
+    input_tokens = db.Column(db.Integer, nullable=True)
+    output_tokens = db.Column(db.Integer, nullable=True)
+    latency_by_component_ms = db.Column(db.JSON, nullable=True)
+    trace_id = db.Column(db.String(120), nullable=True)
+    semantic_notes_json = db.Column(db.JSON, nullable=True)
+    skill_routing_json = db.Column(db.JSON, nullable=True)
+    purpose = db.Column(db.Text, nullable=True)
+    related_section_keys_json = db.Column(db.JSON, nullable=True)
+    # V1.5 structured evidence (facts/series/tables of the DAX result behind ``answer``) as ONE JSON document,
+    # plus the version of its own schema so an old payload is never read under a newer contract.
+    evidence_json = db.Column(db.JSON, nullable=True)
+    evidence_schema_version = db.Column(db.String(10), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    run = db.relationship('ReportRun', back_populates='sections')
+
+    __table_args__ = (
+        db.UniqueConstraint('run_id', 'question_key', name='uq_report_run_section_key'),
+    )
+
+
+class ReportRunArtifact(db.Model):
+    """Immutable output derived from a ``ReportRun`` (FinalReport JSON, HTML, later PDF...).
+
+    One table for every kind: ``artifact_type`` + the version columns say which contract
+    produced the content. Rows are insert-only; a regeneration (e.g. a newer HTML
+    renderer over the same FinalReport) is a NEW row with the next ``revision`` so the
+    original keeps existing. Identity = ``(report_run_id, artifact_type, revision)``;
+    ``revision`` counts generations per run and type, which avoids NULL-bearing unique
+    keys (``renderer_version`` is NULL for a FinalReport).
+
+    Text content (JSON is stored as canonical JSON text, not as a JSON column, so the
+    stored bytes are exactly what ``sha256`` covers) goes in ``content_text``; binary
+    content (PDF) in ``content_bytes``. Exactly one is set.
+    """
+
+    __tablename__ = 'report_run_artifacts'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    report_run_id = db.Column(
+        db.String(36), db.ForeignKey('report_runs.id', ondelete='CASCADE'), nullable=False, index=True)
+    artifact_type = db.Column(db.String(40), nullable=False)       # final_report | html | (pdf | markdown ...)
+    revision = db.Column(db.Integer, nullable=False, default=1)
+    schema_version = db.Column(db.String(20), nullable=True)       # FinalReport schema the content follows
+    renderer_version = db.Column(db.String(40), nullable=True)     # e.g. html-v1 (derived artifacts only)
+    content_type = db.Column(db.String(100), nullable=False)
+    content_text = db.Column(db.Text, nullable=True)
+    content_bytes = db.Column(db.LargeBinary, nullable=True)
+    sha256 = db.Column(db.String(64), nullable=False)
+    size_bytes = db.Column(db.Integer, nullable=False)
+    metadata_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    run = db.relationship('ReportRun', back_populates='artifacts')
+
+    __table_args__ = (
+        db.UniqueConstraint('report_run_id', 'artifact_type', 'revision', name='uq_report_run_artifact_revision'),
+        db.Index('ix_report_run_artifacts_run_type', 'report_run_id', 'artifact_type'),
+        # Redundant with the primary key; it exists so ``report_reviews`` can reference the PAIR
+        # (artifact id, run id) and the database guarantees an artifact belongs to the review's run.
+        db.Index('uq_report_run_artifact_id_run', 'id', 'report_run_id', unique=True),
+    )
+
+
+def _sql_in(column, values):
+    return f"{column} IN ({', '.join(repr(v) for v in values)})"
+
+
+class ReportReview(db.Model):
+    """Human review of ONE persisted PDF of a ``ReportRun`` (staff approve/reject).
+
+    Domain rules live in the review service; the database enforces what must hold even if the
+    code is wrong: CHECKs for coherence, composite RESTRICT foreign keys (an artifact belongs to
+    the review's run and cannot be deleted while referenced) and triggers
+    (``app/persistence/review_triggers.py``) for immutability. ``draft`` is the preparation lock:
+    the row exists (unique per run and round) before the PDF is rendered.
+
+    ``round`` allows a later re-review of the same run without a schema change; only round 1 is
+    used for now. ``submitted_by_user_id`` is nullable by design (users can be deleted, and the
+    scheduler will submit without a human actor).
+    """
+
+    __tablename__ = 'report_reviews'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    report_run_id = db.Column(
+        db.String(36), db.ForeignKey('report_runs.id', ondelete='RESTRICT'), nullable=False)
+    round = db.Column(db.Integer, nullable=False, default=1, server_default='1')
+    status = db.Column(db.String(20), nullable=False, default=review_states.STATUS_DRAFT,
+                       server_default=review_states.STATUS_DRAFT)
+    # Artifact references (composite FKs below). Ids only: no ORM relationship, so reading a review
+    # never loads PDF bytes.
+    pdf_artifact_id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), nullable=True)
+    pdf_sha256 = db.Column(db.String(64), nullable=True)
+    final_report_artifact_id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), nullable=True)
+    html_artifact_id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), nullable=True)
+    submitted_by_user_id = db.Column(
+        db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    submitted_at = db.Column(db.DateTime, nullable=True)
+    decided_by_user_id = db.Column(
+        db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    decided_at = db.Column(db.DateTime, nullable=True)
+    rejection_reason = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    run = db.relationship('ReportRun', back_populates='reviews')
+    submitted_by = db.relationship('User', foreign_keys=[submitted_by_user_id])
+    decided_by = db.relationship('User', foreign_keys=[decided_by_user_id])
+    events = db.relationship(
+        'ReportReviewEvent', back_populates='review', lazy='select', passive_deletes='all',
+        order_by='ReportReviewEvent.id',
+    )
+
+    __table_args__ = (
+        db.UniqueConstraint('report_run_id', 'round', name='uq_report_review_run_round'),
+        db.CheckConstraint(_sql_in('status', review_states.STATUSES), name='ck_report_review_status'),
+        db.CheckConstraint("status = 'draft' OR (pdf_artifact_id IS NOT NULL AND pdf_sha256 IS NOT NULL)",
+                           name='ck_report_review_pdf_when_submitted'),
+        db.CheckConstraint("status = 'draft' OR submitted_at IS NOT NULL",
+                           name='ck_report_review_submitted_at'),
+        db.CheckConstraint(f"NOT ({_sql_in('status', review_states.DECIDED_STATUSES)}) OR decided_at IS NOT NULL",
+                           name='ck_report_review_decided_at'),
+        db.CheckConstraint(
+            "status <> 'rejected' OR (rejection_reason IS NOT NULL AND length(trim(rejection_reason)) > 0)",
+            name='ck_report_review_rejection_reason'),
+        db.ForeignKeyConstraint(
+            ['pdf_artifact_id', 'report_run_id'],
+            ['report_run_artifacts.id', 'report_run_artifacts.report_run_id'],
+            ondelete='RESTRICT', name='fk_report_review_pdf'),
+        db.ForeignKeyConstraint(
+            ['html_artifact_id', 'report_run_id'],
+            ['report_run_artifacts.id', 'report_run_artifacts.report_run_id'],
+            ondelete='RESTRICT', name='fk_report_review_html'),
+        db.ForeignKeyConstraint(
+            ['final_report_artifact_id', 'report_run_id'],
+            ['report_run_artifacts.id', 'report_run_artifacts.report_run_id'],
+            ondelete='RESTRICT', name='fk_report_review_final_report'),
+        db.Index('ix_report_reviews_status_submitted', 'status', 'submitted_at'),
+    )
+
+
+class ReportReviewEvent(db.Model):
+    """Append-only audit trail of a review (the database refuses UPDATE and DELETE).
+
+    ``actor_user_id`` becomes NULL if the user is deleted, so the actor's identity is also
+    snapshotted in ``metadata_json`` by the review service. ``event_type`` has no CHECK on
+    purpose: a new kind of event must not need a migration.
+    """
+
+    __tablename__ = 'report_review_events'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    review_id = db.Column(
+        db.BigInteger().with_variant(db.Integer, 'sqlite'),
+        db.ForeignKey('report_reviews.id', ondelete='RESTRICT'), nullable=False)
+    actor_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    event_type = db.Column(db.String(40), nullable=False)
+    previous_status = db.Column(db.String(20), nullable=True)
+    new_status = db.Column(db.String(20), nullable=True)
+    comment = db.Column(db.Text, nullable=True)
+    metadata_json = db.Column(db.JSON, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+
+    review = db.relationship('ReportReview', back_populates='events')
+    actor = db.relationship('User', foreign_keys=[actor_user_id])
+
+    __table_args__ = (
+        db.Index('ix_report_review_events_review', 'review_id', 'id'),
+    )
+
+
+review_triggers.install(reviews=ReportReview.__table__, events=ReportReviewEvent.__table__)
 
 
 class WhatsAppAuthorizedNumber(db.Model):
@@ -857,6 +1437,7 @@ class McpModelGrant(db.Model):
             'user_id', 'config_id', 'empresa_id', name='uq_mcp_grant_user_config_empresa'
         ),
     )
+
 
     id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
     public_id = db.Column(db.String(36), unique=True, nullable=False, default=_uuid4, index=True)
@@ -1070,3 +1651,57 @@ class McpSecurityAuditLog(db.Model):
     outcome = db.Column(db.String(40), nullable=False, default='success')
     details = db.Column(db.JSON, nullable=False, default=dict)
     created_at = db.Column(db.DateTime(timezone=True), default=_utcnow, nullable=False, index=True)
+
+
+class McpInteraction(db.Model):
+    """One logical analytical question captured from an MCP client.
+
+    MCP clients (Claude Desktop, ChatGPT, other hosts) talk to Power BI
+    through ``mcp-aklara``, which calls back into this Flask app's private
+    broker (``/internal/mcp/*``) to resolve access, list/select skills and
+    fetch relevant schema — but ``execute_dax_query`` itself runs directly
+    against the Power BI REST API using the token handed out by
+    ``/internal/mcp/resolve-access``. This backend never sees the DAX
+    execution or the final answer, which may be produced entirely outside
+    KLARA by the host MCP client, so only the user's question is persisted
+    here — never an answer, cost, tokens or model, which would misrepresent
+    something Klara never computed.
+
+    Deduplication: a single user question can drive several broker calls
+    (list-skills, select-skills, relevant-schema, possibly repeated). See
+    ``app.services.mcp_interaction_service.record_mcp_question`` for the
+    correlation/dedup strategy and its documented limitation (no explicit
+    request/correlation id is available from mcp-aklara today).
+    """
+
+    __tablename__ = 'mcp_interactions'
+
+    id = db.Column(_bigint_pk(), primary_key=True, autoincrement=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False, index=True)
+    question = db.Column(db.Text, nullable=False)
+
+    empresa_id = db.Column(
+        db.BigInteger, db.ForeignKey('clientes_privados.id', ondelete='SET NULL'), nullable=True, index=True
+    )
+    report_id_fk = db.Column(
+        db.BigInteger, db.ForeignKey('reports.id', ondelete='SET NULL'), nullable=True, index=True
+    )
+
+    user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True, index=True)
+    mcp_session_public_id = db.Column(db.String(36), nullable=True, index=True)
+    grant_public_id = db.Column(db.String(36), nullable=True, index=True)
+
+    # Which broker call first captured this logical question: 'select_skills'
+    # or 'relevant_schema' (the only two calls that carry the raw question).
+    source_tool = db.Column(db.String(50), nullable=False)
+    # Snapshot of User.is_staff at capture time.
+    is_staff = db.Column(db.Boolean, default=False, nullable=False, server_default=sa.false())
+
+    empresa = db.relationship('Empresa')
+    report = db.relationship('Report')
+    user = db.relationship('User')
+
+    __table_args__ = (
+        db.Index('ix_mcp_interactions_session_created', 'mcp_session_public_id', 'created_at'),
+    )
+

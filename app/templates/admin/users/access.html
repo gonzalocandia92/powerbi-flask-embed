@@ -26,13 +26,21 @@
       </div>
       <div class="card-body">
         <div class="alert alert-light border">
-          Los roles de esta sección sólo controlan el backoffice. No conceden acceso a modelos MCP.
+          Los roles de esta sección controlan el backoffice y la lectura de reportes con login. No conceden acceso a modelos MCP.
           Para quitar el acceso al backoffice, desmarcá “Administrador total” y todos los roles que incluyan
           <code>backoffice.access</code>.
+          <hr class="my-2">
+          Para que un usuario externo abra reportes con login, asignale el rol <strong>Lector de reportes</strong>
+          (permiso <code>reports.read</code>) y las empresas de la sección siguiente. No le des roles con acceso al backoffice.
         </div>
         <div class="form-check form-switch mb-3">
           <input class="form-check-input" type="checkbox" name="is_admin" id="is-admin" {% if user.is_admin %}checked{% endif %}>
           <label class="form-check-label fw-semibold" for="is-admin">Administrador total del backoffice</label>
+        </div>
+        <div class="form-check form-switch mb-3">
+          <input class="form-check-input" type="checkbox" name="is_staff" id="is-staff" {% if user.is_staff %}checked{% endif %}>
+          <label class="form-check-label fw-semibold" for="is-staff">Staff de Sudata</label>
+          <div class="form-text">Su actividad (chat, MCP, visitas) se marca como interna y se separa de la de los clientes.</div>
         </div>
         <div class="row g-3">
           {% for role in backoffice_roles %}
@@ -46,6 +54,8 @@
                   <strong>{{ role.name }}</strong>
                   {% if role.has_permission('backoffice.access') %}
                   <span class="badge bg-success ms-1">Permite entrar</span>
+                  {% elif role.has_permission('reports.read') %}
+                  <span class="badge bg-info ms-1">Lee reportes con login</span>
                   {% else %}
                   <span class="badge bg-light text-dark ms-1">Sin acceso directo</span>
                   {% endif %}
@@ -72,6 +82,7 @@
         <div class="alert alert-info">
           Primero asigná la empresa al usuario. Después elegí un rol por cada modelo disponible:
           <strong>Sin acceso</strong>, <strong>reader</strong>, <strong>editor</strong> u otro rol MCP configurado.
+          Las empresas asignadas también definen qué reportes con login puede abrir el usuario.
         </div>
 
         <div class="accordion" id="company-access-accordion">

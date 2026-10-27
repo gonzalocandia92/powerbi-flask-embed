@@ -22,14 +22,17 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 from dotenv import load_dotenv
-from app.services.observability import init_langfuse
+from app.services.observability import StaffLogFilter, init_langfuse
 
 load_dotenv()
 
 logging.basicConfig(
     level=getattr(logging, os.getenv('LOG_LEVEL', 'WARNING').upper(), logging.WARNING),
-    format='%(asctime)s [%(levelname)s] %(message)s'
+    format='%(asctime)s [%(levelname)s]%(staff_tag)s %(message)s'
 )
+# Handler-level filter so records propagated from child loggers also get staff_tag.
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(StaffLogFilter())
 
 db = SQLAlchemy()
 migrate = Migrate()
@@ -193,7 +196,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import ai_config, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin
+    from app.routes import ai_config, ai_reporting, ai_reporting_reviews, ai_reporting_review_pages, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations, admin_interactions
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -216,6 +219,15 @@ def create_app():
     app.register_blueprint(mcp_oauth.bp)
     app.register_blueprint(mcp_internal.bp)
     app.register_blueprint(mcp_oauth_admin.bp)
+    app.register_blueprint(model_catalog.bp)
+    app.register_blueprint(evaluations.bp)
+    app.register_blueprint(ai_reporting.bp)
+    app.register_blueprint(ai_reporting_reviews.bp)
+    app.register_blueprint(ai_reporting_review_pages.bp)
+    app.register_blueprint(admin_interactions.bp)
+
+    from app.services.reporting.cli import register_reporting_command
+    register_reporting_command(app)
 
     # Non-browser APIs authenticate independently and must not be subjected to
     # cookie-session CSRF validation.
@@ -229,7 +241,8 @@ def create_app():
     backoffice_blueprints = {
         'main', 'tenants', 'clients', 'workspaces', 'reports', 'usuarios_pbi',
         'analytics', 'empresas', 'futuras_empresas', 'api_docs', 'monitor',
-        'ai_config', 'users', 'mcp_config', 'mcp_oauth_admin',
+        'ai_config', 'model_catalog', 'evaluations', 'ai_reporting', 'ai_reporting_reviews', 'ai_reporting_review_pages', 'users', 'mcp_config',
+        'mcp_oauth_admin',
     }
 
     @app.before_request
@@ -244,11 +257,15 @@ def create_app():
             abort(403)
 
     # ── Background scheduler for dataset refresh monitoring ──────────────────
-    # Avoid double-start in Flask debug/reloader mode
-    if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
+    # Avoid double-start in Flask debug/reloader mode. DISABLE_BACKGROUND_SCHEDULER=1
+    # keeps pollers out of processes that must stay single-threaded (the test suite).
+    scheduler_disabled = os.getenv('DISABLE_BACKGROUND_SCHEDULER', '').lower() in ('1', 'true', 'yes')
+    if not scheduler_disabled and (not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true'):
         try:
             from apscheduler.schedulers.background import BackgroundScheduler
             from app.services.refresh_monitor import poll_all_reports
+            from app.services.evaluation_worker import poll_evaluation_queue
+            from app.services.reporting.run_worker import poll_report_run_queue
 
             interval_hours = int(os.getenv('REFRESH_POLL_INTERVAL_HOURS', 12))
             scheduler = BackgroundScheduler(daemon=True)
@@ -260,6 +277,29 @@ def create_app():
                 id='refresh_monitor_poll',
                 replace_existing=True,
             )
+            scheduler.add_job(
+                func=poll_evaluation_queue,
+                args=[app],
+                trigger='interval',
+                seconds=max(1, int(os.getenv('AI_EVALUATION_POLL_SECONDS', '3'))),
+                id='ai_evaluation_worker',
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            # Logical report worker. Set REPORT_RUN_WORKER_ENABLED=0 in the web process
+            # once the same poller runs in a dedicated report-worker process.
+            if os.getenv('REPORT_RUN_WORKER_ENABLED', '1').lower() not in ('0', 'false', 'no'):
+                scheduler.add_job(
+                    func=poll_report_run_queue,
+                    args=[app],
+                    trigger='interval',
+                    seconds=max(1, int(os.getenv('REPORT_RUN_POLL_SECONDS', '3'))),
+                    id='report_run_worker',
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                )
             scheduler.start()
             atexit.register(lambda: scheduler.shutdown(wait=False))
             logging.info(
@@ -297,6 +337,24 @@ def create_app():
         db.session.add(user)
         db.session.commit()
         print("Admin user created successfully")
+
+    @app.cli.command("backfill-staff-activity")
+    def backfill_staff_activity():
+        """Mark past MCP interactions of current staff users as staff activity.
+
+        Chat sessions and visits store no user, so their history cannot be reclassified.
+        """
+        from sqlalchemy import select
+        from app.models import McpInteraction
+
+        staff_ids = select(User.id).where(User.is_staff.is_(True))
+        updated = (
+            McpInteraction.query
+            .filter(McpInteraction.user_id.in_(staff_ids), McpInteraction.is_staff.is_(False))
+            .update({McpInteraction.is_staff: True}, synchronize_session=False)
+        )
+        db.session.commit()
+        print(f"MCP interactions marked as staff: {updated}")
 
     @app.cli.command('create-mcp-oauth-client')
     def create_mcp_oauth_client():
