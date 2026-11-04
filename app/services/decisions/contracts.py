@@ -28,7 +28,12 @@ class ComplexityAssessment:
 @dataclass(frozen=True)
 class ExecutionPolicy:
     main_model_key: str
-    max_tool_rounds: int = 10
+    # DAX executions per turn; schema retrievals have their own budgets below.
+    max_tool_rounds: int = 15
+    max_schema_rounds: int = 3
+    max_schema_failures: int = 6
+    # No semantic context and no DAX data -> retryable failure instead of an answer without data.
+    require_semantic_context: bool = False
     schema_table_limit: int = 6
     schema_measure_limit: int = 10
     skill_candidate_limit: int = 6
@@ -38,7 +43,7 @@ class ExecutionPolicy:
     cache: CachePolicy = field(default_factory=CachePolicy)
 
     def __post_init__(self):
-        if self.max_tool_rounds < 0 or min(self.schema_table_limit, self.schema_measure_limit, self.skill_candidate_limit) < 1:
+        if min(self.max_tool_rounds, self.max_schema_rounds, self.max_schema_failures) < 0 or min(self.schema_table_limit, self.schema_measure_limit, self.skill_candidate_limit) < 1:
             raise ValueError("Invalid execution limits")
 
 

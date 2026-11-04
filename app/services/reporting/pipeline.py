@@ -25,6 +25,7 @@ from pydantic import BaseModel
 
 from .composed_report import ComposedReportInput
 from .generator import ReportGenerator
+from .period_context import report_period
 from .progress import (
     ReportProgress, STAGE_COORDINATION, STAGE_RENDERING, STAGE_WRITING, notify_stage,
 )
@@ -123,6 +124,10 @@ class ReportPipeline:
             outcome = await self.writing.write(
                 draft, getattr(definition, "structure", None), on_attempt=on_attempt)
             result.final_report, result.composed = outcome.report, outcome.composed
+            frozen = report_period(getattr(definition, "period", None))
+            if frozen is not None and result.final_report is not None and "period" in type(result.final_report).model_fields:
+                # Scheduled runs: the frozen period is the truth, never what the writer wrote.
+                result.final_report = result.final_report.model_copy(update={"period": frozen})
             if outcome.mode == "fallback":
                 result.generation_mode, result.writer_error = "fallback", outcome.writer_error
             else:

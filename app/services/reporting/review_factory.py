@@ -44,6 +44,12 @@ def build_review_inbox() -> ReviewInbox:
     return SqlReviewInbox()
 
 
+def build_delivery_store():
+    """Where the approved PDFs went (read side of the review screen); written by the scheduler's ``deliver`` phase."""
+    from .delivery_store import DeliveryStore
+    return DeliveryStore()
+
+
 def build_review_service(*, store: ReviewStore | None = None, artifacts: ReviewArtifacts | None = None,
                          policy: ReviewPolicy | None = None, rules: Sequence[EligibilityRule] | None = None,
                          lease_seconds: float | None = None) -> ReviewService:

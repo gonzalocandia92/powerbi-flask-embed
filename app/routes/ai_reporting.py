@@ -55,7 +55,6 @@ from app.utils.request_args import date_arg as _date_arg, int_arg as _int_arg, v
 
 bp = Blueprint("ai_reporting", __name__, url_prefix="/admin/ai-reporting")
 MAX_QUESTIONS = 20
-MAX_QUESTION_CHARS = 1000
 MAX_TITLE_CHARS = 100
 MAX_CSV_BYTES = 2 * 1024 * 1024
 TITLE_HEADERS = ("title", "titulo", "título")
@@ -159,8 +158,8 @@ def _definition_from_payload(data: dict, models: list[dict], *, reserved_keys=()
         title = row.get("title")
         if title is None or title == "":
             title = f"Pregunta {index}"
-        if not isinstance(question, str) or not 1 <= len(question.strip()) <= 1000:
-            raise ValueError(f"La pregunta {index} debe tener entre 1 y 1000 caracteres.")
+        if not isinstance(question, str) or not question.strip():
+            raise ValueError(f"La pregunta {index} no puede estar vacía.")
         if not isinstance(title, str) or not 1 <= len(title.strip()) <= 100:
             raise ValueError(f"El título de la pregunta {index} debe tener hasta 100 caracteres.")
         pins = row.get("required_skill_keys") or []
@@ -272,9 +271,6 @@ def import_questions():
                 continue  # fully blank line
             if not question:
                 errors.append(f"Fila {line_number}: la pregunta está vacía.")
-                continue
-            if len(question) > MAX_QUESTION_CHARS:
-                errors.append(f"Fila {line_number}: la pregunta supera {MAX_QUESTION_CHARS} caracteres.")
                 continue
             if len(title) > MAX_TITLE_CHARS:
                 errors.append(f"Fila {line_number}: el título supera {MAX_TITLE_CHARS} caracteres.")

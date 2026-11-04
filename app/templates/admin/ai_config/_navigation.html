@@ -18,6 +18,8 @@
     ('reporting', 'Informes KLARA', 'file-earmark-text', url_for('ai_reporting.page')),
     ('reporting_history', 'Historial de informes', 'clock-history', url_for('ai_reporting.history_page')),
   ] + ([
+    ('reporting_schedules', 'Informes programados', 'calendar-week', klara_schedules_nav_url),
+  ] if klara_schedules_nav_url is defined and klara_schedules_nav_url else []) + ([
     ('reporting_reviews', 'Revisión de informes', 'patch-check', url_for('ai_reporting_review_pages.inbox_page')),
   ] if current_user.is_authenticated and current_user.is_staff else [])),
 ] %}

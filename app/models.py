@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover - fallback for environments without pgve
             return f"VECTOR({self.dimensions})"
 
 from app import db
-from app.persistence import review_states, review_triggers
+from app.persistence import review_states, review_triggers, run_states, schedule_states
 
 FERNET_KEY = os.getenv('FERNET_KEY')
 if not FERNET_KEY:
@@ -948,6 +948,16 @@ class ModelEvaluationCase(db.Model):
     )
 
 
+def _sql_in(column, values):
+    return f"{column} IN ({', '.join(repr(v) for v in values)})"
+
+
+# One OPEN run per schedule occurrence (retries keep the finished ones as history). Shared by the model
+# and its migration test so both build exactly the same partial index.
+OPEN_RUN_PER_OCCURRENCE_WHERE = (
+    f"schedule_occurrence_id IS NOT NULL AND {_sql_in('status', run_states.OPEN_STATUSES)}")
+
+
 class AnalyticalReportDefinition(db.Model):
     """Saved configuration of an analytical report (Reporting domain).
 
@@ -1046,6 +1056,13 @@ class ReportRun(db.Model):
     heartbeat_at = db.Column(db.DateTime, nullable=True)
     lease_expires_at = db.Column(db.DateTime, nullable=True, index=True)
     cancel_requested_at = db.Column(db.DateTime, nullable=True)
+    # manual | scheduled (``app/persistence/run_states.py``). A scheduled run points at its occurrence; the
+    # occurrence has no column back (no FK cycle): its runs are the rows that point at it.
+    trigger_source = db.Column(db.String(20), nullable=False, default=run_states.TRIGGER_MANUAL,
+                               server_default=run_states.TRIGGER_MANUAL)
+    schedule_occurrence_id = db.Column(
+        db.BigInteger().with_variant(db.Integer, 'sqlite'),
+        db.ForeignKey('report_schedule_occurrences.id', ondelete='SET NULL'), nullable=True, index=True)
     created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
     started_at = db.Column(db.DateTime, nullable=True)
     completed_at = db.Column(db.DateTime, nullable=True)
@@ -1053,6 +1070,7 @@ class ReportRun(db.Model):
     definition = db.relationship('AnalyticalReportDefinition')
     report = db.relationship('Report')
     requested_by = db.relationship('User', foreign_keys=[requested_by_user_id])
+    schedule_occurrence = db.relationship('ReportScheduleOccurrence', back_populates='runs')
     sections = db.relationship(
         'ReportRunSection', back_populates='run', lazy='select',
         cascade='all, delete-orphan', order_by='ReportRunSection.position, ReportRunSection.sequence',
@@ -1070,6 +1088,155 @@ class ReportRun(db.Model):
 
     __table_args__ = (
         db.Index('ix_report_runs_status_created', 'status', 'created_at'),
+        db.Index('uq_report_runs_open_occurrence', 'schedule_occurrence_id', unique=True,
+                 postgresql_where=sa.text(OPEN_RUN_PER_OCCURRENCE_WHERE),
+                 sqlite_where=sa.text(OPEN_RUN_PER_OCCURRENCE_WHERE)),
+    )
+
+
+class ReportSchedule(db.Model):
+    """Recurring configuration that produces ``ReportScheduleOccurrence`` rows (Phase 3).
+
+    Several schedules may point at the same definition. ``next_run_at`` is the next due instant (naive
+    UTC, like every column here); it is NULL while the schedule is paused. Policies are plain strings
+    (``app/persistence/schedule_states.py``) without CHECKs: new values must not need a migration.
+    ``refresh_deadline_hours`` / ``misfire_grace_hours`` NULL = the server default.
+    """
+
+    __tablename__ = 'report_schedules'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    definition_id = db.Column(
+        db.BigInteger, db.ForeignKey('analytical_report_definitions.id', ondelete='CASCADE'),
+        nullable=False, index=True)
+    name = db.Column(db.String(200), nullable=False)
+    frequency = db.Column(db.String(20), nullable=False)          # weekly | monthly
+    weekday = db.Column(db.Integer, nullable=True)                # weekly: 0 = Monday
+    day_of_month = db.Column(db.Integer, nullable=True)           # monthly: 1-31 (clamped to the month)
+    local_time = db.Column(db.Time, nullable=False)
+    timezone = db.Column(db.String(64), nullable=False)           # IANA name
+    is_active = db.Column(db.Boolean, nullable=False, default=True)
+    next_run_at = db.Column(db.DateTime, nullable=True)
+    freshness_policy = db.Column(db.String(60), nullable=False, default=schedule_states.DEFAULT_FRESHNESS_POLICY)
+    refresh_deadline_hours = db.Column(db.Integer, nullable=True)
+    misfire_policy = db.Column(db.String(40), nullable=False, default=schedule_states.DEFAULT_MISFIRE_POLICY)
+    misfire_grace_hours = db.Column(db.Integer, nullable=True)
+    config_json = db.Column(db.JSON, nullable=True)
+    created_by_user_id = db.Column(db.BigInteger, db.ForeignKey('users.id', ondelete='SET NULL'), nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    definition = db.relationship('AnalyticalReportDefinition')
+    occurrences = db.relationship(
+        'ReportScheduleOccurrence', back_populates='schedule', lazy='select',
+        cascade='all, delete-orphan', passive_deletes=True, order_by='ReportScheduleOccurrence.scheduled_for',
+    )
+
+    __table_args__ = (
+        db.Index('ix_report_schedules_due', 'is_active', 'next_run_at'),
+    )
+
+
+class ReportScheduleOccurrence(db.Model):
+    """One due instance of a schedule, unique per ``(schedule_id, scheduled_for)``.
+
+    Its analytical period and the definition snapshot are frozen when it is materialised, so a definition
+    edited while waiting for Power BI never changes what this occurrence runs. ``definition_snapshot_json``
+    is NULL only when the definition was not runnable (the occurrence is then ``blocked``).
+    """
+
+    __tablename__ = 'report_schedule_occurrences'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    schedule_id = db.Column(
+        db.BigInteger().with_variant(db.Integer, 'sqlite'),
+        db.ForeignKey('report_schedules.id', ondelete='CASCADE'), nullable=False)
+    scheduled_for = db.Column(db.DateTime, nullable=False)
+    trigger_source = db.Column(db.String(20), nullable=False,
+                               default=schedule_states.OCCURRENCE_SOURCE_SCHEDULED)
+    status = db.Column(db.String(30), nullable=False, default=schedule_states.OCCURRENCE_WAITING_DATA)
+    period_start = db.Column(db.DateTime, nullable=False)
+    period_end_exclusive = db.Column(db.DateTime, nullable=False)
+    definition_snapshot_json = db.Column(db.JSON, nullable=True)
+    refresh_deadline_at = db.Column(db.DateTime, nullable=True)
+    refresh_checked_at = db.Column(db.DateTime, nullable=True)
+    refresh_completed_at = db.Column(db.DateTime, nullable=True)
+    next_check_at = db.Column(db.DateTime, nullable=True)
+    check_attempts = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    last_error_code = db.Column(db.String(80), nullable=True)
+    last_error_message = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    schedule = db.relationship('ReportSchedule', back_populates='occurrences')
+    runs = db.relationship('ReportRun', back_populates='schedule_occurrence', lazy='select',
+                           passive_deletes=True, order_by='ReportRun.created_at')
+
+    __table_args__ = (
+        db.UniqueConstraint('schedule_id', 'scheduled_for', name='uq_report_schedule_occurrence_slot'),
+        db.Index('ix_report_schedule_occurrences_status_check', 'status', 'next_check_at'),
+    )
+
+
+class ProcessHeartbeat(db.Model):
+    """Last sign of life of a background process instance (e.g. ``report-scheduler``), one row per instance.
+
+    Written by the process itself on every poll; read by the admin UI to warn when the process is down.
+    ``process`` is a plain string (no CHECK): another process kind is one more value. ``interval_seconds`` is
+    the instance's own poll interval, so readers judge staleness without knowing that process's settings.
+    """
+
+    __tablename__ = 'process_heartbeats'
+
+    instance_id = db.Column(db.String(200), primary_key=True)
+    process = db.Column(db.String(60), nullable=False)
+    host = db.Column(db.String(255), nullable=True)
+    pid = db.Column(db.Integer, nullable=True)
+    started_at = db.Column(db.DateTime, nullable=False)
+    last_seen_at = db.Column(db.DateTime, nullable=False)
+    interval_seconds = db.Column(db.Integer, nullable=True)
+    last_outcome = db.Column(db.String(20), nullable=True)
+    details_json = db.Column(db.JSON, nullable=True)
+
+    __table_args__ = (
+        db.Index('ix_process_heartbeats_process_seen', 'process', 'last_seen_at'),
+    )
+
+
+class ReportDelivery(db.Model):
+    """Distribution of an APPROVED review's PDF to one recipient over one channel (an outbox row).
+
+    Created by the scheduler's ``deliver`` phase for approved reviews of scheduled runs, then sent by
+    the same phase with retries. ``UNIQUE(review_id, channel, recipient)`` makes the same person never
+    receive the same report twice. ``channel`` and ``status`` are plain strings without CHECKs
+    (``app/persistence/delivery_states.py``): another channel (email) must not need a migration.
+    ``schedule_id`` has no FK on purpose: deleting a schedule must not erase what was already sent.
+    """
+
+    __tablename__ = 'report_deliveries'
+
+    id = db.Column(db.BigInteger().with_variant(db.Integer, 'sqlite'), primary_key=True, autoincrement=True)
+    review_id = db.Column(
+        db.BigInteger().with_variant(db.Integer, 'sqlite'),
+        db.ForeignKey('report_reviews.id', ondelete='RESTRICT'), nullable=False)
+    report_run_id = db.Column(db.String(36), nullable=False, index=True)
+    schedule_id = db.Column(db.BigInteger, nullable=True, index=True)
+    channel = db.Column(db.String(30), nullable=False)
+    recipient = db.Column(db.String(64), nullable=False)
+    status = db.Column(db.String(20), nullable=False, default='pending', server_default='pending')
+    attempts = db.Column(db.Integer, nullable=False, default=0, server_default='0')
+    next_attempt_at = db.Column(db.DateTime, nullable=False, default=_utcnow)
+    lease_until = db.Column(db.DateTime, nullable=True)
+    provider_message_id = db.Column(db.String(200), nullable=True)
+    last_error_code = db.Column(db.String(80), nullable=True)
+    last_error_message = db.Column(db.Text, nullable=True)
+    sent_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    updated_at = db.Column(db.DateTime, default=_utcnow, onupdate=_utcnow, nullable=False)
+
+    __table_args__ = (
+        db.UniqueConstraint('review_id', 'channel', 'recipient', name='uq_report_delivery_review_channel_recipient'),
+        db.Index('ix_report_deliveries_due', 'status', 'next_attempt_at'),
     )
 
 
@@ -1164,10 +1331,6 @@ class ReportRunArtifact(db.Model):
         # (artifact id, run id) and the database guarantees an artifact belongs to the review's run.
         db.Index('uq_report_run_artifact_id_run', 'id', 'report_run_id', unique=True),
     )
-
-
-def _sql_in(column, values):
-    return f"{column} IN ({', '.join(repr(v) for v in values)})"
 
 
 class ReportReview(db.Model):

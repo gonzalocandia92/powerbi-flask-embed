@@ -234,6 +234,30 @@
     return pdf ? pdf.size_bytes : null;
   }
 
+  const DELIVERY_STATUSES = Object.freeze({
+    pending: {label: 'Pendiente', tone: 'neutral'},
+    sending: {label: 'Enviando', tone: 'info'},
+    sent: {label: 'Enviado', tone: 'success'},
+    failed: {label: 'Falló', tone: 'danger'},
+  });
+  const DELIVERY_CHANNELS = Object.freeze({whatsapp: 'WhatsApp'});
+
+  // GET /reviews/<id>/deliveries -> rows of the "Envíos" section (recipients arrive already masked).
+  function presentDeliveries(deliveries) {
+    return (deliveries || []).map(item => {
+      const status = lookup(DELIVERY_STATUSES, item.status, {label: item.status || '—', tone: 'neutral'});
+      const error = item.error || null;
+      let detail = '';
+      if (item.status === 'sent') detail = 'Enviado ' + formatDate(item.sent_at);
+      else if (item.status === 'pending' && item.attempts > 0) detail = 'Reintento ' + formatDate(item.next_attempt_at);
+      return {
+        id: item.id, channel: lookup(DELIVERY_CHANNELS, item.channel, item.channel || '—'),
+        recipient: item.recipient || '—', status, attempts: item.attempts || 0, detail,
+        error: error ? (error.message || error.code) : null,
+      };
+    });
+  }
+
   // How a ReviewApiError should be told to the person and what the screen should do next.
   function adviseError(error) {
     const code = error && error.code;
@@ -254,5 +278,6 @@
     statusInfo, runStatusInfo, formatDate, shortHash, formatSize, actorName,
     buildInboxQuery, inboxRow, inboxSummary,
     presentTimeline, presentActions, presentReview, eligibilityNote, adviseError,
+    DELIVERY_STATUSES, presentDeliveries,
   };
 });

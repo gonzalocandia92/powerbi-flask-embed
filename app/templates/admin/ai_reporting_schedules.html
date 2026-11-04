@@ -1,0 +1,155 @@
+{% extends "admin/ai/shell.html" %}
+
+{% set active_ai_section = 'reporting_schedules' %}
+{% set page_crumb = 'Reporting' %}
+{% set page_title = 'Informes programados' %}
+{% set page_subtitle = 'Informes semanales y mensuales que KLARA genera solo, cuando los datos de Power BI están listos, y envía a revisión.' %}
+
+{% block header_actions %}
+<button class="ai-btn-secondary" id="rs-refresh" type="button">
+  <i class="bi bi-arrow-clockwise me-1"></i>Actualizar
+</button>
+<button class="ai-btn-primary" id="rs-new" type="button">
+  <i class="bi bi-plus-lg me-1"></i>Nueva programación
+</button>
+{% endblock %}
+
+{% block ai_content %}
+<div id="report-schedules-page">
+  <div id="rs-scheduler-health" class="alert alert-secondary d-none" role="status"></div>
+  <div id="rs-message" class="alert alert-danger d-none" role="alert"></div>
+
+  <div class="ai-surface mb-4 d-none" id="rs-form-card">
+    <div class="ai-surface-body">
+      <h2 class="h6 mb-3" id="rs-form-title">Nueva programación</h2>
+      <form id="rs-form" class="row g-3" novalidate>
+        <div class="col-md-6">
+          <label class="form-label" for="rs-definition">Definición de informe</label>
+          <select class="form-select" id="rs-definition" required></select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label" for="rs-name">Nombre de la programación</label>
+          <input class="form-control" id="rs-name" maxlength="200" required placeholder="Ej.: Semanal de ventas">
+        </div>
+        <div class="col-md-3">
+          <label class="form-label" for="rs-frequency">Frecuencia</label>
+          <select class="form-select" id="rs-frequency"></select>
+        </div>
+        <div class="col-md-3" id="rs-weekday-group">
+          <label class="form-label" for="rs-weekday">Día de la semana</label>
+          <select class="form-select" id="rs-weekday"></select>
+        </div>
+        <div class="col-md-3 d-none" id="rs-day-group">
+          <label class="form-label" for="rs-day">Día del mes</label>
+          <input class="form-control" type="number" min="1" max="31" id="rs-day">
+          <div class="form-text">Si el mes no tiene ese día, se usa el último.</div>
+        </div>
+        <div class="col-md-2">
+          <label class="form-label" for="rs-time">Hora local</label>
+          <input class="form-control" type="time" id="rs-time" required>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="rs-timezone">Zona horaria</label>
+          <input class="form-control" id="rs-timezone" list="rs-timezones" required>
+          <datalist id="rs-timezones"></datalist>
+        </div>
+        <div class="col-12"><small class="text-muted" id="rs-period-hint"></small></div>
+        <div class="col-md-8">
+          <label class="form-label" for="rs-freshness">Datos de Power BI</label>
+          <select class="form-select" id="rs-freshness"></select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="rs-deadline">Esperar datos hasta (horas)</label>
+          <input class="form-control" type="number" min="1" max="744" id="rs-deadline" placeholder="Valor del servidor">
+        </div>
+        <div class="col-md-8">
+          <label class="form-label" for="rs-misfire">Horarios perdidos</label>
+          <select class="form-select" id="rs-misfire"></select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label" for="rs-grace">Ventana de gracia (horas)</label>
+          <input class="form-control" type="number" min="1" max="744" id="rs-grace" placeholder="Valor del servidor">
+        </div>
+        <div class="col-12">
+          <label class="form-label" for="rs-whatsapp">Enviar por WhatsApp al aprobar</label>
+          <textarea class="form-control" id="rs-whatsapp" rows="2" placeholder="5491112345678"></textarea>
+          <div class="form-text">Un número por línea, en formato internacional. Al aprobar la revisión, el PDF aprobado se envía a estos números.</div>
+        </div>
+        <div class="col-12">
+          <div class="form-label">Próximas ejecuciones y período que analizará cada una</div>
+          <ul class="mb-0" id="rs-preview"></ul>
+        </div>
+        <div class="col-12 d-flex gap-2 justify-content-end">
+          <button class="ai-btn-ghost" type="button" id="rs-cancel">Cancelar</button>
+          <button class="ai-btn-primary" type="submit"><i class="bi bi-check-lg me-1"></i>Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="ai-surface mb-4">
+    <div class="ai-table-wrap">
+      <table class="ai-table">
+        <thead>
+          <tr>
+            <th>Programación</th>
+            <th>Reporte</th>
+            <th>Calendario</th>
+            <th>Próxima ejecución</th>
+            <th>Estado</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="rs-body">
+          <tr><td colspan="6" class="text-center text-muted py-4">Cargando programaciones…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="ai-surface d-none" id="rs-history-card">
+    <div class="ai-surface-body border-bottom">
+      <h2 class="h6 mb-2" id="rs-history-title">Historial</h2>
+      <div id="rs-counts"></div>
+    </div>
+    <div class="ai-table-wrap">
+      <table class="ai-table">
+        <thead>
+          <tr>
+            <th>Prevista</th>
+            <th>Período</th>
+            <th>Estado</th>
+            <th>Datos</th>
+            <th>Ejecución</th>
+            <th>Revisión</th>
+            <th class="text-end">Acciones</th>
+          </tr>
+        </thead>
+        <tbody id="rs-history-body"></tbody>
+      </table>
+    </div>
+    <div class="ai-surface-body d-flex justify-content-between align-items-center border-top">
+      <small class="text-muted" id="rs-history-summary"></small>
+      <div class="btn-group btn-group-sm">
+        <button class="ai-btn-secondary btn-sm" id="rs-prev" type="button" disabled>Anterior</button>
+        <button class="ai-btn-secondary btn-sm" id="rs-next" type="button" disabled>Siguiente</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+{{ super() }}
+<script>window.KLARA_SCHEDULES = {{ schedules_config|tojson }};</script>
+<script src="{{ url_for('static', filename='js/klara_schedules_view.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_schedules_api.js') }}"></script>
+<script src="{{ url_for('static', filename='js/klara_schedules_page.js') }}"></script>
+<script>
+  KlaraSchedulesPage.mount({
+    config: window.KLARA_SCHEDULES,
+    csrf: document.querySelector('meta[name="csrf-token"]').content,
+    doc: document,
+  });
+</script>
+{% endblock %}

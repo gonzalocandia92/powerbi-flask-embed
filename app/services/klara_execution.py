@@ -9,7 +9,7 @@ from app.services.llm import CachePolicy, LiteLLMRuntime, ModelCapabilities, Mod
 from app.services.decisions import (
     ComplexityAssessment, DisabledComplexityClassifier, LLMComplexityClassifier,
     PassthroughQueryRewriter, ExecutionPolicy,
-    StaticExecutionPolicyResolver, ScopedModelRoleResolver,
+    StaticExecutionPolicyResolver, SourceExecutionPolicyResolver, ScopedModelRoleResolver,
     LLMQueryRewriter, LLMSkillSelector, EmbeddingSkillSelector, ExistingSkillRouter,
     JevSkillSelector, JevWithLLMFallbackSelector,
 )
@@ -131,13 +131,15 @@ class KlaraExecutionService:
     def __init__(self, *, runtime=None, model_roles=None, query_rewriter=None, skill_selector=None,
                  complexity_classifier=None, policy_resolver=None, tool_registry=None,
                  route_resolver=None, prompt_manager=None, classifier_timeout=2.0,
-                 pinned_route_resolver=None):
+                 pinned_route_resolver=None, source_policy_resolver=None):
         self.runtime = runtime or LiteLLMRuntime()
         self.model_roles = model_roles
         self.query_rewriter = query_rewriter
         self.skill_selector = skill_selector
         self.classifier = complexity_classifier
         self.policy_resolver = policy_resolver or StaticExecutionPolicyResolver()
+        # None -> built per execution from that execution's settings (REPORT_MAX_* for source="report").
+        self.source_policy_resolver = source_policy_resolver
         self.tool_registry = tool_registry
         self.route_resolver = route_resolver
         self.pinned_route_resolver = pinned_route_resolver
@@ -170,14 +172,18 @@ class KlaraExecutionService:
         # Runtime-wide switch: an explicit policy can only narrow caching, never re-enable it.
         cache = replace(cache, enabled=cache.enabled and bool(getattr(settings, "prompt_caching_enabled", True)))
         context = replace(context, cache_policy=cache)
-        default = context.execution_policy or ExecutionPolicy(
-            main_model_key=main.model_key, max_tool_rounds=settings.max_tool_rounds,
-            schema_table_limit=_coerce_positive_int(context.schema_table_context_limit, 6),
-            schema_measure_limit=_coerce_positive_int(context.schema_measure_context_limit, 10),
-            skill_candidate_limit=settings.skill_router_settings.candidate_limit,
-            service_tier=context.service_tier or main.service_tier,
-            reasoning_effort=main.reasoning_effort, cache=cache,
-        )
+        default = context.execution_policy
+        if default is None:
+            source_policy = self.source_policy_resolver or SourceExecutionPolicyResolver.from_settings(settings)
+            default = source_policy.resolve(context.source, ExecutionPolicy(
+                main_model_key=main.model_key, max_tool_rounds=settings.max_tool_rounds,
+                max_schema_rounds=settings.max_schema_rounds, max_schema_failures=settings.max_schema_failures,
+                schema_table_limit=_coerce_positive_int(context.schema_table_context_limit, 6),
+                schema_measure_limit=_coerce_positive_int(context.schema_measure_context_limit, 10),
+                skill_candidate_limit=settings.skill_router_settings.candidate_limit,
+                service_tier=context.service_tier or main.service_tier,
+                reasoning_effort=main.reasoning_effort, cache=cache,
+            ))
         pinned_keys = normalize_pinned_skill_keys(context.required_skill_keys)
         with start_observation(name="powerbi-chat-agent", as_type="agent", input={"user_message": context.user_message}) as span:
             assessment = ComplexityAssessment()
@@ -264,6 +270,9 @@ class KlaraExecutionService:
             effective_settings = replace(
                 settings,
                 max_tool_rounds=policy.max_tool_rounds,
+                max_schema_rounds=policy.max_schema_rounds,
+                max_schema_failures=policy.max_schema_failures,
+                require_semantic_context=policy.require_semantic_context,
                 skill_router_settings=replace(
                     settings.skill_router_settings,
                     candidate_limit=policy.skill_candidate_limit,

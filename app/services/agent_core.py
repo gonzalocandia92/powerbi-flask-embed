@@ -14,13 +14,12 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, cast
 from zoneinfo import ZoneInfo
 
-from app.models import SchemaEmbedding
 from app.services.observability import hash_identifier, observation_preview, start_observation
 from app.services.schema_retrieval_service import (
     RelevantSchemaProviderError,
@@ -50,14 +49,21 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 DEFAULT_MODEL = "claude-haiku-4-5-20251001"
 DEFAULT_MAX_TOKENS = 4096
 DEFAULT_HISTORY_LIMIT = 14
-DEFAULT_MAX_TOOL_ROUNDS = 10
+# Budget of DAX executions per turn (each requested execute_dax_query counts once).
+DEFAULT_MAX_TOOL_ROUNDS = 15
+# Scheduled reports answer broader questions than chat, so they get their own budget.
+DEFAULT_REPORT_MAX_TOOL_ROUNDS = 20
+# Successful schema retrievals the model may request per turn; extra requests get a notice, not an abort.
+DEFAULT_MAX_SCHEMA_ROUNDS = 3
+DEFAULT_REPORT_MAX_SCHEMA_ROUNDS = 3
+# Anti-loop safety cap for failed schema retrievals per turn (failures never consume the DAX budget).
+DEFAULT_MAX_SCHEMA_FAILURES = 6
 DEFAULT_DEBUG_ENABLED = True
 DEFAULT_PROMPT_CACHING_ENABLED = True
 DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS = 20
 DEFAULT_TABLE_CONTEXT_LIMIT = 6
 DEFAULT_MEASURE_CONTEXT_LIMIT = 10
 VOYAGE_QUERY_EMBEDDING_MODEL = "voyage-4"
-VOYAGE_QUERY_EMBEDDING_COST_PER_MILLION_USD = 0.06
 TOOL_ERROR_RESULT_MAX_CHARS = 3_000
 TOOL_ERROR_RESULT_HEAD_CHARS = 1_800
 TOOL_ERROR_RESULT_TAIL_CHARS = 800
@@ -69,6 +75,32 @@ DAX_ERROR_ATTEMPT_LIMIT = 3
 DAX_SQL_SYNTAX_BLOCKED_MESSAGE = (
     "Consulta bloqueada: no se permite sintaxis SQL en consultas DAX. "
     "Reescribi la consulta usando sintaxis DAX valida con EVALUATE."
+)
+# Transient schema retrieval failures are shown to the model with this prefix. It must never match
+# ``_tool_output_is_error``: those outputs mark a permanent functional failure for the whole turn.
+SCHEMA_CONTEXT_UNAVAILABLE_PREFIX = "Aviso:"
+SCHEMA_CONTEXT_UNAVAILABLE_MESSAGE = (
+    "Aviso: el contexto del modelo semantico no esta disponible en este momento "
+    "(falla transitoria del servicio de busqueda semantica)."
+)
+SCHEMA_CONTEXT_DEGRADED_NOTE = (
+    "Busqueda semantica no disponible: contexto aproximado por anclas de skills y coincidencia de nombres. "
+    "Puede faltar algun objeto; si falta, podes reintentar get_schema_context con otra consulta."
+)
+SCHEMA_ROUND_LIMIT_MESSAGE = (
+    "Aviso: limite de recuperacion de schema alcanzado en este turno. "
+    "Usa el contexto ya recuperado y las medidas de las skills; no vuelvas a llamar get_schema_context."
+)
+SCHEMA_FAILURE_LIMIT_MESSAGE = (
+    "Aviso: se agotaron los intentos de recuperacion de schema en este turno. "
+    "Segui con las medidas de las skills y el contexto ya recuperado; no vuelvas a llamar get_schema_context."
+)
+TOOL_CALL_SKIPPED_BUDGET_MESSAGE = "No ejecutada: limite de consultas alcanzado en este turno."
+BUDGET_EXHAUSTED_FINAL_INSTRUCTION = (
+    "Se alcanzo el limite de consultas de este turno. No pidas mas herramientas. "
+    "Responde ahora usando solamente los datos de las consultas DAX exitosas de este turno. "
+    "Indica explicitamente que partes de lo pedido no pudieron calcularse y por que. "
+    "No inventes ni estimes valores que no surjan de esas consultas."
 )
 
 TEMPORAL_CONTEXT_TIMEZONE = ZoneInfo("America/Argentina/Buenos_Aires")
@@ -178,6 +210,24 @@ def _tool_output_is_error(output: Any) -> bool:
     )
 
 
+def _schema_output_is_unavailable(output: Any) -> bool:
+    return str(output or "").strip().startswith(SCHEMA_CONTEXT_UNAVAILABLE_PREFIX)
+
+
+def _schema_unavailable_guidance(notice: str, consecutive_failures: int) -> str:
+    if consecutive_failures >= 2:
+        hint = (
+            f"Fallaron {consecutive_failures} intentos seguidos: reintenta una vez con otra consulta "
+            "o segui con las medidas de las skills y el contexto ya recuperado."
+        )
+    else:
+        hint = (
+            "Podes reintentar get_schema_context con otra consulta o seguir con las medidas "
+            "de las skills y el contexto ya recuperado."
+        )
+    return f"{str(notice).strip()} {hint}"
+
+
 _SQL_IN_DAX_PATTERNS = [
     ("SELECT ... FROM", re.compile(r"\bselect\b[\s\S]+?\bfrom\b", re.IGNORECASE)),
     ("GROUP BY", re.compile(r"\bgroup\s+by\b", re.IGNORECASE)),
@@ -207,45 +257,6 @@ def detect_sql_syntax_in_dax(dax_query: str) -> Optional[str]:
         if pattern.search(normalized):
             return label
     return None
-
-
-def _normalize_schema_lookup_name(value: Any) -> str:
-    text = " ".join(str(value or "").strip().split())
-    if text.startswith("[") and text.endswith("]") and len(text) > 2:
-        text = text[1:-1].strip()
-    return text.casefold()
-
-
-def _dedupe_schema_rows(rows: List[SchemaEmbedding]) -> List[SchemaEmbedding]:
-    seen = set()
-    result: List[SchemaEmbedding] = []
-    for row in rows:
-        key = (row.item_type, _normalize_schema_lookup_name(row.item_name))
-        if key in seen:
-            continue
-        seen.add(key)
-        result.append(row)
-    return result
-
-
-def _sort_schema_rows(
-    rows: List[SchemaEmbedding],
-    *,
-    required_names: List[str],
-    preferred_names: List[str],
-) -> List[SchemaEmbedding]:
-    required = {_normalize_schema_lookup_name(item) for item in required_names}
-    preferred = {_normalize_schema_lookup_name(item) for item in preferred_names}
-
-    def _rank(row: SchemaEmbedding) -> int:
-        name = _normalize_schema_lookup_name(row.item_name)
-        if name in required:
-            return 0
-        if name in preferred:
-            return 1
-        return 2
-
-    return sorted(_dedupe_schema_rows(rows), key=_rank)
 
 
 MAX_CAPTURED_DAX_RESULTS = 4
@@ -300,6 +311,14 @@ class RuntimeSettings:
     anthropic_max_tokens: int = DEFAULT_MAX_TOKENS
     history_limit: int = DEFAULT_HISTORY_LIMIT
     max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS
+    max_schema_rounds: int = DEFAULT_MAX_SCHEMA_ROUNDS
+    max_schema_failures: int = DEFAULT_MAX_SCHEMA_FAILURES
+    # Applied to ``source="report"`` executions by the default per-source execution policy.
+    report_max_tool_rounds: int = DEFAULT_REPORT_MAX_TOOL_ROUNDS
+    report_max_schema_rounds: int = DEFAULT_REPORT_MAX_SCHEMA_ROUNDS
+    # When true, a turn with no semantic context (retrieval unavailable) and no DAX data ends as a
+    # retryable ``semantic_model_unavailable`` failure instead of an answer without data (reports).
+    require_semantic_context: bool = False
     debug_enabled: bool = DEFAULT_DEBUG_ENABLED
     prompt_caching_enabled: bool = DEFAULT_PROMPT_CACHING_ENABLED
     schema_context_timeout_seconds: int = DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS
@@ -323,6 +342,10 @@ def build_runtime_settings(config: Optional[Dict[str, Any]] = None) -> RuntimeSe
     max_tokens_raw = _cfg("ANTHROPIC_MAX_TOKENS", str(DEFAULT_MAX_TOKENS)) or str(DEFAULT_MAX_TOKENS)
     history_limit_raw = _cfg("CHAT_HISTORY_LIMIT", str(DEFAULT_HISTORY_LIMIT)) or str(DEFAULT_HISTORY_LIMIT)
     max_tool_rounds_raw = _cfg("CHAT_MAX_TOOL_ROUNDS", str(DEFAULT_MAX_TOOL_ROUNDS)) or str(DEFAULT_MAX_TOOL_ROUNDS)
+    max_schema_rounds_raw = _cfg("CHAT_MAX_SCHEMA_ROUNDS", str(DEFAULT_MAX_SCHEMA_ROUNDS)) or str(DEFAULT_MAX_SCHEMA_ROUNDS)
+    max_schema_failures_raw = _cfg("CHAT_MAX_SCHEMA_FAILURES", str(DEFAULT_MAX_SCHEMA_FAILURES)) or str(DEFAULT_MAX_SCHEMA_FAILURES)
+    report_max_tool_rounds_raw = _cfg("REPORT_MAX_TOOL_ROUNDS", str(DEFAULT_REPORT_MAX_TOOL_ROUNDS)) or str(DEFAULT_REPORT_MAX_TOOL_ROUNDS)
+    report_max_schema_rounds_raw = _cfg("REPORT_MAX_SCHEMA_ROUNDS", str(DEFAULT_REPORT_MAX_SCHEMA_ROUNDS)) or str(DEFAULT_REPORT_MAX_SCHEMA_ROUNDS)
     debug_enabled_default = "true" if DEFAULT_DEBUG_ENABLED else "false"
     debug_enabled_raw = _cfg("CHAT_DEBUG_ENABLED", debug_enabled_default) or debug_enabled_default
     prompt_caching_enabled_raw = _cfg("ANTHROPIC_PROMPT_CACHING_ENABLED", _cfg("CHAT_PROMPT_CACHING_ENABLED", "true")) or "true"
@@ -334,6 +357,10 @@ def build_runtime_settings(config: Optional[Dict[str, Any]] = None) -> RuntimeSe
         anthropic_max_tokens=int(max_tokens_raw),
         history_limit=int(history_limit_raw),
         max_tool_rounds=int(max_tool_rounds_raw),
+        max_schema_rounds=int(max_schema_rounds_raw),
+        max_schema_failures=int(max_schema_failures_raw),
+        report_max_tool_rounds=int(report_max_tool_rounds_raw),
+        report_max_schema_rounds=int(report_max_schema_rounds_raw),
         debug_enabled=_parse_bool(debug_enabled_raw, default=DEFAULT_DEBUG_ENABLED),
         prompt_caching_enabled=_parse_bool(prompt_caching_enabled_raw, default=DEFAULT_PROMPT_CACHING_ENABLED),
         schema_context_timeout_seconds=int(schema_context_timeout_raw),
@@ -346,18 +373,6 @@ def _debug_enabled() -> bool:
     """Best-effort global debug switch for prints/file logs."""
     return _parse_bool(os.getenv("CHAT_DEBUG_ENABLED"), default=DEFAULT_DEBUG_ENABLED)
 
-
-def _get_voyage_client():
-    api_key = os.getenv("VOYAGE_API_KEY")
-    if not api_key:
-        raise RuntimeError("VOYAGE_API_KEY is required")
-
-    try:
-        import voyageai
-    except ImportError as exc:  # pragma: no cover - dependency missing in test env
-        raise RuntimeError("The 'voyageai' package is required to retrieve schema context.") from exc
-
-    return voyageai.Client(api_key=api_key)
 
 async def _rewrite_query_for_reranker(
     *,
@@ -481,249 +496,6 @@ async def _rewrite_query_for_reranker(
             return user_message
 
 
-async def _fetch_schema_context_legacy(
-    *,
-    dataset_id: str,
-    powerbi_credentials: Dict[str, Any],
-    question: str,
-    settings: RuntimeSettings,
-    debug_enabled: bool,
-    required: bool,
-    report_id: Optional[int] = None,
-    table_context_limit: int = DEFAULT_TABLE_CONTEXT_LIMIT,
-    measure_context_limit: int = DEFAULT_MEASURE_CONTEXT_LIMIT,
-    required_schema_items: Optional[List[Dict[str, Any]]] = None,
-    preferred_measures: Optional[List[str]] = None,
-    preferred_tables: Optional[List[str]] = None,
-    usage_totals: Optional[Dict[str, int]] = None,
-    ai_usage_events: Optional[List[Dict[str, Any]]] = None,
-) -> str:
-    with start_observation(
-        name="fetch-schema-context",
-        as_type="retriever",
-        input={"question": question},
-    ) as observation:
-        if observation is not None:
-            observation.update(metadata={"datasethash": hash_identifier(dataset_id, prefix="dataset")})
-        _debug_print(
-            "tool:get_schema_context:request",
-            {
-                "dataset_id": dataset_id,
-                "question": question,
-                "table_context_limit": table_context_limit,
-                "measure_context_limit": measure_context_limit,
-                "required_schema_items": required_schema_items or [],
-                "preferred_measures": preferred_measures or [],
-                "preferred_tables": preferred_tables or [],
-            },
-            enabled=debug_enabled,
-        )
-        try:
-            voyage_client = _get_voyage_client()
-            with start_observation(
-                name="voyage-query-embedding",
-                as_type="embedding",
-                input=[question],
-            ) as embedding_observation:
-                if embedding_observation is not None:
-                    embedding_observation.update(
-                        model=VOYAGE_QUERY_EMBEDDING_MODEL,
-                        metadata={
-                            "provider": "voyageai",
-                            "inputtype": "query",
-                        },
-                    )
-
-                try:
-                    embedding_response = await asyncio.wait_for(
-                        asyncio.to_thread(
-                            lambda: voyage_client.embed(
-                                [question],
-                                model=VOYAGE_QUERY_EMBEDDING_MODEL,
-                                input_type="query",
-                            )
-                        ),
-                        timeout=max(1, int(settings.schema_context_timeout_seconds)),
-                    )
-                except Exception as exc:
-                    estimated_input_tokens = _estimate_text_tokens(question, chars_per_token=5)
-                    _add_usage_totals(
-                        usage_totals,
-                        input_tokens=estimated_input_tokens,
-                        output_tokens=0,
-                    )
-                    _append_ai_usage_event(
-                        ai_usage_events,
-                        provider="voyageai",
-                        model=VOYAGE_QUERY_EMBEDDING_MODEL,
-                        event_type="embedding",
-                        source_type="retrieval",
-                        trigger_type="user_request",
-                        operation_name="voyage-query-embedding",
-                        status="error",
-                        input_tokens=estimated_input_tokens,
-                        output_tokens=0,
-                        total_tokens=estimated_input_tokens,
-                        metadata_json={
-                            "component": "schema_retrieval",
-                            "input_type": "query",
-                            "estimated_usage": True,
-                            "error_type": "voyage_provider_error",
-                        },
-                    )
-                    raise exc
-                query_vector = embedding_response.embeddings[0]
-                query_vector_list = list(query_vector)
-                total_tokens = getattr(embedding_response, "total_tokens", None)
-                _add_usage_totals(usage_totals, input_tokens=int(total_tokens or 0))
-                _append_ai_usage_event(
-                    ai_usage_events,
-                    provider="voyageai",
-                    model=VOYAGE_QUERY_EMBEDDING_MODEL,
-                    event_type="embedding",
-                    source_type="retrieval",
-                    trigger_type="user_request",
-                    operation_name="voyage-query-embedding",
-                    status="success",
-                    input_tokens=int(total_tokens or 0),
-                    output_tokens=0,
-                    total_tokens=int(total_tokens or 0),
-                    metadata_json={"component": "schema_retrieval", "input_type": "query"},
-                )
-                if embedding_observation is not None:
-                    update_payload = {
-                        "output": {
-                            "embedding_dimensions": len(query_vector_list),
-                            "vector_count": 1,
-                        }
-                    }
-                    if total_tokens is not None:
-                        update_payload["usage_details"] = {"input": int(total_tokens)}
-                        update_payload["cost_details"] = {
-                            "input": (
-                                int(total_tokens)
-                                * VOYAGE_QUERY_EMBEDDING_COST_PER_MILLION_USD
-                                / 1_000_000
-                            )
-                        }
-                    embedding_observation.update(**update_payload)
-            _debug_print(
-                "tool:get_schema_context:query_vector_ready",
-                {"dataset_id": dataset_id, "dimensions": len(query_vector_list)},
-                enabled=debug_enabled,
-            )
-
-            resolved_required_items = required_schema_items or []
-            required_table_names = [
-                str(item.get("item_name") or "").strip()
-                for item in resolved_required_items
-                if str(item.get("item_type") or "").strip().lower() == "table"
-            ]
-            required_measure_names = [
-                str(item.get("item_name") or "").strip()
-                for item in resolved_required_items
-                if str(item.get("item_type") or "").strip().lower() == "measure"
-            ]
-
-            def _base_schema_query(item_type: str):
-                query = SchemaEmbedding.query.filter(
-                    SchemaEmbedding.dataset_id == dataset_id,
-                    SchemaEmbedding.item_type == item_type,
-                )
-                if report_id is not None:
-                    query = query.filter(SchemaEmbedding.report_id_fk == report_id)
-                return query
-
-            def _find_required_rows(item_type: str, item_names: List[str]) -> List[SchemaEmbedding]:
-                if not item_names:
-                    return []
-                wanted = {_normalize_schema_lookup_name(name) for name in item_names if str(name or "").strip()}
-                if not wanted:
-                    return []
-                matched: List[SchemaEmbedding] = []
-                for row in _base_schema_query(item_type).all():
-                    if _normalize_schema_lookup_name(row.item_name) in wanted:
-                        matched.append(row)
-                found = {_normalize_schema_lookup_name(row.item_name) for row in matched}
-                missing = sorted(wanted - found)
-                if missing:
-                    logging.warning(
-                        "Route required schema items not found for dataset=%s type=%s missing=%s",
-                        hash_identifier(dataset_id, prefix="dataset"),
-                        item_type,
-                        missing,
-                    )
-                return matched
-
-            table_limit = _coerce_positive_int(table_context_limit, DEFAULT_TABLE_CONTEXT_LIMIT)
-            measure_limit = _coerce_positive_int(measure_context_limit, DEFAULT_MEASURE_CONTEXT_LIMIT)
-            required_table_results = _find_required_rows("table", required_table_names)
-            required_measure_results = _find_required_rows("measure", required_measure_names)
-
-            table_vector_limit = max(table_limit, table_limit + len(required_table_results))
-            measure_vector_limit = max(measure_limit, measure_limit + len(required_measure_results))
-            table_vector_results = (
-                _base_schema_query("table")
-                .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
-                .limit(table_vector_limit)
-                .all()
-            )
-            measure_vector_results = (
-                _base_schema_query("measure")
-                .order_by(SchemaEmbedding.embedding.cosine_distance(query_vector_list))
-                .limit(measure_vector_limit)
-                .all()
-            )
-            table_results = _sort_schema_rows(
-                required_table_results + table_vector_results,
-                required_names=required_table_names,
-                preferred_names=preferred_tables or [],
-            )[:table_limit]
-            measure_results = _sort_schema_rows(
-                required_measure_results + measure_vector_results,
-                required_names=required_measure_names,
-                preferred_names=preferred_measures or [],
-            )[:measure_limit]
-
-            payload = {
-                "tables": [row.content_text for row in table_results],
-                "measures": [row.content_text for row in measure_results],
-            }
-            fetched_schema_text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
-            if observation is not None:
-                observation.update(
-                    output={
-                        "table_matches": len(table_results),
-                        "measure_matches": len(measure_results),
-                        "table_context_limit": table_context_limit,
-                        "measure_context_limit": measure_context_limit,
-                        "required_table_count": len(required_table_results),
-                        "required_measure_count": len(required_measure_results),
-                    }
-                )
-            _debug_print("tool:get_schema_context:response", fetched_schema_text, enabled=debug_enabled)
-            return fetched_schema_text.strip()
-        except asyncio.TimeoutError:
-            logging.warning(
-                "Timed out fetching vector schema context after %s seconds",
-                settings.schema_context_timeout_seconds,
-            )
-            if observation is not None:
-                observation.update(output={"timeout_seconds": settings.schema_context_timeout_seconds})
-            _debug_print(
-                "tool:get_schema_context:timeout",
-                {"seconds": settings.schema_context_timeout_seconds},
-                enabled=debug_enabled,
-            )
-            return ""
-        except Exception as exc:
-            logging.exception("Failed to fetch vector schema context")
-            if observation is not None:
-                observation.update(output={"error": observation_preview(repr(exc), max_length=500)})
-            _debug_print("tool:get_schema_context:error", repr(exc), enabled=debug_enabled)
-            return ""
-
-
 async def _fetch_schema_context(
     *,
     dataset_id: str,
@@ -745,7 +517,7 @@ async def _fetch_schema_context(
 
     del powerbi_credentials, required
 
-    def _record_usage(*, status: str, input_tokens: int, estimated: bool) -> None:
+    def _record_usage(*, status: str, input_tokens: int, estimated: bool, diagnostics: Optional[Dict[str, Any]] = None) -> None:
         _add_usage_totals(usage_totals, input_tokens=input_tokens, output_tokens=0)
         _append_ai_usage_event(
             ai_usage_events,
@@ -768,6 +540,7 @@ async def _fetch_schema_context(
                     if status == "error"
                     else {}
                 ),
+                **({"embedding_attempts": diagnostics} if diagnostics else {}),
             },
         )
 
@@ -794,6 +567,7 @@ async def _fetch_schema_context(
                 preferred_measures=preferred_measures,
                 preferred_tables=preferred_tables,
                 timeout_seconds=settings.schema_context_timeout_seconds,
+                lexical_fallback=True,
             )
         except SchemaEmbeddingsUnavailable:
             if observation is not None:
@@ -804,13 +578,15 @@ async def _fetch_schema_context(
                 status="error",
                 input_tokens=exc.usage.input_tokens,
                 estimated=exc.usage.estimated,
+                diagnostics=getattr(exc, "metadata", None),
             )
             logging.exception("Failed to fetch vector schema context")
             if observation is not None:
                 observation.update(
                     output={"error": observation_preview(repr(exc), max_length=500)}
                 )
-            return ""
+            # Explicit notice (not ""): an empty result makes the model retry blindly with other queries.
+            return SCHEMA_CONTEXT_UNAVAILABLE_MESSAGE
         except Exception as exc:
             logging.exception("Failed to fetch vector schema context")
             if observation is not None:
@@ -820,17 +596,21 @@ async def _fetch_schema_context(
             _debug_print(
                 "tool:get_schema_context:error", repr(exc), enabled=debug_enabled
             )
-            return ""
+            return SCHEMA_CONTEXT_UNAVAILABLE_MESSAGE
 
         _record_usage(
-            status="success",
+            # A degraded result means the query embedding itself failed.
+            status="error" if result.degraded else "success",
             input_tokens=result.usage.input_tokens,
             estimated=result.usage.estimated,
+            diagnostics=result.provider_error or None,
         )
-        payload = {
+        payload: Dict[str, Any] = {
             "tables": [item.content for item in result.tables],
             "measures": [item.content for item in result.measures],
         }
+        if result.degraded:
+            payload["nota"] = SCHEMA_CONTEXT_DEGRADED_NOTE
         fetched_schema_text = json.dumps(
             payload, ensure_ascii=False, separators=(",", ":")
         )
@@ -841,6 +621,7 @@ async def _fetch_schema_context(
                     "measure_matches": len(result.measures),
                     "missing_required_count": len(result.missing_required_items),
                     "truncated": result.truncated,
+                    "degraded": result.degraded,
                 }
             )
         _debug_print(
@@ -1635,6 +1416,7 @@ class AgentOrchestrator:
 
         initial_failure_reason: Optional[str] = None
         initial_error_message: Optional[str] = None
+        initial_schema_unavailable = False
         if not schema_text:
             # We call the tool directly to ensure only one rewrite happens.
             # execute_tool will handle the rewrite if question_is_rewritten is not passed.
@@ -1651,6 +1433,10 @@ class AgentOrchestrator:
                 fetched_schema_text = ""
                 initial_failure_reason = "semantic_model_unavailable"
                 initial_error_message = "Semantic model context could not be retrieved"
+            if _schema_output_is_unavailable(fetched_schema_text):
+                # Treated as an empty schema: the notice is never injected into the system prompt.
+                initial_schema_unavailable = True
+                fetched_schema_text = ""
             if fetched_schema_text:
                 schema_text = fetched_schema_text
             if _tool_output_is_error(fetched_schema_text):
@@ -1702,7 +1488,18 @@ class AgentOrchestrator:
             enabled=settings_debug_enabled,
         )
 
+        # Requested tool calls of any kind (blocked ones included); kept for ai_console/analytics compatibility.
         tool_rounds = 0
+        # Separate budgets: DAX executions vs. successful/failed schema retrievals.
+        dax_rounds = 0
+        schema_rounds = 0
+        schema_failures = 1 if initial_schema_unavailable else 0
+        consecutive_schema_failures = schema_failures
+        max_dax_rounds = self.settings.max_tool_rounds
+        max_schema_rounds = self.settings.max_schema_rounds
+        max_schema_failures = self.settings.max_schema_failures
+        # Anti-loop guard: a turn that respects every budget never requests more calls than this.
+        max_requested_tool_calls = max_dax_rounds + max_schema_rounds + max_schema_failures
         tools_called: List[Dict[str, Any]] = []
         dax_query_used: Optional[str] = None
         dax_results: List[Dict[str, Any]] = []
@@ -1732,12 +1529,33 @@ class AgentOrchestrator:
             recovered_errors.append({"reason": reason, "message": message})
 
         def build_turn_result(answer: str) -> Dict[str, Any]:
+            nonlocal had_error, error_message, failure_reason, failure_info
+            if (
+                self.settings.require_semantic_context
+                and failure_info is None
+                and dax_query_used is None
+                and schema_empty
+                and schema_rounds == 0
+                and schema_failures > 0
+            ):
+                # The root cause is the unavailable retrieval: classify it as such, retryable as a whole.
+                had_error = True
+                failure_reason = "semantic_model_unavailable"
+                error_message = "Semantic model context could not be retrieved"
+                failure_info = {
+                    "reason": failure_reason, "scope": "schema_retrieval", "retryable": True,
+                    "provider": "voyageai", "http_status": None, "provider_error_code": None,
+                }
+                answer = SAFE_TECHNICAL_ERROR_ANSWER
             return {
                 "answer": answer,
                 "conversation_id": conv_id,
                 "schema_empty": schema_empty,
                 "report_id": report_id,
                 "tool_rounds": tool_rounds,
+                "dax_rounds": dax_rounds,
+                "schema_rounds": schema_rounds,
+                "schema_failures": schema_failures,
                 "input_tokens": usage_totals["input_tokens"],
                 "output_tokens": usage_totals["output_tokens"],
                 "model": self.model.physical_model,
@@ -1763,7 +1581,7 @@ class AgentOrchestrator:
                 "error_message": error_message,
                 "failure_reason": failure_reason,
                 "recovered_errors": list(recovered_errors),
-                "failure_scope": "main_model" if had_error else None,
+                "failure_scope": ((failure_info or {}).get("scope") or "main_model") if had_error else None,
                 "recoverable": False if had_error else None,
                 "failure": dict(failure_info) if had_error and failure_info else None,
             }
@@ -1828,10 +1646,9 @@ class AgentOrchestrator:
             mark_functional_failure(reason, str(exc))
             return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
 
-        if initial_failure_reason and initial_error_message:
-            mark_functional_failure(initial_failure_reason, initial_error_message)
-
-        while True:
+        async def generate_round(operation_name: str = "chat-response") -> tuple[Any, Optional[Dict[str, Any]]]:
+            """One model generation plus usage accounting; returns ``(response, None)`` or ``(None, error_result)``."""
+            nonlocal actual_model_used
             _debug_print(
                 "llm:request:send",
                 {
@@ -1841,6 +1658,7 @@ class AgentOrchestrator:
                     "messages": messages,
                     "tools": tools,
                     "tool_rounds": tool_rounds,
+                    "operation": operation_name,
                 },
                 enabled=settings_debug_enabled,
             )
@@ -1859,18 +1677,20 @@ class AgentOrchestrator:
                         },
                         enabled=settings_debug_enabled,
                     )
-                    return await build_provider_error_result(
+                    return None, await build_provider_error_result(
                         reason=provider_error_type(self.model.provider, "context_too_large"),
                         exc=RuntimeError(
                             f"Prompt too long: {estimated_input_tokens} tokens > "
                             f"{self.model.capabilities.context_window} maximum"
                         ),
+                        operation_name=operation_name,
                         preflight_blocked=True,
                     )
             try:
                 started = time.monotonic()
                 try:
-                    response = await self.runtime.generate(self._request(system_payload, messages, tools))
+                    request = replace(self._request(system_payload, messages, tools), operation=operation_name)
+                    response = await self.runtime.generate(request)
                 finally:
                     self.metrics["main_model"] = self.metrics.get("main_model", 0) + round((time.monotonic() - started) * 1000)
             except Exception as exc:
@@ -1883,16 +1703,18 @@ class AgentOrchestrator:
                         },
                         enabled=settings_debug_enabled,
                     )
-                    return await build_provider_error_result(
+                    return None, await build_provider_error_result(
                         reason=provider_error_type(self.model.provider, "context_too_large"),
                         exc=exc,
+                        operation_name=operation_name,
                     )
-                return await build_provider_error_result(
+                return None, await build_provider_error_result(
                     reason=provider_error_type(
                         self.model.provider,
                         getattr(exc, "kind", None) or "provider_error",
                     ),
                     exc=exc,
+                    operation_name=operation_name,
                 )
 
             usage_metrics = response.usage.ledger_fields()
@@ -1909,7 +1731,7 @@ class AgentOrchestrator:
                 event_type="generation",
                 source_type=source,
                 trigger_type="user_request",
-                operation_name="chat-response",
+                operation_name=operation_name,
                 status="success",
                 input_tokens=usage_metrics["input_tokens"],
                 output_tokens=usage_metrics["output_tokens"],
@@ -1918,6 +1740,109 @@ class AgentOrchestrator:
                 cache_read_tokens=usage_metrics["cache_read_tokens"],
                 metadata_json={"tool_round": tool_rounds, "component": "main_agent", "normalized_usage": response.usage.metadata(), **self.model.metadata(), "actual_model": response.model, "actual_service_tier": response.actual_service_tier, "pricing_quote": response.pricing_quote, **response.thinking_decision},
             )
+            return response, None
+
+        async def finalize_on_budget_exhausted(pending_calls: List[Any], answered: List[ToolResult]) -> Dict[str, Any]:
+            """Close the tool loop with one last tool-free answer built only from this turn's successful DAX."""
+            if dax_query_used is None:
+                mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
+                return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+
+            # Providers require a result for every tool call of the assistant message.
+            answered_ids = {result.call_id for result in answered}
+            closing_results = list(answered) + [
+                ToolResult(call.id, TOOL_CALL_SKIPPED_BUDGET_MESSAGE)
+                for call in pending_calls
+                if call.id not in answered_ids
+            ]
+            turn_history.append(LLMMessage("tool", tool_results=closing_results))
+            turn_history.append(LLMMessage("user", BUDGET_EXHAUSTED_FINAL_INSTRUCTION))
+            # Tools stay defined: Anthropic rejects a history with tool_use blocks and no tools.
+            response, error_result = await generate_round("chat-response-final")
+            if error_result is not None:
+                return error_result
+            turn_history.append(response.message())
+            answer = response.text.strip()
+            if response.tool_calls or not answer:
+                mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
+                return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+            record_recoverable_error(
+                "tool_round_limit",
+                "Tool budget exhausted; answered with the DAX data already retrieved",
+            )
+            _debug_print(
+                "llm:final:budget_exhausted",
+                {"answer": answer, "tool_rounds": tool_rounds, "dax_rounds": dax_rounds},
+                enabled=settings_debug_enabled,
+            )
+            return build_turn_result(answer)
+
+        async def run_schema_tool(call_id: str, question: str) -> str:
+            nonlocal schema_rounds, schema_failures, consecutive_schema_failures
+            if schema_failures >= max_schema_failures:
+                return SCHEMA_FAILURE_LIMIT_MESSAGE
+            if schema_rounds >= max_schema_rounds:
+                return SCHEMA_ROUND_LIMIT_MESSAGE
+
+            _debug_print(
+                "tool:get_schema_context:tool_request",
+                {
+                    "tool_call_id": call_id,
+                    "dataset_id": dataset_id,
+                    "question": question,
+                    "tool_round": tool_rounds,
+                    "schema_rounds": schema_rounds,
+                    "schema_failures": schema_failures,
+                },
+                enabled=settings_debug_enabled,
+            )
+            try:
+                tool_output = await self.tool_registry.execute_tool(
+                    "get_schema_context",
+                    {"question": question},
+                    context,
+                )
+            except Exception:
+                tool_output = "Error obteniendo el esquema del modelo semantico."
+            if _schema_output_is_unavailable(tool_output):
+                # Transient: recoverable, never consumes the schema or DAX budgets.
+                schema_failures += 1
+                consecutive_schema_failures += 1
+                record_recoverable_error(
+                    "schema_context_unavailable",
+                    "Semantic model context retrieval failed transiently",
+                )
+                tool_output = _schema_unavailable_guidance(tool_output, consecutive_schema_failures)
+            else:
+                schema_rounds += 1
+                consecutive_schema_failures = 0
+                if _tool_output_is_error(tool_output):
+                    mark_functional_failure(
+                        "semantic_model_unavailable",
+                        "Semantic model context could not be retrieved",
+                    )
+            _debug_print(
+                "tool:get_schema_context:tool_response",
+                {
+                    "tool_call_id": call_id,
+                    "tool_output": tool_output,
+                },
+                enabled=settings_debug_enabled,
+            )
+            return tool_output
+
+        if initial_failure_reason and initial_error_message:
+            mark_functional_failure(initial_failure_reason, initial_error_message)
+        if initial_schema_unavailable:
+            record_recoverable_error(
+                "schema_context_unavailable",
+                "Semantic model context retrieval failed transiently",
+            )
+
+        while True:
+            response, error_result = await generate_round()
+            if error_result is not None:
+                return error_result
 
             try:
                 turn_history.append(response.message())
@@ -1953,45 +1878,10 @@ class AgentOrchestrator:
                             raise RuntimeError("Tool get_schema_context requires a non-empty question")
 
                         tool_rounds += 1
-                        if tool_rounds > self.settings.max_tool_rounds:
-                            mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
-                            return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+                        if tool_rounds > max_requested_tool_calls:
+                            return await finalize_on_budget_exhausted(tool_calls, tool_results)
 
-                        _debug_print(
-                            "tool:get_schema_context:tool_request",
-                            {
-                                "tool_call_id": tool_call.id,
-                                "dataset_id": dataset_id,
-                                "question": str(raw_question),
-                                "tool_round": tool_rounds,
-                            },
-                            enabled=settings_debug_enabled,
-                        )
-                        try:
-                            tool_output = await self.tool_registry.execute_tool(
-                                tool_name,
-                                {"question": str(raw_question)},
-                                context,
-                            )
-                        except Exception:
-                            tool_output = "Error obteniendo el esquema del modelo semantico."
-                            mark_functional_failure(
-                                "semantic_model_unavailable",
-                                "Semantic model context could not be retrieved",
-                            )
-                        if _tool_output_is_error(tool_output):
-                            mark_functional_failure(
-                                "semantic_model_unavailable",
-                                "Semantic model context could not be retrieved",
-                            )
-                        _debug_print(
-                            "tool:get_schema_context:tool_response",
-                            {
-                                "tool_call_id": tool_call.id,
-                                "tool_output": tool_output,
-                            },
-                            enabled=settings_debug_enabled,
-                        )
+                        tool_output = await run_schema_tool(tool_call.id, str(raw_question))
                         tool_results.append(
                             ToolResult(tool_call.id, _compact_tool_result_for_model(tool_output))
                         )
@@ -2019,9 +1909,9 @@ class AgentOrchestrator:
                         continue
 
                     tool_rounds += 1
-                    if tool_rounds > self.settings.max_tool_rounds:
-                        mark_functional_failure("tool_round_limit", "Maximum tool round limit reached")
-                        return build_turn_result(SAFE_TECHNICAL_ERROR_ANSWER)
+                    dax_rounds += 1
+                    if dax_rounds > max_dax_rounds or tool_rounds > max_requested_tool_calls:
+                        return await finalize_on_budget_exhausted(tool_calls, tool_results)
 
                     last_dax_attempt = str(dax_query)
 
@@ -2051,6 +1941,7 @@ class AgentOrchestrator:
                             "dataset_id": dataset_id,
                             "dax_query": str(dax_query),
                             "tool_round": tool_rounds,
+                            "dax_rounds": dax_rounds,
                         },
                         enabled=settings_debug_enabled,
                     )

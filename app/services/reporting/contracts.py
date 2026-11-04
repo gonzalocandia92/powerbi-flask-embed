@@ -47,6 +47,9 @@ class ReportDefinition:
     # V1.3.1: the run's FROZEN structure (``structure_contracts.FrozenStructure``), taken from its
     # snapshot. ``None`` = no frozen structure (runs predating V1.3, inline pipelines/tests).
     structure: Any = None
+    # Phase 3: the analytical period FROZEN for a scheduled run (``period_resolver.ResolvedPeriod``), taken
+    # from its snapshot. ``None`` = no explicit period (manual runs: the questions say what they cover).
+    period: Any = None
 
     def __post_init__(self) -> None:
         if isinstance(self.report_id, bool) or not isinstance(self.report_id, int) or self.report_id <= 0:

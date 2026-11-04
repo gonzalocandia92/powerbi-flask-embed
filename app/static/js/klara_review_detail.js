@@ -28,7 +28,7 @@
     pdfHash: 'rv-pdf-hash', actions: 'rv-actions', rejectPanel: 'rv-reject-panel', rejectReason: 'rv-reject-reason',
     rejectConfirm: 'rv-reject-confirm', rejectCancel: 'rv-reject-cancel', commentPanel: 'rv-comment-panel',
     commentText: 'rv-comment-text', commentSubmit: 'rv-comment-submit', commentCancel: 'rv-comment-cancel',
-    timeline: 'rv-timeline',
+    timeline: 'rv-timeline', deliveriesCard: 'rv-deliveries-card', deliveries: 'rv-deliveries',
   });
   const REQUEST_TIMEOUT_MS = 30000;   // ordinary calls; PDF preparation uses config.slowTimeoutMs
   const DEFAULT_RETRY_SECONDS = 5;
@@ -100,6 +100,22 @@
       }));
     }
 
+    // Only scheduled reports with recipients have deliveries: the section stays hidden otherwise.
+    function renderDeliveries(model) {
+      const rows = model.deliveries || [];
+      dom.show(refs.deliveriesCard, rows.length > 0);
+      refs.deliveries.replaceChildren(...rows.map(item => {
+        const li = dom.el(doc, 'li', 'ai-timeline-item');
+        const head = dom.el(doc, 'div', 'd-flex flex-wrap align-items-center gap-2');
+        head.append(dom.statusPill(doc, item.status), dom.el(doc, 'strong', '', item.recipient),
+          dom.el(doc, 'span', 'ai-cell-sub', item.channel));
+        if (item.detail) head.append(dom.el(doc, 'span', 'ai-cell-sub', item.detail));
+        li.append(head);
+        if (item.error) li.append(dom.el(doc, 'div', 'ai-cell-sub text-danger', item.error));
+        return li;
+      }));
+    }
+
     function renderActions(model) {
       const buttons = model.actions.map(action => {
         const working = state.busy === action.name;
@@ -125,6 +141,7 @@
       renderHeader(model);
       renderPdf(model);
       renderTimeline(model);
+      renderDeliveries(model);
       renderActions(model);
       dom.show(refs.loading, false);
       dom.show(refs.content, true);
@@ -132,10 +149,21 @@
 
     // ── loading ────────────────────────────────────────────────────────────────────────────
 
+    // Informative only: a failure here must never hide the review itself.
+    async function loadDeliveries(review) {
+      if (!review || review.status !== 'approved' || !api.listDeliveries) return [];
+      try {
+        return view.presentDeliveries((await api.listDeliveries(review.id)).deliveries);
+      } catch (_) {
+        return [];
+      }
+    }
+
     async function load() {
       const payload = await api.getRunReview(runId);
       const events = payload.review ? (await api.listEvents(payload.review.id)).events : [];
       state.model = view.presentReview({payload, events, blockApprove: state.blockApprove});
+      state.model.deliveries = await loadDeliveries(payload.review);
       if (state.panel && !state.model.actions.some(a => a.name === state.panel)) state.panel = null;
       render();
     }

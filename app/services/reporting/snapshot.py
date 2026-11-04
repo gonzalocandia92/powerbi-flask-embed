@@ -10,12 +10,17 @@ V1.3 adds an OPTIONAL ``structure`` block (frozen prompt + compiled ``ReportStru
 additive, so the version stays 1; snapshots without it are legacy and read as "no frozen structure".
 The block carries its own spec ``schema_version`` and is read back through ``structure_schemas``,
 so a run keeps meaning what it meant even when the spec schema moves on.
+
+Phase 3 adds, the same way, an OPTIONAL ``period`` block (``period_resolver.ResolvedPeriod`` payload, with
+its own ``version``): the analytical period frozen when a scheduled occurrence was materialised. Snapshots
+without it are runs without an explicit period.
 """
 from __future__ import annotations
 
 from typing import Any
 
 from .contracts import ReportDefinition, ReportQuestion
+from .period_resolver import ResolvedPeriod
 from .structure_contracts import FrozenStructure, StructureWarning
 from .structure_spec import ReportStructureSpec, structure_schemas
 
@@ -43,11 +48,25 @@ def structure_from_snapshot(snapshot: dict[str, Any]) -> FrozenStructure | None:
         warnings=tuple(StructureWarning.model_validate(item) for item in block.get("warnings") or ()))
 
 
+def period_from_snapshot(snapshot: dict[str, Any]) -> ResolvedPeriod | None:
+    """The run's frozen analytical period, or ``None`` when the snapshot has none."""
+    block = snapshot.get("period") if isinstance(snapshot, dict) else None
+    return ResolvedPeriod.from_payload(block) if isinstance(block, dict) else None
+
+
+def with_period(snapshot: dict[str, Any], period: ResolvedPeriod) -> dict[str, Any]:
+    """A copy of ``snapshot`` that also freezes ``period`` (the snapshot passed in is not modified)."""
+    return {**snapshot, "period": period.to_payload()}
+
+
 def snapshot_from_definition(definition: ReportDefinition, *, definition_id: int | None = None,
-                             structure: dict[str, Any] | None = None) -> dict[str, Any]:
+                             structure: dict[str, Any] | None = None,
+                             period: ResolvedPeriod | None = None) -> dict[str, Any]:
     snapshot = _definition_snapshot(definition, definition_id)
     if structure is not None:
         snapshot["structure"] = structure
+    if period is not None:
+        snapshot["period"] = period.to_payload()
     return snapshot
 
 
@@ -92,4 +111,5 @@ def definition_from_snapshot(snapshot: dict[str, Any]) -> ReportDefinition:
         # The run's frozen structure travels with the definition it was created with; ``None`` for runs
         # that predate V1.3 (the composer then uses the default structure of the questions).
         structure=structure_from_snapshot(snapshot),
+        period=period_from_snapshot(snapshot),
     )

@@ -16,6 +16,7 @@ from app.services.analytics import AnalyticsError, AnalyticsExecutor, AnalyticsR
 from .analysis_execution import AnalysisExecutionStrategy, AnalysisStats, SequentialAnalysisExecution
 from .analytics_bridge import section_from_exception, section_from_result
 from .contracts import ReportDefinition, ReportDraft, ReportQuestion, ReportSection
+from .period_context import analysis_question
 from .progress import ReportProgress, STAGE_ANALYSIS, notify_checkpoint, notify_section, notify_stage
 
 
@@ -95,7 +96,8 @@ class ReportGenerator:
         # A fresh request per question: no history, no shared mutable state between questions.
         request = AnalyticsRequest(
             report_id=definition.report_id,
-            question=question.question,
+            # Scheduled runs: explicit frozen dates first (the section keeps the original question).
+            question=analysis_question(definition, question.question),
             history=[],
             source="report",
             execution_id=f"report:{report_run_id}:{question.key}",

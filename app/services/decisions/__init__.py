@@ -5,7 +5,7 @@ from .contracts import (
 )
 from .defaults import (
     DisabledComplexityClassifier, LLMComplexityClassifier, PassthroughQueryRewriter,
-    StaticExecutionPolicyResolver, ScopedModelRoleResolver, LLMQueryRewriter,
+    StaticExecutionPolicyResolver, SourceExecutionPolicyResolver, ScopedModelRoleResolver, LLMQueryRewriter,
     LLMSkillSelector, EmbeddingSkillSelector, ExistingSkillRouter,
 )
 from .jev import JevSkillSelector, JevWithLLMFallbackSelector
