@@ -124,6 +124,17 @@ class McpRefreshTokenGrant(RefreshTokenGrant):
         )
         if item is None or item.client_id != self.request.client.get_client_id():
             return None
+        if item.replaced_by_hash and self._within_reuse_grace(item):
+            # Benign reuse (parallel refreshes or a retry after a lost response):
+            # rotate again within the same family instead of revoking the session.
+            audit(
+                'oauth.refresh_token.reuse_tolerated', oauth_session=item.oauth_session,
+                details={'family_id': item.family_id},
+            )
+            g.mcp_refresh_credential = item
+            g.mcp_refresh_family_id = item.family_id
+            g.mcp_oauth_session_id = item.oauth_session.public_id
+            return item
         if item.replaced_by_hash:
             now = _now()
             McpRefreshToken.query.filter_by(
@@ -146,6 +157,18 @@ class McpRefreshTokenGrant(RefreshTokenGrant):
             return item
         return None
 
+    @staticmethod
+    def _within_reuse_grace(item):
+        grace = current_app.config.get('MCP_OAUTH_REFRESH_REUSE_GRACE_SECONDS', 0)
+        if not grace or item.revoked_at is None or item.is_expired():
+            return False
+        if not item.oauth_session.is_active:
+            return False
+        rotated_at = item.revoked_at
+        if rotated_at.tzinfo is None:
+            rotated_at = rotated_at.replace(tzinfo=timezone.utc)
+        return _now() - rotated_at <= timedelta(seconds=grace)
+
     def validate_token_request(self):
         super().validate_token_request()
         _resolve_resource(
@@ -156,8 +179,11 @@ class McpRefreshTokenGrant(RefreshTokenGrant):
         return User.query.filter_by(id=refresh_token.user_id, is_active=True).first()
 
     def revoke_old_credential(self, refresh_token):
-        refresh_token.revoked_at = _now()
-        refresh_token.replaced_by_hash = getattr(g, 'mcp_new_refresh_hash', None)
+        # Keep the first rotation time and successor: a tolerated reuse must not
+        # extend the grace window.
+        if refresh_token.revoked_at is None:
+            refresh_token.revoked_at = _now()
+            refresh_token.replaced_by_hash = getattr(g, 'mcp_new_refresh_hash', None)
         audit(
             'oauth.refresh_token.rotated', oauth_session=refresh_token.oauth_session,
             details={'family_id': refresh_token.family_id},

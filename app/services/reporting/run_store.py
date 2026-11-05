@@ -23,9 +23,18 @@ from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 from sqlalchemy import func, select, update
+from sqlalchemy.exc import IntegrityError
 
 from app import db
-from app.models import AnalyticalReportDefinition, AnalyticalReportQuestion, ReportRun, ReportRunSection
+from app.models import (
+    AnalyticalReportDefinition, AnalyticalReportQuestion, ReportRun, ReportRunSection, ReportScheduleOccurrence,
+)
+from app.persistence.run_states import (  # noqa: F401 - re-exported: ``run_store`` keeps its public names
+    ACTIVE_STATUSES, OPEN_STATUSES, STATUS_CANCEL_REQUESTED, STATUS_CANCELLED, STATUS_COMPLETED,
+    STATUS_COMPLETED_WITH_ERRORS, STATUS_FAILED, STATUS_QUEUED, STATUS_RUNNING, TERMINAL_STATUSES,
+    TRIGGER_SCHEDULED,
+)
+from app.persistence.schedule_states import OCCURRENCE_ENQUEUED, OCCURRENCE_READY
 
 from .contracts import ReportDefinition, ReportQuestion, ReportSection
 from .evidence import load_evidence
@@ -35,16 +44,6 @@ from .structure_store import StructureStore
 
 LOG = logging.getLogger(__name__)
 
-STATUS_QUEUED = "queued"
-STATUS_RUNNING = "running"
-STATUS_COMPLETED = "completed"
-STATUS_COMPLETED_WITH_ERRORS = "completed_with_errors"
-STATUS_FAILED = "failed"
-STATUS_CANCEL_REQUESTED = "cancel_requested"
-STATUS_CANCELLED = "cancelled"
-
-ACTIVE_STATUSES = (STATUS_RUNNING, STATUS_CANCEL_REQUESTED)
-TERMINAL_STATUSES = (STATUS_COMPLETED, STATUS_COMPLETED_WITH_ERRORS, STATUS_FAILED, STATUS_CANCELLED)
 
 DEFAULT_LEASE_SECONDS = 1800
 _KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,79}$")
@@ -158,25 +157,35 @@ class ReportRunStore:
 
     # ── enqueue ────────────────────────────────────────────────────────────
 
-    def enqueue_run(self, definition_id: int, *, requested_by_user_id: int | None = None) -> ReportRun:
-        """Snapshot the definition as it is NOW and create a ``queued`` run.
+    def build_snapshot(self, definition_id: int) -> dict:
+        """The snapshot a run of this definition would execute NOW (definition, questions, model, structure).
 
-        The snapshot also freezes the structure (prompt + the spec the definition currently has, or the
-        default one with a warning if it is missing/stale). This only READS the store: it never calls
-        the structure planner, so launching a run never pays to re-interpret a prompt.
+        Pure read, shared by ``enqueue_run`` and the scheduler (which freezes it in an occurrence and adds the
+        period). Raises ``DefinitionNotRunnableError`` (missing/inactive) or ``ValueError`` (no questions).
         """
+        return self._runnable(definition_id)[1]
+
+    def _runnable(self, definition_id: int) -> tuple[AnalyticalReportDefinition, dict]:
         model = db.session.get(AnalyticalReportDefinition, definition_id)
         if model is None or not model.is_active:
             raise DefinitionNotRunnableError(f"Definition not found or inactive: {definition_id}")
         definition = self.definition_to_domain(model)  # re-validates (raises ValueError if empty)
+        # Also freezes the structure (prompt + the spec the definition currently has, or the default one with a
+        # warning if it is missing/stale). Only READS the store: never calls the structure planner, so
+        # launching a run never pays to re-interpret a prompt.
+        return model, snapshot_from_definition(
+            definition, definition_id=model.id, structure=StructureStore().snapshot_block(model))
+
+    def enqueue_run(self, definition_id: int, *, requested_by_user_id: int | None = None) -> ReportRun:
+        """Snapshot the definition as it is NOW (``build_snapshot``) and create a ``queued`` run."""
+        model, snapshot = self._runnable(definition_id)
         try:
             run = ReportRun(
                 definition_id=model.id, report_id_fk=model.report_id_fk,
                 requested_by_user_id=requested_by_user_id, status=STATUS_QUEUED,
-                progress_current=0, progress_total=len(definition.questions),
+                progress_current=0, progress_total=len(snapshot["questions"]),
                 snapshot_schema_version=SNAPSHOT_SCHEMA_VERSION,
-                definition_snapshot_json=snapshot_from_definition(
-                    definition, definition_id=model.id, structure=StructureStore().snapshot_block(model)),
+                definition_snapshot_json=snapshot,
             )
             db.session.add(run)
             db.session.commit()
@@ -184,6 +193,76 @@ class ReportRunStore:
         except Exception:
             db.session.rollback()
             raise
+
+    # ── scheduled runs (Phase 3) ───────────────────────────────────────────
+
+    def enqueue_occurrence(self, occurrence_id: int) -> ReportRun | None:
+        """``ready`` occurrence -> ``enqueued`` + its ``queued`` run, in ONE transaction.
+
+        The run executes the snapshot FROZEN in the occurrence (period included); the definition is never
+        re-read, so editing it while waiting for Power BI changes nothing. Returns ``None`` without writing
+        anything when the occurrence is no longer ``ready`` (another dispatcher won) or already has an open run
+        (partial unique index): restarts and replicas never create a second run nor spend tokens twice.
+        """
+        occurrence = db.session.get(ReportScheduleOccurrence, occurrence_id, populate_existing=True)
+        snapshot = occurrence.definition_snapshot_json if occurrence is not None else None
+        if occurrence is None or occurrence.status != OCCURRENCE_READY or not isinstance(snapshot, dict):
+            db.session.rollback()
+            return None
+        definition_id = occurrence.schedule.definition_id
+        try:
+            changed = db.session.execute(
+                update(ReportScheduleOccurrence)
+                .where(ReportScheduleOccurrence.id == occurrence_id,
+                       ReportScheduleOccurrence.status == OCCURRENCE_READY)
+                .values(status=OCCURRENCE_ENQUEUED, updated_at=_utcnow().replace(tzinfo=None))
+            ).rowcount
+            if changed != 1:
+                db.session.rollback()
+                return None
+            run = ReportRun(
+                definition_id=definition_id, report_id_fk=snapshot["report_id"], requested_by_user_id=None,
+                status=STATUS_QUEUED, progress_current=0, progress_total=len(snapshot.get("questions") or ()),
+                snapshot_schema_version=snapshot.get("schema_version", SNAPSHOT_SCHEMA_VERSION),
+                definition_snapshot_json=snapshot, trigger_source=TRIGGER_SCHEDULED,
+                schedule_occurrence_id=occurrence_id,
+            )
+            db.session.add(run)
+            db.session.commit()
+            return run
+        except IntegrityError:
+            db.session.rollback()
+            LOG.warning("Occurrence %s already has an open run; nothing enqueued", occurrence_id)
+            return None
+        except Exception:
+            db.session.rollback()
+            raise
+
+    def open_scheduled_usage(self) -> dict[int, int]:
+        """Open (queued/running/cancel_requested) scheduled runs per ``report_id_fk`` (concurrency caps)."""
+        rows = db.session.execute(
+            select(ReportRun.report_id_fk, func.count(ReportRun.id))
+            .where(ReportRun.trigger_source == TRIGGER_SCHEDULED, ReportRun.status.in_(OPEN_STATUSES))
+            .group_by(ReportRun.report_id_fk)).all()
+        db.session.rollback()  # end the read transaction: the next poll must see fresh data
+        return {int(report_id): int(count) for report_id, count in rows}
+
+    def latest_occurrence_run(self, occurrence_id: int) -> dict | None:
+        """The most recent run of an occurrence as plain values (``id``, ``status``, ``error_code``,
+        ``error_message``, ``completed_at``), or ``None``."""
+        row = db.session.execute(
+            select(ReportRun.id, ReportRun.status, ReportRun.error_code, ReportRun.error_message,
+                   ReportRun.completed_at)
+            .where(ReportRun.schedule_occurrence_id == occurrence_id)
+            .order_by(ReportRun.created_at.desc(), ReportRun.id.desc()).limit(1)).one_or_none()
+        db.session.rollback()
+        if row is None:
+            return None
+        completed = row.completed_at
+        return {"id": row.id, "status": row.status, "error_code": row.error_code,
+                "error_message": row.error_message,
+                "completed_at": completed.replace(tzinfo=timezone.utc) if completed and completed.tzinfo is None
+                else completed}
 
     # ── claim / lease ──────────────────────────────────────────────────────
 

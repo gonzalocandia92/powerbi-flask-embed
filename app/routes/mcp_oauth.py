@@ -268,6 +268,15 @@ def register_client():
     )
 
 
+def _consent_error(description):
+    db.session.rollback()
+    return (
+        jsonify({'error': 'invalid_request', 'error_description': description}),
+        400,
+        {'Cache-Control': 'no-store', 'Pragma': 'no-cache'},
+    )
+
+
 @bp.route('/oauth/authorize', methods=['GET', 'POST'])
 @limiter.limit('30 per minute')
 def authorize():
@@ -301,24 +310,25 @@ def authorize():
             oauth_parameters=request.args,
         )
 
+    # Row lock so two concurrent submits of the same consent form cannot both pass.
     pending = McpOAuthAuthorizationRequest.query.filter_by(
-        request_id=request.form.get('request_id'), user_id=current_user.id, consumed_at=None
-    ).first()
-    expires_at = pending.expires_at if pending is not None else None
-    if expires_at is not None and expires_at.tzinfo is None:
+        request_id=request.form.get('request_id'), user_id=current_user.id
+    ).with_for_update().first()
+    if pending is None:
+        return _consent_error('Unknown authorization request')
+    if pending.consumed_at is not None:
+        # Typically a double click or a resubmit: the first submit already redirected
+        # the client with its code, so tell the user they are done instead of failing.
+        db.session.rollback()
+        return render_template('oauth/authorize_done.html'), 409, {'Cache-Control': 'no-store'}
+    expires_at = pending.expires_at
+    if expires_at.tzinfo is None:
         expires_at = expires_at.replace(tzinfo=timezone.utc)
-    submitted_resource = request.form.get('resource')
-    if submitted_resource:
-        submitted_resource = submitted_resource.rstrip('/')
-    elif pending is not None:
-        submitted_resource = pending.resource
-    if (
-        pending is None
-        or expires_at <= _now()
-        or pending.client_id != request.form.get('client_id')
-        or pending.resource != submitted_resource
-    ):
-        return jsonify({'error': 'invalid_request', 'error_description': 'Authorization request expired'}), 400
+    if expires_at <= _now():
+        return _consent_error('Authorization request expired')
+    submitted_resource = (request.form.get('resource') or '').rstrip('/') or pending.resource
+    if pending.client_id != request.form.get('client_id') or pending.resource != submitted_resource:
+        return _consent_error('Authorization request does not match the original request')
     pending.consumed_at = _now()
     db.session.commit()
     approved = request.form.get('decision') == 'approve'

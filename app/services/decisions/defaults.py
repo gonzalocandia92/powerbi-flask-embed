@@ -1,9 +1,10 @@
 from __future__ import annotations
 import json
 import time
+from dataclasses import replace
 from app.services.observability import start_observation
 from app.services.llm import CachePolicy, LLMMessage, LLMRequest, ToolDefinition, report_cache_scope
-from .contracts import ComplexityAssessment
+from .contracts import ComplexityAssessment, ExecutionPolicy
 
 
 class DisabledComplexityClassifier:
@@ -82,6 +83,34 @@ class StaticExecutionPolicyResolver:
     def resolve(self, assessment, default):
         # Classification is descriptive. Only deterministic policy can control execution.
         return default
+
+
+class SourceExecutionPolicyResolver:
+    """Deterministic per-origin overrides of the default policy (e.g. reports get a larger DAX budget).
+
+    Applied while building the default policy, before the complexity-based resolver, because the
+    ``ExecutionPolicyResolver`` protocol does not receive the execution source. An explicit
+    ``ExecutionPolicy`` in the execution context is never overridden.
+    """
+
+    def __init__(self, overrides_by_source=None):
+        self.overrides_by_source = {
+            str(source): {key: value for key, value in dict(overrides).items() if value is not None}
+            for source, overrides in (overrides_by_source or {}).items()
+        }
+
+    @classmethod
+    def from_settings(cls, settings):
+        return cls({"report": {
+            "max_tool_rounds": getattr(settings, "report_max_tool_rounds", None),
+            "max_schema_rounds": getattr(settings, "report_max_schema_rounds", None),
+            # Report questions are always analytical: an answer without schema nor data is never valid.
+            "require_semantic_context": True,
+        }})
+
+    def resolve(self, source, default: ExecutionPolicy) -> ExecutionPolicy:
+        overrides = self.overrides_by_source.get(str(source or ""))
+        return replace(default, **overrides) if overrides else default
 
 
 class ScopedModelRoleResolver:

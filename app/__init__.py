@@ -112,6 +112,8 @@ def _validate_mcp_security_config(app):
         raise RuntimeError(
             'MCP_OAUTH_REFRESH_TOKEN_TTL must exceed the access TTL and be at most one year'
         )
+    if not 0 <= app.config['MCP_OAUTH_REFRESH_REUSE_GRACE_SECONDS'] <= 300:
+        raise RuntimeError('MCP_OAUTH_REFRESH_REUSE_GRACE_SECONDS must be between 0 and 300 seconds')
 
 
 def create_app():
@@ -145,6 +147,9 @@ def create_app():
     app.config['MCP_OAUTH_PRIVATE_KEY_FILE'] = os.getenv('MCP_OAUTH_PRIVATE_KEY_FILE')
     app.config['MCP_OAUTH_ACCESS_TOKEN_TTL'] = int(os.getenv('MCP_OAUTH_ACCESS_TOKEN_TTL', '900'))
     app.config['MCP_OAUTH_REFRESH_TOKEN_TTL'] = int(os.getenv('MCP_OAUTH_REFRESH_TOKEN_TTL', '2592000'))
+    app.config['MCP_OAUTH_REFRESH_REUSE_GRACE_SECONDS'] = int(
+        os.getenv('MCP_OAUTH_REFRESH_REUSE_GRACE_SECONDS', '60')
+    )
     app.config['MCP_INTERNAL_JWT_SECRET'] = os.getenv('MCP_INTERNAL_JWT_SECRET')
     app.config['MCP_INTERNAL_REQUIRE_MTLS'] = os.getenv('MCP_INTERNAL_REQUIRE_MTLS', 'true').lower() == 'true'
     app.config['RATELIMIT_STORAGE_URI'] = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
@@ -196,7 +201,7 @@ def create_app():
         """Close database session after each request."""
         db.session.remove()
     
-    from app.routes import ai_config, ai_reporting, ai_reporting_reviews, ai_reporting_review_pages, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations, admin_interactions
+    from app.routes import ai_config, ai_reporting, ai_reporting_reviews, ai_reporting_review_pages, ai_reporting_schedules, auth, main, tenants, clients, workspaces, reports, usuarios_pbi, public, analytics, private, empresas, futuras_empresas, api_docs, monitor, chatbot, whatsapp, users, mcp_config, mcp_oauth, mcp_internal, mcp_oauth_admin, model_catalog, evaluations, admin_interactions
     app.register_blueprint(auth.bp)
     app.register_blueprint(main.bp)
     app.register_blueprint(tenants.bp)
@@ -224,6 +229,7 @@ def create_app():
     app.register_blueprint(ai_reporting.bp)
     app.register_blueprint(ai_reporting_reviews.bp)
     app.register_blueprint(ai_reporting_review_pages.bp)
+    app.register_blueprint(ai_reporting_schedules.bp)
     app.register_blueprint(admin_interactions.bp)
 
     from app.services.reporting.cli import register_reporting_command
@@ -241,7 +247,7 @@ def create_app():
     backoffice_blueprints = {
         'main', 'tenants', 'clients', 'workspaces', 'reports', 'usuarios_pbi',
         'analytics', 'empresas', 'futuras_empresas', 'api_docs', 'monitor',
-        'ai_config', 'model_catalog', 'evaluations', 'ai_reporting', 'ai_reporting_reviews', 'ai_reporting_review_pages', 'users', 'mcp_config',
+        'ai_config', 'model_catalog', 'evaluations', 'ai_reporting', 'ai_reporting_reviews', 'ai_reporting_review_pages', 'ai_reporting_schedules', 'users', 'mcp_config',
         'mcp_oauth_admin',
     }
 
@@ -296,6 +302,20 @@ def create_app():
                     trigger='interval',
                     seconds=max(1, int(os.getenv('REPORT_RUN_POLL_SECONDS', '3'))),
                     id='report_run_worker',
+                    replace_existing=True,
+                    max_instances=1,
+                    coalesce=True,
+                )
+            # Report scheduler (Phase 3). Off by default: it belongs to the dedicated report-scheduler
+            # process (``python -m app.services.reporting.scheduler_main``); enable here only in development.
+            if os.getenv('REPORT_SCHEDULER_ENABLED', '0').lower() in ('1', 'true', 'yes'):
+                from app.services.reporting.scheduler_main import poll_report_schedules, tick_seconds
+                scheduler.add_job(
+                    func=poll_report_schedules,
+                    args=[app],
+                    trigger='interval',
+                    seconds=tick_seconds(),
+                    id='report_scheduler',
                     replace_existing=True,
                     max_instances=1,
                     coalesce=True,

@@ -15,6 +15,7 @@ from app.services.analytics import AnalyticsExecutor, AnalyticsRequest
 from .analytics_bridge import section_from_exception, section_from_result
 from .contracts import ReportDefinition, ReportSection
 from .coordinator_contracts import RequestedAnalysis
+from .period_context import analysis_question
 
 
 async def run_analysis(
@@ -36,7 +37,7 @@ async def run_analysis(
         else requested_analysis.question[:99] + "…"
     request = AnalyticsRequest(
         report_id=definition.report_id,
-        question=requested_analysis.question,
+        question=analysis_question(definition, requested_analysis.question),
         history=[],
         source="report",
         execution_id=f"report:{report_run_id}:{section_key}",

@@ -59,6 +59,7 @@ def _endpoints() -> dict[str, str]:
         "reject": _template_url(api + "reject_review", review=True),
         "comments": _template_url(api + "add_review_comment", review=True),
         "events": _template_url(api + "review_events", review=True),
+        "deliveries": _template_url(api + "review_deliveries", review=True),
     }
 
 

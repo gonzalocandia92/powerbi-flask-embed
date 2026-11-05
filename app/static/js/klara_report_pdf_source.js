@@ -41,9 +41,12 @@
     return {kind: 'draft', label: DRAFT_LABEL, hint: DRAFT_HINT, href: null};
   }
 
-  // The link to the review screen: only for staff and only for a run that finished `completed`.
+  // Run statuses that can go to review (mirrors run_states.REVIEWABLE_STATUSES).
+  const REVIEWABLE_STATUSES = ['completed', 'completed_with_errors'];
+
+  // The link to the review screen: only for staff and only for a run that finished with a reviewable status.
   function resolveReviewLink({review, runStatus, runId, entry, statusLabel}) {
-    if (!entry || !entry.canReview || !entry.detailUrl || !runId || runStatus !== 'completed') return null;
+    if (!entry || !entry.canReview || !entry.detailUrl || !runId || !REVIEWABLE_STATUSES.includes(runStatus)) return null;
     const label = statusLabel || identity;
     return {
       href: fill(entry.detailUrl, {run_id: runId}),

@@ -101,6 +101,10 @@ class ReportWriter(Protocol):  # legacy: ReportDraft -> FinalReport 1.1 (see str
                     on_attempt: WriterAttemptHook | None = None) -> FinalReport: ...
 
 
+# Recovered errors that mean an ``ok`` section answered only part of its question (tool budget exhausted).
+PARTIAL_RESULT_REASONS = frozenset({"tool_round_limit"})
+
+
 # ------------------------------------------------------------------------------ prompt
 _RULES = """\
 Sos el redactor de informes ejecutivos de KLARA. Recibís un ReportDraft: respuestas analíticas ya calculadas y verificadas. Tu única tarea es seleccionar, sintetizar y estructurar esa información para producir un informe claro para el cliente final.
@@ -123,6 +127,7 @@ REGLAS DE CONTENIDO
 - Cada KPI.value debe ser una cifra literal presente en el ReportDraft.
 - period: completá label/start/end/comparison_label sólo si surgen explícitamente de las respuestas. Si no están respaldados, dejá null. Nunca inventes fechas.
 - Si una sección del draft tiene status="failed", no inventes su análisis. Sólo podés mencionarla de forma neutra en notes para indicar que ese análisis no estuvo disponible, sin detalles técnicos.
+- Si una sección tiene completeness="partial", su answer cubre sólo parte de lo pedido. Usá únicamente lo que esa answer reporta, no completes lo faltante y no la presentes como completa; podés aclarar de forma neutra en notes qué quedó sin calcular.
 
 REGLAS DE NO REDUNDANCIA
 - Cada sección debe tener una función clara:
@@ -251,6 +256,9 @@ def compact_draft(draft: ReportDraft) -> dict[str, Any]:
             item["related_section_keys"] = list(section.related_section_keys)
         if section.semantic_notes:
             item["semantic_notes"] = list(section.semantic_notes)
+        if any(isinstance(error, dict) and error.get("reason") in PARTIAL_RESULT_REASONS
+               for error in section.recovered_errors):
+            item["completeness"] = "partial"
         sections.append(item)
     return {
         "report_name": draft.name,

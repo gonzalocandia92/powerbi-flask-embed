@@ -1,32 +1,34 @@
 """Can a run be put under review? An ordered chain of small rules (first objection wins).
 
-The rules look at the FINAL outcome of the run, not at its history: a section that failed a DAX attempt
-and recovered leaves a ``completed`` run, which is eligible; ``completed_with_errors`` never is. Adding a
-requirement (e.g. "the report must have a definition") is one more ``EligibilityRule`` in the factory.
+The rules look at the FINAL outcome of the run, not at its history. Both ``completed`` and
+``completed_with_errors`` are reviewable (``run_states.REVIEWABLE_STATUSES``): a degraded run still produced a
+report, the reviewer sees its status and decides; one whose report was not persisted is blocked by
+``PersistedSourcesRule``. Adding a requirement (e.g. "the report must have a definition") is one more
+``EligibilityRule`` in the factory.
 
 Reading is pure: nothing here creates a review, renders or writes.
 """
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Iterable, Sequence
+
+from app.persistence.run_states import REVIEWABLE_STATUSES
 
 from .review_contracts import (
-    FINAL_REPORT_MISSING, HTML_UNAVAILABLE, ORIGIN_ARTIFACT, RUN_COMPLETED_WITH_ERRORS,
-    RUN_NOT_COMPLETED, RUN_NOT_FOUND, STATUS_COMPLETED, STATUS_COMPLETED_WITH_ERRORS, EligibilityRule,
+    FINAL_REPORT_MISSING, HTML_UNAVAILABLE, ORIGIN_ARTIFACT, RUN_NOT_COMPLETED, RUN_NOT_FOUND, EligibilityRule,
     ReviewArtifacts, ReviewEligibility, RunView,
 )
 
 
 class RunCompletedRule:
-    """Only ``completed`` runs are reviewable; the degraded status is reported with its own code."""
+    """Only finished runs with a reviewable status (``completed`` and ``completed_with_errors`` by default)."""
+
+    def __init__(self, statuses: Iterable[str] = REVIEWABLE_STATUSES):
+        self.statuses = frozenset(statuses)
 
     def check(self, run: RunView, artifacts: ReviewArtifacts) -> ReviewEligibility | None:
-        if run.status == STATUS_COMPLETED:
+        if run.status in self.statuses:
             return None
-        if run.status == STATUS_COMPLETED_WITH_ERRORS:
-            return ReviewEligibility.blocked(
-                RUN_COMPLETED_WITH_ERRORS,
-                "La ejecución terminó con errores y no puede enviarse a revisión.", run.status)
         return ReviewEligibility.blocked(
             RUN_NOT_COMPLETED, "La ejecución todavía no terminó correctamente.", run.status)
 

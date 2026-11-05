@@ -22,10 +22,11 @@ from app.services.reporting.review_contracts import (
     MAX_PAGE_SIZE, RUN_NOT_FOUND, ReviewActor, ReviewEligibility, ReviewError, ReviewNotEligibleError,
     ReviewPermissionError, ReviewQuery,
 )
-from app.services.reporting.review_factory import build_review_inbox, build_review_service
+from app.services.reporting.review_factory import build_delivery_store, build_review_inbox, build_review_service
 from app.utils.decorators import staff_required
 from app.utils.request_args import date_arg, int_arg, list_arg, valid_run_id
 
+from .delivery_payloads import delivery_payload
 from .review_http import error_response, internal_error_response, invalid_request
 from .review_payloads import (
     available_actions, eligibility_payload, event_payload, inbox_item_payload, inbox_page_payload, needs_eligibility,
@@ -265,3 +266,13 @@ def review_pdf(review_id: int):
 def review_events(review_id: int):
     events = _service().list_events(review_id)
     return _json({"review_id": review_id, "events": [event_payload(event) for event in events]})
+
+
+@bp.route("/reviews/<int:review_id>/deliveries", methods=["GET"])
+@review_reader
+@_handles_review_errors("deliveries")
+def review_deliveries(review_id: int):
+    """Where the approved PDF was sent (scheduled reports only); recipients are masked."""
+    _service().get_review(review_id)  # 404 for an unknown review, like the other reads
+    deliveries = build_delivery_store().list_for_review(review_id)
+    return _json({"review_id": review_id, "deliveries": [delivery_payload(item) for item in deliveries]})

@@ -50,7 +50,8 @@
   }
 
   // endpoints: URL templates with `{id}` (review id) / `{run_id}`: inbox, runReview, prepare, submit,
-  //            approve, reject, comments, events. `pdf` is not requested here: the browser loads it.
+  //            approve, reject, comments, events, deliveries (optional). `pdf` is not requested here: the
+  //            browser loads it.
   function createReviewApi({endpoints, csrf, fetchImpl, timers}) {
     const doFetch = fetchImpl || ((...args) => fetch(...args));
     const clock = timers || {setTimeout: (fn, ms) => setTimeout(fn, ms), clearTimeout: id => clearTimeout(id)};
@@ -124,6 +125,11 @@
         return request('POST', fill(endpoints.comments, {id: reviewId}), {...opts, body: {comment}});
       },
       listEvents(reviewId, opts) { return request('GET', fill(endpoints.events, {id: reviewId}), opts); },
+      // GET: {review_id, deliveries} where the approved PDF was sent (empty when not configured).
+      listDeliveries(reviewId, opts) {
+        if (!endpoints.deliveries) return Promise.resolve({review_id: reviewId, deliveries: []});
+        return request('GET', fill(endpoints.deliveries, {id: reviewId}), opts);
+      },
     };
   }
 

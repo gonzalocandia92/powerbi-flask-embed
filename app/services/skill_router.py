@@ -12,6 +12,7 @@ from flask import has_app_context
 
 from app import db
 from app.models import AnalyticsSkill
+from app.services.embeddings import QueryEmbeddingError, embed_query, get_voyage_query_client
 from app.services.observability import hash_identifier, observation_preview, start_observation
 from app.services.semantic_notes import collect_semantic_notes
 from app.services.skill_catalog import (
@@ -281,15 +282,8 @@ def build_skill_router_settings(config: Optional[Dict[str, Any]] = None) -> Skil
     )
 
 
-def _get_voyage_client():
-    api_key = os.getenv("VOYAGE_API_KEY")
-    if not api_key:
-        raise RuntimeError("VOYAGE_API_KEY is required")
-    try:
-        import voyageai
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError("The 'voyageai' package is required for skill routing.") from exc
-    return voyageai.Client(api_key=api_key)
+# Shared lazy client (kept under this name as the patch point for tests).
+_get_voyage_client = get_voyage_query_client
 
 
 def _estimate_tokens(text: str) -> int:
@@ -1199,15 +1193,15 @@ async def resolve_skill_route(
                         model=VOYAGE_SKILL_MODEL,
                         metadata={"provider": "voyageai", "inputtype": "query"},
                     )
-                client = _get_voyage_client()
-                response = await asyncio.wait_for(
-                    asyncio.to_thread(
-                        lambda: client.embed([user_message], model=VOYAGE_SKILL_MODEL, input_type="query")
-                    ),
-                    timeout=max(1, router_settings.timeout_seconds),
+                embedding = await embed_query(
+                    user_message,
+                    model=VOYAGE_SKILL_MODEL,
+                    client_factory=_get_voyage_client,
+                    deadline_seconds=max(1, router_settings.timeout_seconds),
+                    component="skill_router",
                 )
-                query_embedding = list(response.embeddings[0])
-                total_tokens = int(getattr(response, "total_tokens", None) or 0)
+                query_embedding = embedding.vector
+                total_tokens = embedding.total_tokens
                 if usage_totals is not None:
                     usage_totals["input_tokens"] = int(usage_totals.get("input_tokens", 0)) + total_tokens
                 if ai_usage_events is not None:
@@ -1223,7 +1217,8 @@ async def resolve_skill_route(
                             "input_tokens": total_tokens,
                             "output_tokens": 0,
                             "total_tokens": total_tokens,
-                            "metadata_json": {"component": "skill_router", "input_type": "query", "router_mode": router_settings.mode},
+                            "metadata_json": {"component": "skill_router", "input_type": "query", "router_mode": router_settings.mode,
+                                              "embedding_attempts": embedding.attempts},
                         }
                     )
                 if embedding_observation is not None:
@@ -1255,6 +1250,7 @@ async def resolve_skill_route(
                             "router_mode": router_settings.mode,
                             "estimated_usage": True,
                             "error_type": "voyage_provider_error",
+                            **({"embedding_attempts": exc.metadata()} if isinstance(exc, QueryEmbeddingError) else {}),
                         },
                     }
                 )

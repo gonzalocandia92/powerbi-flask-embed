@@ -9,7 +9,7 @@
       <ul class="mb-4">
         {% for scope in scopes %}<li><code>{{ scope }}</code></li>{% endfor %}
       </ul>
-      <form method="post" action="{{ url_for('mcp_oauth.authorize') }}">
+      <form id="oauth-consent-form" method="post" action="{{ url_for('mcp_oauth.authorize') }}">
         <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
         <input type="hidden" name="request_id" value="{{ request_id }}">
         {% for key in oauth_parameters %}
@@ -20,6 +20,25 @@
         <button class="btn btn-primary" name="decision" value="approve" type="submit">Autorizar</button>
         <button class="btn btn-outline-secondary" name="decision" value="deny" type="submit">Cancelar</button>
       </form>
+      <script>
+        // The request_id is single-use: ignore any submit after the first one.
+        // Buttons are not truly disabled so the clicked one still sends its "decision".
+        (function () {
+          var form = document.getElementById('oauth-consent-form');
+          var submitted = false;
+          form.addEventListener('submit', function (event) {
+            if (submitted) {
+              event.preventDefault();
+              return;
+            }
+            submitted = true;
+            form.querySelectorAll('button[type="submit"]').forEach(function (button) {
+              button.classList.add('disabled');
+              button.setAttribute('aria-disabled', 'true');
+            });
+          });
+        })();
+      </script>
     </div>
   </div>
 </div>

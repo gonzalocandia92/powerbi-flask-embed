@@ -39,6 +39,9 @@ DEFAULT_RETRY_BASE_DELAY_SECONDS = 5.0
 MAX_RETRY_ATTEMPTS_LIMIT = 5
 MAX_RETRY_DELAY_SECONDS_LIMIT = 120.0
 
+# Scopes whose transient failures justify repeating the whole execution.
+RETRYABLE_FAILURE_SCOPES = frozenset({"main_model", "schema_retrieval"})
+
 Sleeper = Callable[[float], Awaitable[None]]
 
 
@@ -55,7 +58,7 @@ class AnalyticsRetryPolicy(Protocol):
 
 
 class TransientFailureRetryPolicy:
-    """Retry only failures the Analytics layer flagged as transient and that come from the main model."""
+    """Retry only failures the Analytics layer flagged as transient, from the main model or the schema retrieval."""
 
     def __init__(self, max_attempts: int = DEFAULT_RETRY_MAX_ATTEMPTS,
                  base_delay_seconds: float = DEFAULT_RETRY_BASE_DELAY_SECONDS):
@@ -66,7 +69,7 @@ class TransientFailureRetryPolicy:
         if attempt >= self.max_attempts or not result.had_error:
             return False
         failure = result.failure
-        return failure is not None and failure.retryable is True and failure.scope == "main_model"
+        return failure is not None and failure.retryable is True and failure.scope in RETRYABLE_FAILURE_SCOPES
 
     def delay_seconds(self, attempt: int) -> float:
         # Constant for now; exponential backoff / jitter would only change this method.

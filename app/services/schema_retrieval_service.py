@@ -1,12 +1,12 @@
 """Shared vector retrieval for persisted semantic-model schema embeddings."""
 from __future__ import annotations
 
-import asyncio
-import os
 from dataclasses import dataclass, field
 from typing import Any, Iterable, Optional
 
 from app.models import SchemaEmbedding
+from app.services.embeddings import QueryEmbeddingError, embed_query, get_voyage_query_client
+from app.services.schema_lexical import lexical_rank, query_keywords
 
 
 VOYAGE_QUERY_EMBEDDING_MODEL = "voyage-4"
@@ -37,6 +37,9 @@ class RelevantSchemaResult:
     missing_required_items: list[dict[str, str]] = field(default_factory=list)
     usage: SchemaRetrievalUsage = field(default_factory=lambda: SchemaRetrievalUsage(0))
     truncated: bool = False
+    # Degraded mode: the query embedding failed and non-anchor items come from lexical matching.
+    degraded: bool = False
+    provider_error: dict[str, Any] = field(default_factory=dict)
 
 
 class SchemaEmbeddingsUnavailable(RuntimeError):
@@ -46,9 +49,11 @@ class SchemaEmbeddingsUnavailable(RuntimeError):
 class RelevantSchemaProviderError(RuntimeError):
     """Raised when the query embedding provider cannot complete retrieval."""
 
-    def __init__(self, message: str, *, usage: SchemaRetrievalUsage):
+    def __init__(self, message: str, *, usage: SchemaRetrievalUsage, metadata: Optional[dict] = None):
         super().__init__(message)
         self.usage = usage
+        # Safe diagnostics only (attempts, error class), never provider text.
+        self.metadata = dict(metadata or {})
 
 
 def normalize_schema_item_name(value: Any) -> str:
@@ -58,17 +63,8 @@ def normalize_schema_item_name(value: Any) -> str:
     return text.casefold()
 
 
-def _get_voyage_client():
-    api_key = os.getenv("VOYAGE_API_KEY")
-    if not api_key:
-        raise RuntimeError("VOYAGE_API_KEY is required")
-    try:
-        import voyageai
-    except ImportError as exc:  # pragma: no cover - dependency missing in test env
-        raise RuntimeError(
-            "The 'voyageai' package is required to retrieve schema context."
-        ) from exc
-    return voyageai.Client(api_key=api_key)
+# Shared lazy client (kept under this name as the patch point for tests).
+_get_voyage_client = get_voyage_query_client
 
 
 def _estimate_tokens(text: str) -> int:
@@ -195,8 +191,13 @@ async def retrieve_relevant_schema(
     preferred_measures: Optional[Iterable[str]] = None,
     preferred_tables: Optional[Iterable[str]] = None,
     timeout_seconds: int = DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS,
+    lexical_fallback: bool = False,
 ) -> RelevantSchemaResult:
-    """Retrieve bounded schema context with exact skill anchors before vector matches."""
+    """Retrieve bounded schema context with exact skill anchors before vector matches.
+
+    With ``lexical_fallback`` a failed query embedding does not raise while skill anchors or lexical matches
+    exist: the result is ``degraded`` and ranks non-anchor items by keyword overlap instead of similarity.
+    """
 
     normalized_dataset_id = str(dataset_id or "").strip()
     normalized_question = str(question or "").strip()
@@ -224,28 +225,37 @@ async def retrieve_relevant_schema(
     estimated_usage = SchemaRetrievalUsage(
         input_tokens=_estimate_tokens(normalized_question), estimated=True
     )
+    query_vector: Optional[list] = None
+    provider_error: Optional[RelevantSchemaProviderError] = None
     try:
-        client = _get_voyage_client()
-        response = await asyncio.wait_for(
-            asyncio.to_thread(
-                lambda: client.embed(
-                    [normalized_question],
-                    model=VOYAGE_QUERY_EMBEDDING_MODEL,
-                    input_type="query",
-                )
-            ),
-            timeout=max(1, int(timeout_seconds or DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS)),
+        embedding = await embed_query(
+            normalized_question,
+            model=VOYAGE_QUERY_EMBEDDING_MODEL,
+            client_factory=_get_voyage_client,
+            # The caller's timeout bounds every attempt together, never each one.
+            deadline_seconds=timeout_seconds or DEFAULT_SCHEMA_CONTEXT_TIMEOUT_SECONDS,
+            component="schema_retrieval",
         )
-        query_vector = list(response.embeddings[0])
-        total_tokens = int(getattr(response, "total_tokens", None) or 0)
-        usage = SchemaRetrievalUsage(
-            input_tokens=total_tokens or estimated_usage.input_tokens,
-            estimated=total_tokens <= 0,
+    except QueryEmbeddingError as exc:
+        provider_error = RelevantSchemaProviderError(
+            "No se pudo generar el embedding de consulta.", usage=estimated_usage, metadata=exc.metadata()
         )
+        provider_error.__cause__ = exc
     except Exception as exc:
-        raise RelevantSchemaProviderError(
+        provider_error = RelevantSchemaProviderError(
             "No se pudo generar el embedding de consulta.", usage=estimated_usage
-        ) from exc
+        )
+        provider_error.__cause__ = exc
+    if provider_error is not None:
+        if not lexical_fallback:
+            raise provider_error
+        usage = estimated_usage
+    else:
+        query_vector = embedding.vector
+        usage = SchemaRetrievalUsage(
+            input_tokens=embedding.total_tokens or estimated_usage.input_tokens,
+            estimated=embedding.total_tokens <= 0,
+        )
 
     required_items = _normalized_required_items(required_schema_items)
     required_table_names = [
@@ -279,20 +289,25 @@ async def retrieve_relevant_schema(
         all_measures, preferred_measure_names
     )
 
-    vector_tables = _nearest_rows(
-        dataset_id=normalized_dataset_id,
-        report_id=report_id,
-        item_type="table",
-        query_vector=query_vector,
-        limit=resolved_table_limit,
-    )
-    vector_measures = _nearest_rows(
-        dataset_id=normalized_dataset_id,
-        report_id=report_id,
-        item_type="measure",
-        query_vector=query_vector,
-        limit=resolved_measure_limit,
-    )
+    if query_vector is None:
+        keywords = query_keywords(normalized_question)
+        vector_tables = lexical_rank(all_tables, keywords, limit=resolved_table_limit)
+        vector_measures = lexical_rank(all_measures, keywords, limit=resolved_measure_limit)
+    else:
+        vector_tables = _nearest_rows(
+            dataset_id=normalized_dataset_id,
+            report_id=report_id,
+            item_type="table",
+            query_vector=query_vector,
+            limit=resolved_table_limit,
+        )
+        vector_measures = _nearest_rows(
+            dataset_id=normalized_dataset_id,
+            report_id=report_id,
+            item_type="measure",
+            query_vector=query_vector,
+            limit=resolved_measure_limit,
+        )
 
     selected_tables = _dedupe_rows(
         required_tables + preferred_table_rows + vector_tables
@@ -300,6 +315,9 @@ async def retrieve_relevant_schema(
     selected_measures = _dedupe_rows(
         required_measures + preferred_measure_rows + vector_measures
     )[:resolved_measure_limit]
+    if provider_error is not None and not selected_tables and not selected_measures:
+        # Nothing to anchor the degraded context on: report the provider failure as before.
+        raise provider_error
 
     returned_table_names = {
         normalize_schema_item_name(row.item_name) for row in selected_tables
@@ -327,4 +345,6 @@ async def retrieve_relevant_schema(
         missing_required_items=missing_required,
         usage=usage,
         truncated=truncated,
+        degraded=provider_error is not None,
+        provider_error=dict(provider_error.metadata) if provider_error is not None else {},
     )
