@@ -10,6 +10,9 @@ services:
     environment:
       MCP_INTERNAL_REQUIRE_MTLS: "${MCP_INTERNAL_REQUIRE_MTLS:-false}"
       MCP_OAUTH_DCR_ENABLED: "${MCP_OAUTH_DCR_ENABLED:-false}"
+      # Reports run in the dedicated containers below, never inside the web workers.
+      REPORT_RUN_WORKER_ENABLED: "0"
+      REPORT_SCHEDULER_ENABLED: "0"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:2052/healthz', timeout=5)"]
       interval: 15s
@@ -20,6 +23,49 @@ services:
       - edge
       - broker
     restart: unless-stopped
+
+  # Calendar, Power BI freshness, enqueueing and submission to review (renders the PDF: same image as web),
+  # and WhatsApp delivery of approved reports (REPORT_DELIVERY_* and META_WA_* come from .env).
+  # Several replicas are safe (idempotent occurrences, compare-and-swap transitions); one is enough.
+  report-scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.services.reporting.scheduler_main"]
+    env_file:
+      - .env
+    environment:
+      DISABLE_BACKGROUND_SCHEDULER: "1"
+      REPORT_SCHEDULER_TICK_SECONDS: "${REPORT_SCHEDULER_TICK_SECONDS:-60}"
+    depends_on:
+      flask-powerbi:
+        condition: service_healthy
+    networks:
+      - edge
+      - broker
+    restart: unless-stopped
+    stop_grace_period: 60s
+
+  # DAX / LLM / document generation of queued runs (manual and scheduled). Scale with replicas: the database
+  # claim guarantees one worker per run.
+  report-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.services.reporting.worker_main"]
+    env_file:
+      - .env
+    environment:
+      DISABLE_BACKGROUND_SCHEDULER: "1"
+      REPORT_RUN_POLL_SECONDS: "${REPORT_RUN_POLL_SECONDS:-3}"
+    depends_on:
+      flask-powerbi:
+        condition: service_healthy
+    networks:
+      - edge
+      - broker
+    restart: unless-stopped
+    stop_grace_period: 120s
 
   mcp-aklara:
     build:
