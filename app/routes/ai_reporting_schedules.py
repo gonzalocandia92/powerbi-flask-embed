@@ -21,6 +21,7 @@ from app.persistence.schedule_states import (
     DEFAULT_FRESHNESS_POLICY, DEFAULT_MISFIRE_POLICY, FRESHNESS_POLICIES, MISFIRE_POLICIES, OCCURRENCE_STATUSES,
     RETRYABLE_OCCURRENCE_STATUSES,
 )
+from app.services.reporting.delivery_config import MAX_RECIPIENTS
 from app.services.reporting.schedule_contracts import (
     DEFINITION_NOT_FOUND, ScheduleConflictError, ScheduleError, ScheduleNotFoundError, ScheduleValidationError,
 )
@@ -238,6 +239,7 @@ def schedules_ui_config() -> dict:
         "timezones": sorted(zoneinfo.available_timezones()),
         "defaultTimezone": "America/Argentina/Buenos_Aires",
         "perPage": HISTORY_PER_PAGE,
+        "maxWhatsappRecipients": MAX_RECIPIENTS,
     }
 
 

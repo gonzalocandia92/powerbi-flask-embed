@@ -70,6 +70,61 @@
       $('rs-frequency').addEventListener('change', toggleFrequency);
       $('rs-cancel').addEventListener('click', closeForm);
       $('rs-new').addEventListener('click', () => openForm(null));
+      $('rs-whatsapp-max').textContent = String(maxRecipients);
+      $('rs-whatsapp-add').addEventListener('click', () => addRecipient('', true));
+    }
+
+    // ── WhatsApp recipients: one field per number ───────────────────────────────────────────
+
+    const maxRecipients = config.maxWhatsappRecipients || 20;
+
+    function recipientInputs() {
+      return Array.from($('rs-whatsapp-list').querySelectorAll('.rs-whatsapp-input'));
+    }
+
+    function updateRecipients() {
+      const rows = Array.from($('rs-whatsapp-list').children);
+      rows.forEach((row, index) => { row.querySelector('.rs-whatsapp-index').textContent = String(index + 1); });
+      $('rs-whatsapp-add').disabled = rows.length >= maxRecipients;
+    }
+
+    // Pasting several numbers at once (a column copied from a sheet, "a, b; c") fills one field per number.
+    function splitPaste(event) {
+      const text = (event.clipboardData || root.clipboardData).getData('text');
+      const numbers = View.recipientList(text);
+      if (numbers.length < 2) return;
+      event.preventDefault();
+      event.target.value = numbers[0];
+      let after = event.target.closest('.rs-whatsapp-row');
+      numbers.slice(1).forEach(number => { after = addRecipient(number, false, after) || after; });
+    }
+
+    function addRecipient(value, focus, after) {
+      const list = $('rs-whatsapp-list');
+      if (list.children.length >= maxRecipients) return null;
+      const input = el(doc, 'input', {type: 'tel', inputmode: 'tel', autocomplete: 'off', maxlength: '32',
+        className: 'form-control rs-whatsapp-input', placeholder: '5491112345678', 'aria-label': 'Número de WhatsApp'});
+      input.value = value || '';
+      input.addEventListener('paste', splitPaste);
+      const remove = el(doc, 'button', {type: 'button', className: 'ai-btn-icon text-danger', title: 'Quitar número',
+        'aria-label': 'Quitar número'}, [el(doc, 'i', {className: 'bi bi-trash'})]);
+      const row = el(doc, 'div', {className: 'd-flex gap-2 align-items-center mb-2 rs-whatsapp-row'}, [
+        el(doc, 'span', {className: 'text-muted fw-bold font-monospace rs-whatsapp-index', style: 'min-width: 1.5rem'}),
+        input, remove]);
+      remove.addEventListener('click', () => {
+        row.remove();
+        if (!list.children.length) addRecipient('', false);  // always leave one field to type into
+        updateRecipients();
+      });
+      if (after && after.parentNode === list) after.after(row); else list.appendChild(row);
+      updateRecipients();
+      if (focus) input.focus();
+      return row;
+    }
+
+    function setRecipients(numbers) {
+      $('rs-whatsapp-list').textContent = '';
+      (numbers.length ? numbers : ['']).forEach(number => addRecipient(number, false));
     }
 
     function formValues() {
@@ -79,7 +134,7 @@
         day_of_month: value('rs-day'), local_time: value('rs-time'), timezone: value('rs-timezone'),
         freshness_policy: value('rs-freshness'), misfire_policy: value('rs-misfire'),
         refresh_deadline_hours: value('rs-deadline'), misfire_grace_hours: value('rs-grace'),
-        whatsapp_recipients: value('rs-whatsapp'),
+        whatsapp_recipients: recipientInputs().map(input => input.value),
       };
       if (state.editingId === null) values.definition_id = value('rs-definition');
       return values;
@@ -101,8 +156,8 @@
       [['rs-name', 'name'], ['rs-frequency', 'frequency'], ['rs-weekday', 'weekday'], ['rs-day', 'day_of_month'],
         ['rs-time', 'local_time'], ['rs-timezone', 'timezone'], ['rs-freshness', 'freshness_policy'],
         ['rs-misfire', 'misfire_policy'], ['rs-deadline', 'refresh_deadline_hours'], ['rs-grace', 'misfire_grace_hours'],
-        ['rs-whatsapp', 'whatsapp_recipients'],
       ].forEach(([id, key]) => { $(id).value = values[key] || (id === 'rs-day' ? '1' : ''); });
+      setRecipients(values.whatsapp_recipients || []);
       $('rs-definition').value = values.definition_id || '';
       $('rs-definition').disabled = !!schedule;  // a schedule never changes definition: create another one
       $('rs-form-title').textContent = schedule ? 'Editar programación' : 'Nueva programación';

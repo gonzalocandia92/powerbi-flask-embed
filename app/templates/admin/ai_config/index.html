@@ -54,6 +54,18 @@
         <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='report') }}">Todos los reportes</a></li>
         <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='empresa') }}">Todas las empresas</a></li>
         <li><a class="dropdown-item" href="{{ url_for('ai_config.skill_export', scope='dataset') }}">Todos los datasets</a></li>
+        <li><hr class="dropdown-divider"></li>
+        <li>
+          <a class="dropdown-item disabled" id="skill-export-report" href="#" aria-disabled="true"
+             data-export-base="{{ url_for('ai_config.skill_export', scope='report') }}">
+            Reporte seleccionado en el filtro
+          </a>
+        </li>
+        <li>
+          <button class="dropdown-item" type="button" id="skill-export-filtered" disabled>
+            Solo las skills filtradas <span data-export-count></span>
+          </button>
+        </li>
       </ul>
     </div>
     <a class="ai-btn ai-btn-secondary" href="{{ url_for('ai_config.skill_import') }}">
@@ -67,6 +79,10 @@
     <a class="ai-btn ai-btn-primary" href="{{ url_for('ai_config.skill_new') }}">
       <i class="bi bi-plus-lg me-1"></i>Nueva skill
     </a>
+    <form id="skill-export-filtered-form" method="post" action="{{ url_for('ai_config.skill_export') }}" hidden>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="ids" value="">
+    </form>
   {% endif %}
 {% endblock %}
 
@@ -724,6 +740,7 @@
           {% for row in skill_view.rows %}
           {% set s = row.skill %}
           <tr data-filter-row
+              data-skill-id="{{ s.id }}"
               data-scope="{{ row.scope }}"
               data-reportid="{{ row.target_id if row.scope == 'report' else '' }}"
               data-domain="{{ s.domain_key }}"

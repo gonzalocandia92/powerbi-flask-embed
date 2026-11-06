@@ -584,6 +584,17 @@
         .klara-msg.user .klara-msg-time { text-align: right; }
         .klara-msg.bot .klara-msg-time { text-align: left; }
 
+        /* Retry button shown under a failed answer */
+        .klara-retry-btn {
+            display: inline-flex; align-items: center; gap: 6px;
+            margin-top: 8px; padding: 5px 12px;
+            border: 1px solid var(--sudata-green); border-radius: 999px;
+            background: white; color: var(--sudata-green);
+            font-size: 12px; font-weight: 600; cursor: pointer;
+        }
+        .klara-retry-btn:hover { background: var(--sudata-green); color: white; }
+        .klara-retry-btn:disabled { opacity: .5; cursor: default; }
+
         /* Date separator between days */
         .klara-date-sep {
             text-align: center; font-size: 11px; color: var(--sudata-muted);
@@ -1468,6 +1479,25 @@
                 wrapper.appendChild(time);
                 messages.appendChild(wrapper);
                 messages.scrollTop = messages.scrollHeight;
+                return bubble;
+            }
+
+            // Error answer with a "Reintentar" button that re-sends the same question
+            // (without repeating the user's bubble). Clicking it removes the error.
+            function addRetryableError(text, pregunta) {
+                var bubble = addMessage("bot", text);
+                var retry = document.createElement("button");
+                retry.type = "button";
+                retry.className = "klara-retry-btn";
+                retry.innerHTML = '<i class="fas fa-redo"></i> Reintentar';
+                retry.addEventListener("click", function () {
+                    if (isTyping) return;
+                    var msg = bubble.closest(".klara-msg");
+                    if (msg) msg.remove();
+                    askServer(pregunta);
+                });
+                bubble.appendChild(retry);
+                messages.scrollTop = messages.scrollHeight;
             }
 
             var thinkingSteps = [
@@ -1516,6 +1546,11 @@
                 addMessage("user", pregunta);
                 input.value = ""; input.style.height = "auto";
                 counter.textContent = "0/500";
+                await askServer(pregunta);
+            }
+
+            async function askServer(pregunta) {
+                if (isTyping) return;
                 showThinking();
                 try {
                     var resp = await fetch("/chat", {
@@ -1528,10 +1563,22 @@
                             model_key: modelSelect.value || null
                         })
                     });
-                    var data = await resp.json();
+                    // Proxies (nginx 502/504, Cloudflare 524) answer with HTML, not JSON.
+                    var data = null;
+                    try { data = await resp.json(); } catch (_) { data = null; }
                     hideThinking();
                     if (!resp.ok) {
-                        addMessage("bot", data.error || "Ocurrió un error al procesar el chat.");
+                        var errorText = (data && data.error) || "Ocurrió un error al procesar el chat.";
+                        if (resp.status >= 500 || resp.status === 408 || resp.status === 429) {
+                            if (!data) errorText = "El servidor no respondió a tiempo. Podés reintentar la consulta.";
+                            addRetryableError(errorText, pregunta);
+                        } else {
+                            addMessage("bot", errorText);
+                        }
+                        return;
+                    }
+                    if (!data) {
+                        addRetryableError("No pude leer la respuesta del servidor.", pregunta);
                         return;
                     }
                     if (data.conversation_id) klaraSessionId = data.conversation_id;
@@ -1541,7 +1588,7 @@
                     addMessage("bot", data.answer || "Sin respuesta.", data.dax_query || null);
                 } catch (e) {
                     hideThinking();
-                    addMessage("bot", "No pude conectar con el servidor.");
+                    addRetryableError("No pude conectar con el servidor.", pregunta);
                 }
             }
 
