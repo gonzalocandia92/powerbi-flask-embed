@@ -123,6 +123,13 @@
     return frequency.label + ' · ' + when + ' a las ' + (schedule.local_time || '—') + ' (' + (schedule.timezone || '—') + ')';
   }
 
+  // WhatsApp recipients as a clean list: accepts the per-number fields (array) or a pasted text, where a newline,
+  // comma or semicolon separates numbers. Blank entries are dropped; the server normalizes and validates the rest.
+  function recipientList(raw) {
+    const items = Array.isArray(raw) ? raw : String(raw === null || raw === undefined ? '' : raw).split(/[\n,;]+/);
+    return items.map(item => String(item === null || item === undefined ? '' : item).trim()).filter(Boolean);
+  }
+
   // Form values (strings, as read from inputs) -> request body. Only the field of the chosen frequency is sent.
   function formToPayload(values) {
     const integer = value => (value === '' || value === null || value === undefined ? null : Number.parseInt(value, 10));
@@ -134,9 +141,7 @@
       misfire_grace_hours: integer(values.misfire_grace_hours),
       weekday: values.frequency === 'weekly' ? integer(values.weekday) : null,
       day_of_month: values.frequency === 'monthly' ? integer(values.day_of_month) : null,
-      // One number per line; the server normalizes and validates them.
-      whatsapp_recipients: String(values.whatsapp_recipients || '').split(/[\n,;]+/)
-        .map(line => line.trim()).filter(Boolean),
+      whatsapp_recipients: recipientList(values.whatsapp_recipients),
     };
     if (values.definition_id !== undefined && values.definition_id !== '') payload.definition_id = integer(values.definition_id);
     return payload;
@@ -150,7 +155,7 @@
       timezone: text(schedule.timezone), freshness_policy: text(schedule.freshness_policy),
       misfire_policy: text(schedule.misfire_policy), refresh_deadline_hours: text(schedule.refresh_deadline_hours),
       misfire_grace_hours: text(schedule.misfire_grace_hours),
-      whatsapp_recipients: (schedule.whatsapp_recipients || []).join('\n'),
+      whatsapp_recipients: recipientList(schedule.whatsapp_recipients),  // one field per number
     };
   }
 
@@ -224,7 +229,7 @@
   return {
     WEEKDAYS, FREQUENCIES, FRESHNESS_POLICIES, MISFIRE_POLICIES, OCCURRENCE_STATUSES, ERROR_CODES, SCHEDULER_HEALTH,
     statusInfo, errorText, formatDate, formatLocalDate, formatLocalDateTime, formatDuration, formatCost, describeCalendar,
-    formToPayload, scheduleToForm, presentPreview, presentSchedule, presentOccurrence, presentCounts,
+    recipientList, formToPayload, scheduleToForm, presentPreview, presentSchedule, presentOccurrence, presentCounts,
     presentSchedulerHealth,
   };
 });

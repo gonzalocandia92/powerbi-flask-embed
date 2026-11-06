@@ -23,6 +23,7 @@ from app.utils.decorators import retry_on_db_error
 
 bp = Blueprint('ai_config', __name__, url_prefix='/admin/ai-config')
 SKILL_EXPORT_SCOPES = {"all", "global", "empresa", "report", "dataset"}
+SKILL_EXPORT_MAX_IDS = 5000
 SKILL_EXPORT_COLUMNS = [
     "id",
     "skill_key",
@@ -231,11 +232,49 @@ def _build_skill_index_summary(skills):
     }
 
 
-def _skill_export_query(scope, scope_id):
-    query = AnalyticsSkill.query.options(
+def _skill_export_base_query():
+    return AnalyticsSkill.query.options(
         joinedload(AnalyticsSkill.report),
         joinedload(AnalyticsSkill.empresa),
     )
+
+
+def _skill_export_ordered(query):
+    return query.order_by(
+        AnalyticsSkill.report_id_fk,
+        AnalyticsSkill.empresa_id_fk,
+        AnalyticsSkill.dataset_id,
+        AnalyticsSkill.domain_key,
+        AnalyticsSkill.skill_key,
+        AnalyticsSkill.version.desc(),
+        AnalyticsSkill.id,
+    )
+
+
+def _parse_skill_export_ids(raw):
+    """Parse a comma/whitespace separated id list; invalid tokens are dropped."""
+    ids = []
+    seen = set()
+    for token in re.split(r"[\s,]+", raw or ""):
+        if not token.isdigit():
+            continue
+        value = int(token)
+        if value not in seen:
+            seen.add(value)
+            ids.append(value)
+        if len(ids) >= SKILL_EXPORT_MAX_IDS:
+            break
+    return ids
+
+
+def _skill_export_query_by_ids(ids):
+    return _skill_export_ordered(
+        _skill_export_base_query().filter(AnalyticsSkill.id.in_(ids))
+    )
+
+
+def _skill_export_query(scope, scope_id):
+    query = _skill_export_base_query()
     if scope == "global":
         query = query.filter(
             AnalyticsSkill.report_id_fk.is_(None),
@@ -257,15 +296,7 @@ def _skill_export_query(scope, scope_id):
             query = query.filter(AnalyticsSkill.dataset_id == str(scope_id))
         else:
             query = query.filter(AnalyticsSkill.dataset_id.isnot(None))
-    return query.order_by(
-        AnalyticsSkill.report_id_fk,
-        AnalyticsSkill.empresa_id_fk,
-        AnalyticsSkill.dataset_id,
-        AnalyticsSkill.domain_key,
-        AnalyticsSkill.skill_key,
-        AnalyticsSkill.version.desc(),
-        AnalyticsSkill.id,
-    )
+    return _skill_export_ordered(query)
 
 
 def _csv_json_cell(value):
@@ -1780,11 +1811,30 @@ def skill_reindex_all():
     return redirect(url_for('ai_config.index', tab='skills'))
 
 
-@bp.route('/skills/export', methods=['GET'])
+@bp.route('/skills/export', methods=['GET', 'POST'])
 @login_required
 @retry_on_db_error(max_retries=3, delay=1)
 def skill_export():
-    """Export analytics skills to CSV without embedding vectors."""
+    """Export analytics skills to CSV without embedding vectors.
+
+    GET exports a whole scope (optionally one empresa/report via ``scope_id``).
+    POST exports an explicit list of skill ids (``ids``), used to download
+    exactly what the catalog filters leave visible.
+    """
+    if request.method == "POST":
+        ids = _parse_skill_export_ids(request.form.get("ids"))
+        if not ids:
+            flash("No hay skills para exportar con los filtros actuales.", "warning")
+            return redirect(url_for('ai_config.index', tab='skills'))
+        skills = _skill_export_query_by_ids(ids).all()
+        return Response(
+            "﻿" + _skills_to_csv(skills),
+            mimetype="text/csv; charset=utf-8",
+            headers={
+                "Content-Disposition": f'attachment; filename="{_skill_export_filename("filtered", "")}"'
+            },
+        )
+
     scope = (request.args.get("scope") or "all").strip().lower()
     if scope not in SKILL_EXPORT_SCOPES:
         scope = "all"

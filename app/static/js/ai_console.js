@@ -266,6 +266,14 @@
           : `${shown} de ${total}${suffix}`;
       }
       if (emptyRow) emptyRow.hidden = shown !== 0 || total === 0;
+      // Lets controls living outside the scope (e.g. header export menu) follow the filters.
+      scope.dispatchEvent(new CustomEvent('ai:filtered', {
+        bubbles: true,
+        detail: {
+          rows: rows.filter(row => !row.hidden),
+          values: Object.fromEntries(controls.map(control => [control.dataset.filter, control.value])),
+        },
+      }));
     }
 
     if (search) search.addEventListener('input', apply);
@@ -312,8 +320,51 @@
     });
   }
 
+  /* ------------------------------------------------------------------ */
+  /* Export of the rows left visible by the table filters                */
+  /* ------------------------------------------------------------------ */
+  function initFilteredExport() {
+    const button = document.getElementById('skill-export-filtered');
+    const form = document.getElementById('skill-export-filtered-form');
+    const reportLink = document.getElementById('skill-export-report');
+    if (!button && !reportLink) return;
+    const counter = button ? button.querySelector('[data-export-count]') : null;
+    let ids = [];
+
+    document.addEventListener('ai:filtered', event => {
+      const {rows, values} = event.detail;
+      ids = rows.map(row => row.dataset.skillId).filter(Boolean);
+      if (button) {
+        button.disabled = ids.length === 0;
+        if (counter) counter.textContent = `(${ids.length})`;
+      }
+      if (reportLink) {
+        const reportId = values.reportid || '';
+        reportLink.classList.toggle('disabled', !reportId);
+        reportLink.setAttribute('aria-disabled', reportId ? 'false' : 'true');
+        reportLink.href = reportId
+          ? `${reportLink.dataset.exportBase}&scope_id=${encodeURIComponent(reportId)}`
+          : '#';
+      }
+    });
+
+    if (button && form) {
+      button.addEventListener('click', () => {
+        if (!ids.length) return;
+        form.elements.ids.value = ids.join(',');
+        form.submit();
+      });
+    }
+    if (reportLink) {
+      reportLink.addEventListener('click', event => {
+        if (reportLink.classList.contains('disabled')) event.preventDefault();
+      });
+    }
+  }
+
   function init() {
     document.querySelectorAll('select[data-searchable]').forEach(enhanceSelect);
+    initFilteredExport();
     document.querySelectorAll('[data-ai-filter-scope]').forEach(initFilterScope);
     initToggles(document);
     document.querySelectorAll('form[data-confirm]').forEach(form => form.addEventListener('submit', event => {

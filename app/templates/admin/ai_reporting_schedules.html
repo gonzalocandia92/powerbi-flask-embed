@@ -71,9 +71,17 @@
           <input class="form-control" type="number" min="1" max="744" id="rs-grace" placeholder="Valor del servidor">
         </div>
         <div class="col-12">
-          <label class="form-label" for="rs-whatsapp">Enviar por WhatsApp al aprobar</label>
-          <textarea class="form-control" id="rs-whatsapp" rows="2" placeholder="5491112345678"></textarea>
-          <div class="form-text">Un número por línea, en formato internacional. Al aprobar la revisión, el PDF aprobado se envía a estos números.</div>
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <div class="form-label mb-0" id="rs-whatsapp-label">Enviar por WhatsApp al aprobar</div>
+            <button class="ai-btn-secondary btn-sm" type="button" id="rs-whatsapp-add">
+              <i class="bi bi-plus-lg me-1"></i>Agregar número
+            </button>
+          </div>
+          <div id="rs-whatsapp-list" role="group" aria-labelledby="rs-whatsapp-label"></div>
+          <div class="form-text">
+            Un número por campo, en formato internacional (ej. 5491112345678). Al aprobar la revisión, el PDF aprobado
+            se envía a todos. Los campos vacíos se ignoran · máximo <span id="rs-whatsapp-max">20</span> números.
+          </div>
         </div>
         <div class="col-12">
           <div class="form-label">Próximas ejecuciones y período que analizará cada una</div>
