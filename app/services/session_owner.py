@@ -98,6 +98,18 @@ def resolve_web_owner(user=None) -> Tuple[Optional[str], Optional[str]]:
     return owner_hash("visitor", token), signed
 
 
+def presented_web_owner(user=None) -> Optional[str]:
+    """Owner the current web request presents, WITHOUT issuing a cookie (``None`` when it has none).
+
+    For reads of something that already exists (e.g. an async chat run): a visitor without a valid
+    cookie cannot own it, so a new identity must not be minted.
+    """
+    if user is not None and getattr(user, "is_authenticated", False):
+        return user_owner_hash(getattr(user, "id", None))
+    token = read_visitor_token(request.cookies.get(OWNER_COOKIE_NAME))
+    return owner_hash("visitor", token) if token is not None else None
+
+
 def attach_owner_cookie(response, cookie_value: Optional[str]):
     """Set the signed owner cookie on ``response`` (no-op when ``cookie_value`` is falsy)."""
     if not cookie_value:

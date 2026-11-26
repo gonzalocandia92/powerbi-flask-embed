@@ -153,6 +153,8 @@ def create_app():
     app.config['MCP_INTERNAL_JWT_SECRET'] = os.getenv('MCP_INTERNAL_JWT_SECRET')
     app.config['MCP_INTERNAL_REQUIRE_MTLS'] = os.getenv('MCP_INTERNAL_REQUIRE_MTLS', 'true').lower() == 'true'
     app.config['RATELIMIT_STORAGE_URI'] = os.getenv('RATELIMIT_STORAGE_URI', 'memory://')
+    # Async KLARA chat in the report widget (POST /chat/runs + polling) instead of the synchronous /chat.
+    app.config['CHAT_ASYNC_ENABLED'] = os.getenv('CHAT_ASYNC_ENABLED', '0').lower() in ('1', 'true', 'yes')
     _validate_mcp_security_config(app)
     init_langfuse()
     
@@ -327,6 +329,14 @@ def create_app():
             )
         except Exception as _sched_err:
             logging.error(f"[RefreshMonitor] Failed to start scheduler: {_sched_err}")
+        # Async KLARA chat worker embedded in the web process: development convenience only. Set
+        # CHAT_RUN_WORKER_ENABLED=0 where the dedicated chat-worker container runs (docker-compose does).
+        if os.getenv('CHAT_RUN_WORKER_ENABLED', '1').lower() not in ('0', 'false', 'no'):
+            try:
+                from app.services.chat_runs.worker import start_embedded_worker
+                start_embedded_worker(app)
+            except Exception as _chat_worker_err:
+                logging.error(f"[ChatWorker] Failed to start the embedded chat worker: {_chat_worker_err}")
     # ─────────────────────────────────────────────────────────────────────────
 
     from app.models import User
