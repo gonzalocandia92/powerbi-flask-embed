@@ -13,6 +13,8 @@ services:
       # Reports run in the dedicated containers below, never inside the web workers.
       REPORT_RUN_WORKER_ENABLED: "0"
       REPORT_SCHEDULER_ENABLED: "0"
+      # Async KLARA chat runs in the dedicated chat-worker container below.
+      CHAT_RUN_WORKER_ENABLED: "0"
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:2052/healthz', timeout=5)"]
       interval: 15s
@@ -58,6 +60,30 @@ services:
     environment:
       DISABLE_BACKGROUND_SCHEDULER: "1"
       REPORT_RUN_POLL_SECONDS: "${REPORT_RUN_POLL_SECONDS:-3}"
+    depends_on:
+      flask-powerbi:
+        condition: service_healthy
+    networks:
+      - edge
+      - broker
+    restart: unless-stopped
+    stop_grace_period: 120s
+
+  # Async KLARA chat (POST /chat/runs): executes queued chat questions outside the web process, so a slow answer
+  # survives proxy timeouts, page reloads and web deploys. Scale with replicas or CHAT_WORKER_CONCURRENCY (each
+  # running answer uses ~2 database connections); the database claim guarantees one worker per run. The grace
+  # period lets in-flight answers finish on deploy (CHAT_WORKER_SHUTDOWN_GRACE_SECONDS defaults to 110 s).
+  chat-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.services.chat_runs.chat_worker_main"]
+    env_file:
+      - .env
+    environment:
+      DISABLE_BACKGROUND_SCHEDULER: "1"
+      CHAT_WORKER_CONCURRENCY: "${CHAT_WORKER_CONCURRENCY:-4}"
+      CHAT_RUN_POLL_SECONDS: "${CHAT_RUN_POLL_SECONDS:-1}"
     depends_on:
       flask-powerbi:
         condition: service_healthy

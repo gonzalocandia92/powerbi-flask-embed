@@ -30,7 +30,7 @@ except ImportError:  # pragma: no cover - fallback for environments without pgve
             return f"VECTOR({self.dimensions})"
 
 from app import db
-from app.persistence import review_states, review_triggers, run_states, schedule_states
+from app.persistence import chat_run_states, review_states, review_triggers, run_states, schedule_states
 
 FERNET_KEY = os.getenv('FERNET_KEY')
 if not FERNET_KEY:
@@ -610,6 +610,62 @@ class ChatMessage(db.Model):
 
     __table_args__ = (
         db.Index('ix_chat_message_session_created', 'session_id', 'created_at'),
+    )
+
+
+class ChatRun(db.Model):
+    """One queued KLARA chat question, executed by the ``chat-worker`` instead of inside the HTTP request.
+
+    Transport state only: the conversation itself is still persisted in ``chat_sessions`` /
+    ``chat_messages`` by ``chatbot_service``, so finished runs can be purged. The request fields are
+    resolved by the web process when it enqueues (access, owner, model) and are frozen here, so the
+    worker never needs a request context. ``result_json`` holds ONLY the public payload returned to
+    the browser (never report, dataset or workspace identifiers).
+
+    ``status`` / ``stage`` / ``error_code`` are plain strings without CHECKs
+    (``app/persistence/chat_run_states.py``): new stages or codes must not need a migration.
+    ``id`` is a random UUID: it is never guessable, and reads are additionally scoped by ``owner_hash``.
+    """
+
+    __tablename__ = 'chat_runs'
+
+    id = db.Column(db.String(36), primary_key=True, default=lambda: uuid.uuid4().hex)
+    # ── frozen request ─────────────────────────────────────────────────────
+    slug = db.Column(db.String(120), nullable=False)
+    report_id_fk = db.Column(db.BigInteger, db.ForeignKey('reports.id', ondelete='SET NULL'), nullable=True, index=True)
+    conversation_id_in = db.Column(db.String(64), nullable=True)
+    model_key_in = db.Column(db.String(120), nullable=True)
+    question = db.Column(db.Text, nullable=False)
+    reset_history = db.Column(db.Boolean, nullable=False, default=False, server_default=sa.false())
+    is_staff = db.Column(db.Boolean, nullable=False, default=False, server_default=sa.false())
+    # HMAC of the authorized context (see ``session_owner``): the only one allowed to read or cancel the run.
+    owner_hash = db.Column(db.String(64), nullable=False)
+    user_key = db.Column(db.String(200), nullable=True)
+    source = db.Column(db.String(30), nullable=False, default=chat_run_states.SOURCE_CHAT,
+                       server_default=chat_run_states.SOURCE_CHAT)
+    # ── queue state ────────────────────────────────────────────────────────
+    status = db.Column(db.String(30), nullable=False, default=chat_run_states.STATUS_QUEUED,
+                       server_default=chat_run_states.STATUS_QUEUED)
+    stage = db.Column(db.String(40), nullable=True)
+    worker_id = db.Column(db.String(120), nullable=True)
+    heartbeat_at = db.Column(db.DateTime, nullable=True)
+    lease_expires_at = db.Column(db.DateTime, nullable=True)
+    cancel_requested_at = db.Column(db.DateTime, nullable=True)
+    created_at = db.Column(db.DateTime, default=_utcnow, nullable=False)
+    claimed_at = db.Column(db.DateTime, nullable=True)
+    finished_at = db.Column(db.DateTime, nullable=True)
+    # ── outcome ────────────────────────────────────────────────────────────
+    result_json = db.Column(db.JSON, nullable=True)
+    error_code = db.Column(db.String(80), nullable=True)
+    error_message = db.Column(db.Text, nullable=True)
+    diagnostic_id = db.Column(db.String(32), nullable=True)
+
+    report = db.relationship('Report')
+
+    __table_args__ = (
+        db.Index('ix_chat_runs_status_created', 'status', 'created_at'),
+        db.Index('ix_chat_runs_owner_status', 'owner_hash', 'status'),
+        db.Index('ix_chat_runs_finished_at', 'finished_at'),
     )
 
 

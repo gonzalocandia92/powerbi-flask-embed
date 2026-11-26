@@ -1246,7 +1246,14 @@
     <script>
         var KLARA_SLUG = "{{ slug | default('') }}";
         var KLARA_SHOW_DAX = {{ show_dax_query | default(false) | tojson }};
+        // Async chat (queue + polling, docs/klara-chat-asincrono.md); off = the synchronous /chat.
+        var KLARA_CHAT_ASYNC = {{ config.get('CHAT_ASYNC_ENABLED', False) | tojson }};
     </script>
+    {% if config.get('CHAT_ASYNC_ENABLED') %}
+    <script src="{{ url_for('static', filename='js/klara_report_run_controller.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/klara_chat_api.js') }}"></script>
+    <script src="{{ url_for('static', filename='js/klara_chat_run.js') }}"></script>
+    {% endif %}
 
     <!-- ── KLARA SIDEBAR JS ── -->
     <script>
@@ -1510,7 +1517,8 @@
                 { delay: 35000, text: "Ya casi está..." }
             ];
 
-            function showThinking() {
+            // withTimedSteps=false: the async chat shows the agent's REAL stage instead (setThinkingText).
+            function showThinking(withTimedSteps) {
                 isTyping = true; sendBtn.disabled = true;
                 var el = document.createElement("div");
                 el.id = "klara-sidebar-typing"; el.className = "klara-typing";
@@ -1519,6 +1527,7 @@
                 messages.scrollTop = messages.scrollHeight;
                 thinkingEl = el;
 
+                if (withTimedSteps === false) return;
                 thinkingSteps.forEach(function(step) {
                     var timer = setTimeout(function() {
                         if (!thinkingEl) return;
@@ -1549,8 +1558,80 @@
                 await askServer(pregunta);
             }
 
+            function setThinkingText(text) {
+                if (!thinkingEl) return;
+                thinkingEl.className = "klara-thinking-text";
+                thinkingEl.textContent = text;
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            // The answer may still be generating on the server: offer to check on the SAME question again
+            // (never re-sends it, so it is never paid twice).
+            function addConnectionLost(text, resume) {
+                var bubble = addMessage("bot", text);
+                var check = document.createElement("button");
+                check.type = "button";
+                check.className = "klara-retry-btn";
+                check.innerHTML = '<i class="fas fa-sync-alt"></i> Consultar de nuevo';
+                check.addEventListener("click", function () {
+                    if (isTyping) return;
+                    var msg = bubble.closest(".klara-msg");
+                    if (msg) msg.remove();
+                    showThinking(false);
+                    resume();
+                });
+                bubble.appendChild(check);
+                messages.scrollTop = messages.scrollHeight;
+            }
+
+            function showAnswer(data) {
+                if (data.conversation_id) klaraSessionId = data.conversation_id;
+                if (data.model_key && modelSelect.querySelector('option[value="' + CSS.escape(data.model_key) + '"]')) {
+                    modelSelect.value = data.model_key;
+                }
+                addMessage("bot", data.answer || "Sin respuesta.", data.dax_query || null);
+            }
+
+            // ── Async chat: the question is queued and its run followed until it ends ──
+            var chatRuns = null, pendingQuestion = null;
+            if (KLARA_CHAT_ASYNC && window.KlaraChatRun && window.KlaraChatApi && window.KlaraReportRunController) {
+                chatRuns = KlaraChatRun.createChatRunSession({
+                    api: KlaraChatApi.createChatApi(),
+                    createController: KlaraReportRunController.createReportRunController,
+                    storage: (function () { try { return window.sessionStorage; } catch (_) { return null; } })(),
+                    slug: KLARA_SLUG,
+                    callbacks: {
+                        onStage: function (stage) { setThinkingText(stage.text); },
+                        onNotice: function (text) { addMessage("bot", text); },
+                        onAnswer: function (result) { hideThinking(); showAnswer(result); },
+                        onError: function (error) {
+                            hideThinking();
+                            if (error.retryable && pendingQuestion) addRetryableError(error.message, pendingQuestion);
+                            else addMessage("bot", error.message);
+                        },
+                        onConnectionLost: function (lost) {
+                            hideThinking();
+                            addConnectionLost("Se perdió la conexión con el servidor. Tu respuesta puede seguir generándose.",
+                                              lost.resume);
+                        }
+                    }
+                });
+            }
+
+            async function askServerAsync(pregunta) {
+                pendingQuestion = pregunta;
+                showThinking(false);
+                await chatRuns.ask({
+                    message: pregunta,
+                    slug: KLARA_SLUG,
+                    conversation_id: klaraSessionId,
+                    model_key: modelSelect.value || null
+                });
+            }
+
             async function askServer(pregunta) {
                 if (isTyping) return;
+                if (chatRuns) return askServerAsync(pregunta);
                 showThinking();
                 try {
                     var resp = await fetch("/chat", {
@@ -1581,11 +1662,7 @@
                         addRetryableError("No pude leer la respuesta del servidor.", pregunta);
                         return;
                     }
-                    if (data.conversation_id) klaraSessionId = data.conversation_id;
-                    if (data.model_key && modelSelect.querySelector('option[value="' + CSS.escape(data.model_key) + '"]')) {
-                        modelSelect.value = data.model_key;
-                    }
-                    addMessage("bot", data.answer || "Sin respuesta.", data.dax_query || null);
+                    showAnswer(data);
                 } catch (e) {
                     hideThinking();
                     addRetryableError("No pude conectar con el servidor.", pregunta);
@@ -1609,6 +1686,11 @@
             });
 
             addMessage("bot", "Hola, soy KLARA. Puedo ayudarte a consultar ventas, productos y métricas del tablero sin escribir código.");
+            // A question that was still running when the page was reloaded: its answer still arrives.
+            if (chatRuns && chatRuns.resumePending()) {
+                addMessage("bot", "Retomo la consulta que estaba en curso.");
+                showThinking(false);
+            }
             loadModels();
         });
     })();

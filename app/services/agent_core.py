@@ -21,6 +21,9 @@ from typing import Any, Dict, Iterable, List, Optional, cast
 from zoneinfo import ZoneInfo
 
 from app.services.observability import hash_identifier, observation_preview, start_observation
+from app.services.turn_progress import (
+    STAGE_QUERYING_DATA, STAGE_READING_SCHEMA, STAGE_SELECTING_SKILLS, STAGE_WRITING_ANSWER, report_stage,
+)
 from app.services.schema_retrieval_service import (
     RelevantSchemaProviderError,
     SchemaEmbeddingsUnavailable,
@@ -1340,6 +1343,7 @@ class AgentOrchestrator:
         if pinned_skill_keys:
             # Pinned skills replace dynamic selection entirely: no embedding,
             # candidate search or selector runs, and no fallback if they are invalid.
+            report_stage(STAGE_SELECTING_SKILLS)
             try:
                 route_decision = await self.pinned_route_resolver(
                     required_skill_keys=pinned_skill_keys,
@@ -1363,6 +1367,7 @@ class AgentOrchestrator:
             context["route_decision"] = route_decision
             _debug_print("skill_router:pinned", route_decision.to_metadata(), enabled=settings_debug_enabled)
         elif router_settings.enabled and report_id is not None:
+            report_stage(STAGE_SELECTING_SKILLS)
             route_decision = await self.route_resolver(
                 user_message=user_message,
                 report_id=int(report_id),
@@ -1418,6 +1423,7 @@ class AgentOrchestrator:
         initial_error_message: Optional[str] = None
         initial_schema_unavailable = False
         if not schema_text:
+            report_stage(STAGE_READING_SCHEMA)
             # We call the tool directly to ensure only one rewrite happens.
             # execute_tool will handle the rewrite if question_is_rewritten is not passed.
             try:
@@ -1649,6 +1655,8 @@ class AgentOrchestrator:
         async def generate_round(operation_name: str = "chat-response") -> tuple[Any, Optional[Dict[str, Any]]]:
             """One model generation plus usage accounting; returns ``(response, None)`` or ``(None, error_result)``."""
             nonlocal actual_model_used
+            if dax_query_used is not None:
+                report_stage(STAGE_WRITING_ANSWER)
             _debug_print(
                 "llm:request:send",
                 {
@@ -1757,6 +1765,7 @@ class AgentOrchestrator:
             ]
             turn_history.append(LLMMessage("tool", tool_results=closing_results))
             turn_history.append(LLMMessage("user", BUDGET_EXHAUSTED_FINAL_INSTRUCTION))
+            report_stage(STAGE_WRITING_ANSWER)
             # Tools stay defined: Anthropic rejects a history with tool_use blocks and no tools.
             response, error_result = await generate_round("chat-response-final")
             if error_result is not None:
@@ -1783,6 +1792,7 @@ class AgentOrchestrator:
                 return SCHEMA_FAILURE_LIMIT_MESSAGE
             if schema_rounds >= max_schema_rounds:
                 return SCHEMA_ROUND_LIMIT_MESSAGE
+            report_stage(STAGE_READING_SCHEMA)
 
             _debug_print(
                 "tool:get_schema_context:tool_request",
@@ -1946,6 +1956,7 @@ class AgentOrchestrator:
                         enabled=settings_debug_enabled,
                     )
                     dax_failure_reason = None
+                    report_stage(STAGE_QUERYING_DATA)
                     try:
                         tool_output = await self.tool_registry.execute_tool(
                             tool_name,

@@ -39,6 +39,7 @@ from app.services.observability import (
     start_observation,
     trace_user_id,
 )
+from app.services.turn_progress import STAGE_PREPARING, StageSink, progress_scope, report_stage
 from app.utils.decorators import retry_on_db_error
 
 
@@ -668,9 +669,13 @@ async def procesar_interaccion_completa(
     model_key: Optional[str] = None,
     is_staff: bool = False,
     owner_hash: Optional[str] = None,
+    progress: Optional[StageSink] = None,
 ) -> Dict[str, Any]:
     """
     Execute the full chatbot interaction.
+
+    ``progress`` optionally receives what the turn is doing (``turn_progress`` stage codes), e.g. the
+    async chat worker records it so the browser can show it. ``None`` keeps the turn silent.
 
     ``owner_hash`` identifies the authorized context that owns the conversation
     (see ``session_owner``). Without it an existing ``conversation_id`` is never
@@ -724,12 +729,13 @@ async def procesar_interaccion_completa(
             logging.exception("[ChatbotService] Failed to log error to DB")
             return None
 
-    with chat_actor_context(is_staff=is_staff), start_observation(
+    with progress_scope(progress), chat_actor_context(is_staff=is_staff), start_observation(
         name="public-chat-request",
         as_type="span",
         input={"message": pregunta},
     ) as root_observation:
         try:
+            report_stage(STAGE_PREPARING)
             report = await asyncio.to_thread(_resolve_report_sync, slug)
             if not report.chatbot_enabled:
                 raise ChatbotDisabledError(DISABLED_MESSAGE)

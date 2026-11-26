@@ -36,8 +36,11 @@
   });
 
   // phase: idle | loading | polling | retrying | finished | stopped
+  // options.isTerminal: which statuses end the tracking (default: the report run vocabulary). Lets another
+  // durable run (e.g. the async chat, which also ends in `expired`) reuse this controller unchanged.
   function createReportRunController({api, onChange, options, timers}) {
     const config = Object.assign({}, DEFAULTS, options || {});
+    const ended = typeof config.isTerminal === 'function' ? config.isTerminal : isTerminal;
     const clock = timers || {setTimeout: (...a) => setTimeout(...a), clearTimeout: id => clearTimeout(id)};
     let generation = 0;
     let timer = null;
@@ -73,7 +76,7 @@
       }
       if (gen !== generation) return;
       transientErrors = 0;
-      if (isTerminal(run.status)) {
+      if (ended(run.status)) {
         emit({run, phase: 'finished', error: null, cancelling: false});
         return;
       }
@@ -131,7 +134,7 @@
 
     async function cancel() {
       const {runId, run, cancelling} = state;
-      if (!runId || cancelling || (run && (isTerminal(run.status) || run.status === STATUS.CANCEL_REQUESTED))) return;
+      if (!runId || cancelling || (run && (ended(run.status) || run.status === STATUS.CANCEL_REQUESTED))) return;
       emit({cancelling: true, cancelError: null});
       try {
         await api.cancelRun(runId);
